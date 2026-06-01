@@ -15,6 +15,9 @@ import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
 const app = express()
 const PORT = process.env.PORT || 5000
 
+// Trust proxy (required for Render/reverse proxy + rate limiting)
+app.set('trust proxy', 1)
+
 // Database
 await connectDB()
 
