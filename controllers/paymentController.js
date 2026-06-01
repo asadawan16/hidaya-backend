@@ -1,6 +1,6 @@
 import Payment from '../models/Payment.js'
 import { createCheckoutSession, retrieveOrder } from '../services/mastercard.js'
-import { notifyAdmin, paymentEmail } from '../services/mailer.js'
+import { notifyAdmin, sendToUser, paymentEmail, paymentConfirmationEmail } from '../services/mailer.js'
 
 export async function initiate(req, res) {
   try {
@@ -74,8 +74,14 @@ export async function callback(req, res) {
 
     await payment.save()
 
+    const paymentData = payment.toObject()
+
     // Notify admin (non-blocking)
-    notifyAdmin(paymentEmail(payment.toObject())).catch(() => {})
+    notifyAdmin(paymentEmail(paymentData)).catch(() => {})
+
+    // Send confirmation to student (non-blocking)
+    const userEmail = paymentConfirmationEmail(paymentData)
+    sendToUser({ to: paymentData.studentEmail, ...userEmail }).catch(() => {})
 
     res.json({ status: payment.status, payment })
   } catch (err) {
@@ -86,9 +92,14 @@ export async function callback(req, res) {
 
 export async function list(req, res) {
   try {
-    const { status, page = 1, limit = 20 } = req.query
+    const { status, page = 1, limit = 20, startDate, endDate } = req.query
     const filter = {}
     if (status) filter.status = status
+    if (startDate || endDate) {
+      filter.createdAt = {}
+      if (startDate) filter.createdAt.$gte = new Date(startDate)
+      if (endDate) filter.createdAt.$lte = new Date(new Date(endDate).setHours(23, 59, 59, 999))
+    }
 
     const total = await Payment.countDocuments(filter)
     const payments = await Payment.find(filter)
@@ -105,24 +116,34 @@ export async function list(req, res) {
 
 export async function getStats(req, res) {
   try {
-    const [total, completed, pending, failed] = await Promise.all([
-      Payment.countDocuments(),
-      Payment.countDocuments({ status: 'completed' }),
-      Payment.countDocuments({ status: 'pending' }),
-      Payment.countDocuments({ status: 'failed' }),
+    const { startDate, endDate } = req.query
+    const dateFilter = {}
+    if (startDate || endDate) {
+      dateFilter.createdAt = {}
+      if (startDate) dateFilter.createdAt.$gte = new Date(startDate)
+      if (endDate) dateFilter.createdAt.$lte = new Date(new Date(endDate).setHours(23, 59, 59, 999))
+    }
+
+    const [total, completed, pending, failed, expired] = await Promise.all([
+      Payment.countDocuments(dateFilter),
+      Payment.countDocuments({ status: 'completed', ...dateFilter }),
+      Payment.countDocuments({ status: 'pending', ...dateFilter }),
+      Payment.countDocuments({ status: 'failed', ...dateFilter }),
+      Payment.countDocuments({ status: 'expired', ...dateFilter }),
     ])
 
     const revenueResult = await Payment.aggregate([
-      { $match: { status: 'completed' } },
+      { $match: { status: 'completed', ...dateFilter } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ])
     const totalRevenue = revenueResult[0]?.total || 0
 
     const sixMonthsAgo = new Date()
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+    const monthlyDateFilter = dateFilter.createdAt ? dateFilter : { createdAt: { $gte: sixMonthsAgo } }
 
     const monthly = await Payment.aggregate([
-      { $match: { status: 'completed', createdAt: { $gte: sixMonthsAgo } } },
+      { $match: { status: 'completed', ...monthlyDateFilter } },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
@@ -133,9 +154,9 @@ export async function getStats(req, res) {
       { $sort: { _id: 1 } },
     ])
 
-    const recent = await Payment.find().sort({ createdAt: -1 }).limit(5)
+    const recent = await Payment.find(dateFilter).sort({ createdAt: -1 }).limit(5)
 
-    res.json({ total, completed, pending, failed, totalRevenue, monthly, recent })
+    res.json({ total, completed, pending, failed, expired, totalRevenue, monthly, recent })
   } catch (err) {
     console.error('Payment stats error:', err)
     res.status(500).json({ error: 'Server error' })

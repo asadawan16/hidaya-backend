@@ -9,7 +9,7 @@ const paymentSchema = new mongoose.Schema({
   // Plan info
   plan: { type: String, required: true },
   amount: { type: Number, required: true },
-  currency: { type: String, default: 'USD' },
+  currency: { type: String, default: 'PKR' },
 
   // Mastercard gateway response (NO card details stored)
   gatewayOrderId: { type: String },
@@ -20,7 +20,7 @@ const paymentSchema = new mongoose.Schema({
   // Status
   status: {
     type: String,
-    enum: ['pending', 'completed', 'failed', 'refunded'],
+    enum: ['pending', 'completed', 'failed', 'refunded', 'expired'],
     default: 'pending',
   },
 

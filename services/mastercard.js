@@ -24,7 +24,7 @@ export async function createCheckoutSession({ orderId, amount, plan, returnUrl, 
       order: {
         id: orderId,
         amount: String(amount),
-        currency: 'USD',
+        currency: 'PKR',
         description: `Hidaya Online - ${plan}`,
       },
     }),
