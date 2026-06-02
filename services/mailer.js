@@ -669,3 +669,336 @@ export function newsletterEmail({ subject, body }) {
     html: userLayout(content),
   }
 }
+
+/* ═══════════════════════════════════════════════════════
+   USER — PAYMENT LINK EMAIL (sent to payee)
+   ═══════════════════════════════════════════════════════ */
+export function paymentLinkEmail(data) {
+  const firstName = data.payeeName.split(' ')[0]
+  const payUrl = `${process.env.FRONTEND_URL || 'https://hidaya.online'}/pay/${data.token}`
+
+  const content = `
+    <!-- Accent bar -->
+    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+
+    <!-- Arabic header -->
+    <tr><td style="padding:36px 36px 0" align="center">
+      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#0C3B2E;line-height:1.4">
+        ٱقْرَأْ بِٱسْمِ رَبِّكَ ٱلَّذِى خَلَقَ
+      </p>
+      <p style="margin:6px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#8AA89C;font-weight:500">
+        Read in the name of your Lord who created &mdash; Al-Alaq 96:1
+      </p>
+    </td></tr>
+
+    <!-- Divider -->
+    <tr><td style="padding:20px 36px 0" align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
+        <td style="padding:0 10px"><span style="color:#D4A843;font-size:12px">✦</span></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+      </tr></table>
+    </td></tr>
+
+    <!-- Greeting -->
+    <tr><td style="padding:24px 36px 0" align="center">
+      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#D4A843;font-weight:700">
+        أهلاً وسهلاً
+      </p>
+      <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">Welcome</p>
+      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#0C3B2E;letter-spacing:-0.3px;font-family:'Amiri',serif">
+        Payment Request, ${firstName}
+      </h1>
+      <p style="margin:12px 0 0;font-size:15px;color:#6B8F7F;line-height:1.6;max-width:420px">
+        You have a pending payment from Hidaya Online Academy. Please complete it at your earliest convenience.
+      </p>
+    </td></tr>
+
+    <!-- Amount card -->
+    <tr><td style="padding:28px 36px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:linear-gradient(135deg,#F8FAF9,#F0F7F4);border-radius:16px;border:1px solid #E7F2EC">
+        <tr><td style="padding:28px" align="center">
+          <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#8AA89C;font-weight:600;margin-bottom:8px">Amount Due</span>
+          <span style="font-size:40px;font-weight:800;color:#0C3B2E;letter-spacing:-0.5px">Rs. ${Number(data.amount).toLocaleString()}</span>
+          <span style="display:block;margin-top:8px;font-size:13px;color:#6B8F7F">${data.description}</span>
+        </td></tr>
+      </table>
+    </td></tr>
+
+    <!-- Details -->
+    <tr><td style="padding:0 36px 8px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F8FAF9;border-radius:14px;border:1px solid #E7F2EC">
+        <tr><td style="padding:20px 24px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            ${row('Name', data.payeeName)}
+            ${row('Email', data.payeeEmail)}
+            ${row('Description', data.description)}
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>
+
+    <!-- Pay Now CTA -->
+    <tr><td style="padding:24px 36px 16px" align="center">
+      <a href="${payUrl}" style="display:inline-block;padding:16px 48px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:16px;font-weight:700;text-decoration:none;border-radius:14px;box-shadow:0 4px 20px rgba(12,59,46,0.3);letter-spacing:0.3px">
+        Pay Now — Rs. ${Number(data.amount).toLocaleString()}
+      </a>
+    </td></tr>
+
+    <tr><td style="padding:0 36px 8px" align="center">
+      <p style="margin:0;font-size:11px;color:#8AA89C">Secured by Mastercard Payment Gateway</p>
+    </td></tr>
+
+    <!-- WhatsApp CTA -->
+    <tr><td style="padding:8px 36px 16px" align="center">
+      <a href="https://wa.me/16313558368" style="display:inline-block;padding:12px 32px;background:#25D366;color:#fff;font-size:13px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(37,211,102,0.25)">Questions? Contact Us</a>
+    </td></tr>
+
+    <!-- Closing -->
+    <tr><td style="padding:16px 36px 32px" align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+        <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
+        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
+      </tr></table>
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">
+        بَارَكَ اللَّهُ فِيكُمْ
+      </p>
+      <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">
+        May Allah bless you
+      </p>
+    </td></tr>`
+
+  return {
+    subject: `💳 Payment Request — Rs. ${Number(data.amount).toLocaleString()} — Hidaya Online`,
+    html: userLayout(content),
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   ADMIN — PAYMENT LINK CREATED NOTIFICATION
+   ═══════════════════════════════════════════════════════ */
+export function paymentLinkAdminEmail(data) {
+  const payUrl = `${process.env.FRONTEND_URL || 'https://hidaya.online'}/pay/${data.token}`
+
+  const content = `
+    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="padding:32px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td><span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#E0F2FE;color:#0369A1;text-transform:uppercase">Payment Link</span></td>
+        <td align="right"><span style="font-size:11px;color:#8AA89C;font-family:SFMono-Regular,Menlo,monospace">${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span></td>
+      </tr></table>
+    </td></tr>
+    <tr><td style="padding:20px 36px 4px">
+      <h1 style="margin:0;font-size:24px;font-weight:700;color:#0C3B2E">Payment Link Sent</h1>
+      <p style="margin:6px 0 0;font-size:14px;color:#6B8F7F">A payment link has been emailed to ${data.payeeName}.</p>
+    </td></tr>
+    <tr><td style="padding:24px 36px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F0FDF9;border-radius:14px;border:1px solid #D1FAE5">
+        <tr><td style="padding:24px 28px" align="center">
+          <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#8AA89C;font-weight:600;margin-bottom:8px">Amount</span>
+          <span style="font-size:36px;font-weight:800;color:#047857;letter-spacing:-0.5px">Rs. ${Number(data.amount).toLocaleString()}</span>
+        </td></tr>
+      </table>
+    </td></tr>
+    <tr><td style="padding:0 36px"><div style="height:1px;background:linear-gradient(90deg,transparent,#e5e7eb,transparent)"></div></td></tr>
+    <tr><td style="padding:8px 36px 28px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        ${row('Payee', data.payeeName)}
+        ${row('Email', data.payeeEmail, { link: `mailto:${data.payeeEmail}` })}
+        ${data.payeePhone ? row('Phone', data.payeePhone) : ''}
+        ${row('Description', data.description)}
+        ${row('Link', payUrl, { mono: true, link: payUrl })}
+      </table>
+    </td></tr>`
+
+  return {
+    subject: `🔗 Payment Link Created — ${data.payeeName} (Rs. ${Number(data.amount).toLocaleString()})`,
+    html: adminLayout(content),
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   USER — INVOICE EMAIL (sent to payee after successful payment)
+   ═══════════════════════════════════════════════════════ */
+export function invoiceEmail({ link, payment }) {
+  const firstName = link.payeeName.split(' ')[0]
+  const invoiceNo = `INV-${payment.gatewayOrderId || payment._id.toString().slice(-8).toUpperCase()}`
+  const paidDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+
+  // Build items rows
+  const items = (link.items || []).filter(i => i.trim())
+  const itemsHtml = items.length > 0
+    ? items.map((item, i) => `
+        <tr>
+          <td style="padding:10px 16px;border-bottom:1px solid #f0f4f2;font-size:13px;color:#0C3B2E">
+            ${link.listType === 'numbered'
+              ? `<span style="display:inline-block;width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#0C3B2E10,#1B6B5A10);text-align:center;line-height:22px;font-size:11px;font-weight:700;color:#0C3B2E;margin-right:10px">${i + 1}</span>`
+              : `<span style="color:#D4A843;margin-right:10px;font-size:10px">✦</span>`
+            }${item}
+          </td>
+        </tr>`).join('')
+    : ''
+
+  const content = `
+    <!-- Accent bar -->
+    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+
+    <!-- Arabic header -->
+    <tr><td style="padding:36px 36px 0" align="center">
+      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#0C3B2E;line-height:1.4">
+        ٱقْرَأْ بِٱسْمِ رَبِّكَ ٱلَّذِى خَلَقَ
+      </p>
+      <p style="margin:6px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#8AA89C;font-weight:500">
+        Read in the name of your Lord who created &mdash; Al-Alaq 96:1
+      </p>
+    </td></tr>
+
+    <!-- Divider -->
+    <tr><td style="padding:20px 36px 0" align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
+        <td style="padding:0 10px"><span style="color:#D4A843;font-size:12px">✦</span></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+      </tr></table>
+    </td></tr>
+
+    <!-- Invoice header -->
+    <tr><td style="padding:24px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td>
+          <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#D4A843;font-weight:700">Invoice</p>
+          <h1 style="margin:6px 0 0;font-size:28px;font-weight:700;color:#0C3B2E;font-family:'Amiri',serif">
+            Payment Receipt
+          </h1>
+        </td>
+        <td align="right" style="vertical-align:top">
+          <span style="display:inline-block;padding:6px 16px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#D1FAE5;color:#047857;text-transform:uppercase">✓ Paid</span>
+        </td>
+      </tr></table>
+    </td></tr>
+
+    <!-- Invoice meta -->
+    <tr><td style="padding:16px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F8FAF9;border-radius:12px;border:1px solid #E7F2EC">
+        <tr>
+          <td style="padding:16px 20px;border-right:1px solid #E7F2EC" align="center">
+            <span style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Invoice No.</span>
+            <span style="display:block;margin-top:4px;font-family:SFMono-Regular,Menlo,monospace;font-size:12px;color:#0C3B2E;font-weight:600">${invoiceNo}</span>
+          </td>
+          <td style="padding:16px 20px;border-right:1px solid #E7F2EC" align="center">
+            <span style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Date</span>
+            <span style="display:block;margin-top:4px;font-size:12px;color:#0C3B2E;font-weight:600">${paidDate}</span>
+          </td>
+          <td style="padding:16px 20px" align="center">
+            <span style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Method</span>
+            <span style="display:block;margin-top:4px;font-size:12px;color:#0C3B2E;font-weight:600">Mastercard</span>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+
+    <!-- Bill To -->
+    <tr><td style="padding:24px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td style="vertical-align:top;width:50%">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Bill To</span>
+          <p style="margin:8px 0 0;font-size:15px;font-weight:700;color:#0C3B2E">${link.payeeName}</p>
+          <p style="margin:4px 0 0;font-size:13px;color:#6B8F7F">${link.payeeEmail}</p>
+          ${link.payeePhone ? `<p style="margin:2px 0 0;font-size:13px;color:#6B8F7F">${link.payeePhone}</p>` : ''}
+        </td>
+        <td style="vertical-align:top;width:50%" align="right">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">From</span>
+          <p style="margin:8px 0 0;font-size:15px;font-weight:700;color:#0C3B2E">Hidaya Online Academy</p>
+          <p style="margin:4px 0 0;font-size:13px;color:#6B8F7F">Rawalpindi, Pakistan</p>
+          <p style="margin:2px 0 0;font-size:13px;color:#6B8F7F">hidaya.online</p>
+        </td>
+      </tr></table>
+    </td></tr>
+
+    <!-- Description + Items -->
+    <tr><td style="padding:24px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:12px;overflow:hidden;border:1px solid #E7F2EC">
+        <!-- Table header -->
+        <tr>
+          <td style="padding:12px 16px;background:#F8FAF9;border-bottom:2px solid #E7F2EC">
+            <span style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:700">Description</span>
+          </td>
+        </tr>
+        <!-- Main description -->
+        <tr>
+          <td style="padding:14px 16px;border-bottom:1px solid #f0f4f2;font-size:14px;font-weight:600;color:#0C3B2E">${link.description}</td>
+        </tr>
+        ${itemsHtml}
+      </table>
+    </td></tr>
+
+    <!-- Amount summary -->
+    <tr><td style="padding:20px 36px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="padding:12px 0;border-bottom:1px solid #E7F2EC">
+            <span style="font-size:13px;color:#6B8F7F">Subtotal</span>
+          </td>
+          <td style="padding:12px 0;border-bottom:1px solid #E7F2EC;text-align:right">
+            <span style="font-size:14px;color:#0C3B2E;font-weight:500">Rs. ${Number(link.amount).toLocaleString()}</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:14px 0">
+            <span style="font-size:15px;font-weight:700;color:#0C3B2E">Total Paid</span>
+          </td>
+          <td style="padding:14px 0;text-align:right">
+            <span style="font-size:24px;font-weight:800;color:#047857;letter-spacing:-0.3px">Rs. ${Number(link.amount).toLocaleString()}</span>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+
+    <!-- Transaction details -->
+    <tr><td style="padding:0 36px 8px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F0FDF9;border-radius:12px;border:1px solid #D1FAE5">
+        <tr><td style="padding:16px 20px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="padding:4px 0"><span style="font-size:11px;color:#6B8F7F">Order ID</span></td>
+              <td style="padding:4px 0;text-align:right"><span style="font-family:SFMono-Regular,Menlo,monospace;font-size:11px;color:#047857">${payment.gatewayOrderId || '—'}</span></td>
+            </tr>
+            ${payment.gatewayTransactionId ? `<tr>
+              <td style="padding:4px 0"><span style="font-size:11px;color:#6B8F7F">Transaction ID</span></td>
+              <td style="padding:4px 0;text-align:right"><span style="font-family:SFMono-Regular,Menlo,monospace;font-size:11px;color:#047857">${payment.gatewayTransactionId}</span></td>
+            </tr>` : ''}
+            <tr>
+              <td style="padding:4px 0"><span style="font-size:11px;color:#6B8F7F">Currency</span></td>
+              <td style="padding:4px 0;text-align:right"><span style="font-size:11px;color:#047857;font-weight:600">${link.currency || 'PKR'}</span></td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>
+
+    <!-- WhatsApp CTA -->
+    <tr><td style="padding:16px 36px 16px" align="center">
+      <a href="https://wa.me/16313558368" style="display:inline-block;padding:12px 32px;background:#25D366;color:#fff;font-size:13px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(37,211,102,0.25)">Questions? Contact Us</a>
+    </td></tr>
+
+    <!-- Closing -->
+    <tr><td style="padding:16px 36px 32px" align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+        <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
+        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
+      </tr></table>
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">
+        جَزَاكَ اللَّهُ خَيْرًا
+      </p>
+      <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">
+        May Allah reward you with goodness
+      </p>
+    </td></tr>`
+
+  return {
+    subject: `🧾 Invoice — Rs. ${Number(link.amount).toLocaleString()} — Hidaya Online (${invoiceNo})`,
+    html: userLayout(content),
+  }
+}
