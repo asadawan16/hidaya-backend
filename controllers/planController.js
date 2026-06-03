@@ -1,4 +1,36 @@
 import Plan from '../models/Plan.js'
+import geoip from 'geoip-lite'
+
+const COUNTRY_CURRENCY = {
+  PK: 'PKR',
+  US: 'USD', PR: 'USD', GU: 'USD', VI: 'USD', AS: 'USD',
+  EC: 'USD', SV: 'USD', PA: 'USD', MH: 'USD', FM: 'USD',
+  GB: 'GBP', IM: 'GBP', JE: 'GBP', GG: 'GBP',
+  DE: 'EUR', FR: 'EUR', IT: 'EUR', ES: 'EUR', NL: 'EUR',
+  BE: 'EUR', AT: 'EUR', IE: 'EUR', PT: 'EUR', FI: 'EUR',
+  GR: 'EUR', LU: 'EUR', SK: 'EUR', SI: 'EUR', EE: 'EUR',
+  LV: 'EUR', LT: 'EUR', MT: 'EUR', CY: 'EUR', HR: 'EUR',
+  CA: 'USD', AU: 'USD', NZ: 'USD', SG: 'USD', HK: 'USD',
+  JP: 'USD', KR: 'USD', IN: 'USD', BD: 'USD', LK: 'USD',
+  AE: 'USD', SA: 'USD', QA: 'USD', KW: 'USD', BH: 'USD',
+  OM: 'USD', MY: 'USD', TH: 'USD', PH: 'USD', ID: 'USD',
+  TR: 'USD', EG: 'USD', ZA: 'USD', NG: 'USD', KE: 'USD',
+  BR: 'USD', MX: 'USD', AR: 'USD', CO: 'USD', CL: 'USD',
+}
+const SUPPORTED = ['PKR', 'USD', 'EUR', 'GBP']
+
+function detectCurrencyFromIp(req) {
+  const forwarded = req.headers['x-forwarded-for']
+  const ip = forwarded ? forwarded.split(',')[0].trim() : req.socket?.remoteAddress
+  if (!ip || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return 'PKR'
+
+  const geo = geoip.lookup(ip)
+  if (!geo) return 'USD'
+
+  // Check if the country's native currency is in our supported list
+  const mapped = COUNTRY_CURRENCY[geo.country]
+  return mapped || 'USD'
+}
 
 // Default plans — used as seed data and frontend fallback
 const DEFAULTS = [
@@ -35,18 +67,19 @@ const DEFAULTS = [
 ]
 
 /* ── Public: Get active plans (for fee page) ── */
-export async function listPublic(_req, res) {
+export async function listPublic(req, res) {
   try {
     let plans = await Plan.find({ active: true }).sort({ price: 1 })
     // If no plans in DB yet, seed defaults and return them
     if (plans.length === 0) {
       plans = await Plan.insertMany(DEFAULTS)
     }
-    res.json(plans)
+    const currency = detectCurrencyFromIp(req)
+    res.json({ plans, currency })
   } catch (err) {
     console.error('Plans list error:', err)
     // Return defaults as ultimate fallback
-    res.json(DEFAULTS)
+    res.json({ plans: DEFAULTS, currency: 'PKR' })
   }
 }
 
@@ -83,10 +116,6 @@ export async function update(req, res) {
         EUR: p.EUR != null ? Number(p.EUR) : undefined,
         GBP: p.GBP != null ? Number(p.GBP) : undefined,
       }
-    }
-    if (req.body.defaultCurrency !== undefined) {
-      const valid = ['PKR', 'USD', 'EUR', 'GBP']
-      if (valid.includes(req.body.defaultCurrency)) updateData.defaultCurrency = req.body.defaultCurrency
     }
     if (name !== undefined) updateData.name = name
     if (sessions !== undefined) updateData.sessions = sessions

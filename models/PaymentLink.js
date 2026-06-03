@@ -33,6 +33,9 @@ const paymentLinkSchema = new mongoose.Schema({
   items: [{ type: String, trim: true }],
   listType: { type: String, enum: ['bullet', 'numbered'], default: 'bullet' },
 
+  // Optional linked student
+  student: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
+
   // Admin notes
   notes: { type: String, trim: true },
 
@@ -47,5 +50,6 @@ paymentLinkSchema.index({ token: 1 })
 paymentLinkSchema.index({ status: 1 })
 paymentLinkSchema.index({ createdAt: -1 })
 paymentLinkSchema.index({ payeeEmail: 1 })
+paymentLinkSchema.index({ student: 1 })
 
 export default mongoose.model('PaymentLink', paymentLinkSchema)

@@ -19,7 +19,7 @@ export async function createCheckoutSession({ orderId, amount, currency, plan, r
         operation: 'PURCHASE',
         returnUrl,
         cancelUrl,
-        merchant: { name: 'Hidaya Online Education' },
+        merchant: { name: 'Hidaya Online' },
       },
       order: {
         id: orderId,

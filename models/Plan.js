@@ -12,7 +12,6 @@ const planSchema = new mongoose.Schema({
     EUR: { type: Number },
     GBP: { type: Number },
   },
-  defaultCurrency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
   features: [{ type: String }],
   popular: { type: Boolean, default: false },
   active: { type: Boolean, default: true },

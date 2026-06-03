@@ -12,6 +12,7 @@ import blogRoutes from './routes/blogRoutes.js'
 import uploadRoutes from './routes/uploadRoutes.js'
 import paymentLinkRoutes from './routes/paymentLinkRoutes.js'
 import planRoutes from './routes/planRoutes.js'
+import studentRoutes from './routes/studentRoutes.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
 
 const app = express()
@@ -44,6 +45,7 @@ app.use('/api/blogs', blogRoutes)
 app.use('/api/uploads', uploadRoutes)
 app.use('/api/payment-links', paymentLinkRoutes)
 app.use('/api/plans', planRoutes)
+app.use('/api/students', studentRoutes)
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))

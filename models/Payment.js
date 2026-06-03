@@ -24,6 +24,10 @@ const paymentSchema = new mongoose.Schema({
     default: 'pending',
   },
 
+  // Optional refs (set when payment originates from a payment link)
+  student: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
+  paymentLink: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentLink' },
+
   // Notes
   notes: { type: String },
 }, { timestamps: true })
@@ -31,5 +35,7 @@ const paymentSchema = new mongoose.Schema({
 paymentSchema.index({ studentEmail: 1 })
 paymentSchema.index({ status: 1 })
 paymentSchema.index({ createdAt: -1 })
+paymentSchema.index({ student: 1 })
+paymentSchema.index({ paymentLink: 1 })
 
 export default mongoose.model('Payment', paymentSchema)

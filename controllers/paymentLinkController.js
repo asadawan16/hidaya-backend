@@ -10,13 +10,13 @@ import {
 /* ── Admin: Create a payment link ── */
 export async function create(req, res) {
   try {
-    const { payeeName, payeeEmail, payeePhone, description, amount, currency, notes, expiresAfterPayment, items, listType } = req.body
+    const { payeeName, payeeEmail, payeePhone, description, amount, currency, notes, expiresAfterPayment, items, listType, student } = req.body
     if (!payeeName || !payeeEmail || !description || !amount) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
     const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
-    const link = await PaymentLink.create({
+    const linkData = {
       payeeName,
       payeeEmail,
       payeePhone,
@@ -27,7 +27,10 @@ export async function create(req, res) {
       expiresAfterPayment: expiresAfterPayment !== false,
       items: Array.isArray(items) ? items.filter(i => i.trim()) : [],
       listType: listType === 'numbered' ? 'numbered' : 'bullet',
-    })
+    }
+    if (student) linkData.student = student
+
+    const link = await PaymentLink.create(linkData)
 
     res.status(201).json(link)
   } catch (err) {
@@ -92,6 +95,7 @@ export async function list(req, res) {
       .sort({ createdAt: -1 })
       .skip((safePage - 1) * lim)
       .limit(lim)
+      .populate('student', 'name email')
 
     res.json({ links, total, page: safePage, pages })
   } catch (err) {
@@ -189,7 +193,7 @@ export async function initiate(req, res) {
 
     const orderId = `PL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
-    const payment = await Payment.create({
+    const paymentData = {
       studentName: link.payeeName,
       studentEmail: link.payeeEmail,
       studentPhone: link.payeePhone,
@@ -197,8 +201,12 @@ export async function initiate(req, res) {
       amount: link.amount,
       currency: link.currency || 'PKR',
       gatewayOrderId: orderId,
+      paymentLink: link._id,
       status: 'pending',
-    })
+    }
+    if (link.student) paymentData.student = link.student
+
+    const payment = await Payment.create(paymentData)
 
     // Link the payment to the payment link
     link.payment = payment._id

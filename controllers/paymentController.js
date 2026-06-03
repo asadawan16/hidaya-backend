@@ -96,9 +96,15 @@ export async function callback(req, res) {
 
 export async function list(req, res) {
   try {
-    const { status, page = 1, limit = 20, startDate, endDate } = req.query
+    const { status, source, search, page = 1, limit = 20, startDate, endDate } = req.query
     const filter = {}
     if (status) filter.status = status
+    if (source === 'plan') filter.paymentLink = { $exists: false }
+    else if (source === 'link') filter.paymentLink = { $exists: true }
+    if (search) {
+      const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      filter.$or = [{ studentName: regex }, { studentEmail: regex }, { plan: regex }]
+    }
     if (startDate || endDate) {
       filter.createdAt = {}
       if (startDate) filter.createdAt.$gte = new Date(startDate)
