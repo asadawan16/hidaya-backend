@@ -4,11 +4,13 @@ import { notifyAdmin, sendToUser, paymentEmail, paymentConfirmationEmail } from 
 
 export async function initiate(req, res) {
   try {
-    const { studentName, studentEmail, studentPhone, plan, amount } = req.body
+    const { studentName, studentEmail, studentPhone, plan, amount, currency } = req.body
     if (!studentName || !studentEmail || !plan || !amount) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
+    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
+    const cur = validCurrencies.includes(currency) ? currency : 'PKR'
     const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
     const payment = await Payment.create({
@@ -17,6 +19,7 @@ export async function initiate(req, res) {
       studentPhone,
       plan,
       amount: Number(amount),
+      currency: cur,
       gatewayOrderId: orderId,
       status: 'pending',
     })
@@ -24,6 +27,7 @@ export async function initiate(req, res) {
     const sessionData = await createCheckoutSession({
       orderId,
       amount,
+      currency: cur,
       plan,
       returnUrl: `${process.env.FRONTEND_URL}/payment/callback?orderId=${orderId}`,
       cancelUrl: `${process.env.FRONTEND_URL}/fee`,

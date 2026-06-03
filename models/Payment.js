@@ -9,7 +9,7 @@ const paymentSchema = new mongoose.Schema({
   // Plan info
   plan: { type: String, required: true },
   amount: { type: Number, required: true },
-  currency: { type: String, default: 'PKR' },
+  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
 
   // Mastercard gateway response (NO card details stored)
   gatewayOrderId: { type: String },

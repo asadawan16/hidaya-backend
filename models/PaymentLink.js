@@ -10,7 +10,7 @@ const paymentLinkSchema = new mongoose.Schema({
   // Payment details
   description: { type: String, required: true, trim: true },
   amount: { type: Number, required: true },
-  currency: { type: String, default: 'PKR' },
+  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
 
   // Unique token for the link
   token: {

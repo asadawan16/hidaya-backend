@@ -1,5 +1,11 @@
 import nodemailer from 'nodemailer'
 
+const currencySymbols = { PKR: 'Rs.', USD: '$', EUR: '€', GBP: '£' }
+function fmtCurrency(amount, currency) {
+  const symbol = currencySymbols[currency] || currency || 'Rs.'
+  return `${symbol} ${Number(amount).toLocaleString()}`
+}
+
 let transporter = null
 
 function getTransporter() {
@@ -416,7 +422,7 @@ export function paymentEmail(data) {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${isSuccess ? '#F0FDF9' : '#FFF5F5'};border-radius:14px;border:1px solid ${isSuccess ? '#D1FAE5' : '#FECACA'}">
         <tr><td style="padding:24px 28px" align="center">
           <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#8AA89C;font-weight:600;margin-bottom:8px">Amount</span>
-          <span style="font-size:36px;font-weight:800;color:${statusColor};letter-spacing:-0.5px">Rs. ${Number(data.amount).toLocaleString()}</span>
+          <span style="font-size:36px;font-weight:800;color:${statusColor};letter-spacing:-0.5px">${fmtCurrency(data.amount, data.currency)}</span>
         </td></tr>
       </table>
     </td></tr>
@@ -442,7 +448,7 @@ export function paymentEmail(data) {
     </td></tr>`
 
   return {
-    subject: `${isSuccess ? '✅' : '❌'} Payment ${data.status} — ${data.studentName} (Rs. ${Number(data.amount).toLocaleString()})`,
+    subject: `${isSuccess ? '✅' : '❌'} Payment ${data.status} — ${data.studentName} (${fmtCurrency(data.amount, data.currency)})`,
     html: adminLayout(content),
   }
 }
@@ -499,7 +505,7 @@ export function paymentConfirmationEmail(data) {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${isSuccess ? 'linear-gradient(135deg,#F0FDF9,#E6F7F0)' : 'linear-gradient(135deg,#FFF5F5,#FEF2F2)'};border-radius:16px;border:1px solid ${isSuccess ? '#D1FAE5' : '#FECACA'}">
         <tr><td style="padding:28px" align="center">
           <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#8AA89C;font-weight:600;margin-bottom:8px">Amount ${isSuccess ? 'Paid' : 'Attempted'}</span>
-          <span style="font-size:40px;font-weight:800;color:${statusColor};letter-spacing:-0.5px">Rs. ${Number(data.amount).toLocaleString()}</span>
+          <span style="font-size:40px;font-weight:800;color:${statusColor};letter-spacing:-0.5px">${fmtCurrency(data.amount, data.currency)}</span>
           <span style="display:block;margin-top:8px;font-size:13px;color:#6B8F7F">${data.plan}</span>
         </td></tr>
       </table>
@@ -719,7 +725,7 @@ export function paymentLinkEmail(data) {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:linear-gradient(135deg,#F8FAF9,#F0F7F4);border-radius:16px;border:1px solid #E7F2EC">
         <tr><td style="padding:28px" align="center">
           <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#8AA89C;font-weight:600;margin-bottom:8px">Amount Due</span>
-          <span style="font-size:40px;font-weight:800;color:#0C3B2E;letter-spacing:-0.5px">Rs. ${Number(data.amount).toLocaleString()}</span>
+          <span style="font-size:40px;font-weight:800;color:#0C3B2E;letter-spacing:-0.5px">${fmtCurrency(data.amount, data.currency)}</span>
           <span style="display:block;margin-top:8px;font-size:13px;color:#6B8F7F">${data.description}</span>
         </td></tr>
       </table>
@@ -741,7 +747,7 @@ export function paymentLinkEmail(data) {
     <!-- Pay Now CTA -->
     <tr><td style="padding:24px 36px 16px" align="center">
       <a href="${payUrl}" style="display:inline-block;padding:16px 48px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:16px;font-weight:700;text-decoration:none;border-radius:14px;box-shadow:0 4px 20px rgba(12,59,46,0.3);letter-spacing:0.3px">
-        Pay Now — Rs. ${Number(data.amount).toLocaleString()}
+        Pay Now — ${fmtCurrency(data.amount, data.currency)}
       </a>
     </td></tr>
 
@@ -770,7 +776,7 @@ export function paymentLinkEmail(data) {
     </td></tr>`
 
   return {
-    subject: `💳 Payment Request — Rs. ${Number(data.amount).toLocaleString()} — Hidaya Online`,
+    subject: `💳 Payment Request — ${fmtCurrency(data.amount, data.currency)} — Hidaya Online`,
     html: userLayout(content),
   }
 }
@@ -797,7 +803,7 @@ export function paymentLinkAdminEmail(data) {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F0FDF9;border-radius:14px;border:1px solid #D1FAE5">
         <tr><td style="padding:24px 28px" align="center">
           <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#8AA89C;font-weight:600;margin-bottom:8px">Amount</span>
-          <span style="font-size:36px;font-weight:800;color:#047857;letter-spacing:-0.5px">Rs. ${Number(data.amount).toLocaleString()}</span>
+          <span style="font-size:36px;font-weight:800;color:#047857;letter-spacing:-0.5px">${fmtCurrency(data.amount, data.currency)}</span>
         </td></tr>
       </table>
     </td></tr>
@@ -813,7 +819,7 @@ export function paymentLinkAdminEmail(data) {
     </td></tr>`
 
   return {
-    subject: `🔗 Payment Link Created — ${data.payeeName} (Rs. ${Number(data.amount).toLocaleString()})`,
+    subject: `🔗 Payment Link Created — ${data.payeeName} (${fmtCurrency(data.amount, data.currency)})`,
     html: adminLayout(content),
   }
 }
@@ -941,7 +947,7 @@ export function invoiceEmail({ link, payment }) {
             <span style="font-size:13px;color:#6B8F7F">Subtotal</span>
           </td>
           <td style="padding:12px 0;border-bottom:1px solid #E7F2EC;text-align:right">
-            <span style="font-size:14px;color:#0C3B2E;font-weight:500">Rs. ${Number(link.amount).toLocaleString()}</span>
+            <span style="font-size:14px;color:#0C3B2E;font-weight:500">${fmtCurrency(link.amount, link.currency)}</span>
           </td>
         </tr>
         <tr>
@@ -949,7 +955,7 @@ export function invoiceEmail({ link, payment }) {
             <span style="font-size:15px;font-weight:700;color:#0C3B2E">Total Paid</span>
           </td>
           <td style="padding:14px 0;text-align:right">
-            <span style="font-size:24px;font-weight:800;color:#047857;letter-spacing:-0.3px">Rs. ${Number(link.amount).toLocaleString()}</span>
+            <span style="font-size:24px;font-weight:800;color:#047857;letter-spacing:-0.3px">${fmtCurrency(link.amount, link.currency)}</span>
           </td>
         </tr>
       </table>
@@ -998,7 +1004,7 @@ export function invoiceEmail({ link, payment }) {
     </td></tr>`
 
   return {
-    subject: `🧾 Invoice — Rs. ${Number(link.amount).toLocaleString()} — Hidaya Online (${invoiceNo})`,
+    subject: `🧾 Invoice — ${fmtCurrency(link.amount, link.currency)} — Hidaya Online (${invoiceNo})`,
     html: userLayout(content),
   }
 }

@@ -75,6 +75,15 @@ export async function update(req, res) {
       if (isNaN(p) || p < 20) return res.status(400).json({ error: 'Price must be at least Rs. 20' })
       updateData.price = p
     }
+    if (req.body.prices !== undefined) {
+      const p = req.body.prices
+      updateData.prices = {
+        PKR: p.PKR != null ? Number(p.PKR) : undefined,
+        USD: p.USD != null ? Number(p.USD) : undefined,
+        EUR: p.EUR != null ? Number(p.EUR) : undefined,
+        GBP: p.GBP != null ? Number(p.GBP) : undefined,
+      }
+    }
     if (name !== undefined) updateData.name = name
     if (sessions !== undefined) updateData.sessions = sessions
     if (duration !== undefined) updateData.duration = duration

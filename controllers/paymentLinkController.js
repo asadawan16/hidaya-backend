@@ -10,17 +10,19 @@ import {
 /* ── Admin: Create a payment link ── */
 export async function create(req, res) {
   try {
-    const { payeeName, payeeEmail, payeePhone, description, amount, notes, expiresAfterPayment, items, listType } = req.body
+    const { payeeName, payeeEmail, payeePhone, description, amount, currency, notes, expiresAfterPayment, items, listType } = req.body
     if (!payeeName || !payeeEmail || !description || !amount) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
+    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
     const link = await PaymentLink.create({
       payeeName,
       payeeEmail,
       payeePhone,
       description,
       amount: Number(amount),
+      currency: validCurrencies.includes(currency) ? currency : 'PKR',
       notes,
       expiresAfterPayment: expiresAfterPayment !== false,
       items: Array.isArray(items) ? items.filter(i => i.trim()) : [],
@@ -193,6 +195,7 @@ export async function initiate(req, res) {
       studentPhone: link.payeePhone,
       plan: link.description,
       amount: link.amount,
+      currency: link.currency || 'PKR',
       gatewayOrderId: orderId,
       status: 'pending',
     })
@@ -204,6 +207,7 @@ export async function initiate(req, res) {
     const sessionData = await createCheckoutSession({
       orderId,
       amount: link.amount,
+      currency: link.currency || 'PKR',
       plan: link.description,
       returnUrl: `${process.env.FRONTEND_URL}/pay/${link.token}/callback?orderId=${orderId}`,
       cancelUrl: `${process.env.FRONTEND_URL}/pay/${link.token}`,
