@@ -84,6 +84,10 @@ export async function update(req, res) {
         GBP: p.GBP != null ? Number(p.GBP) : undefined,
       }
     }
+    if (req.body.defaultCurrency !== undefined) {
+      const valid = ['PKR', 'USD', 'EUR', 'GBP']
+      if (valid.includes(req.body.defaultCurrency)) updateData.defaultCurrency = req.body.defaultCurrency
+    }
     if (name !== undefined) updateData.name = name
     if (sessions !== undefined) updateData.sessions = sessions
     if (duration !== undefined) updateData.duration = duration
