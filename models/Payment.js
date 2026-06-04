@@ -3,7 +3,7 @@ import mongoose from 'mongoose'
 const paymentSchema = new mongoose.Schema({
   // Student info
   studentName: { type: String, required: true, trim: true },
-  studentEmail: { type: String, required: true, lowercase: true, trim: true },
+  studentEmail: { type: String, lowercase: true, trim: true, default: '' },
   studentPhone: { type: String, trim: true },
 
   // Plan info
