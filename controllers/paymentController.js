@@ -149,6 +149,13 @@ export async function getStats(req, res) {
     ])
     const totalRevenue = revenueResult[0]?.total || 0
 
+    // Revenue grouped by currency
+    const revenueByCurrency = await Payment.aggregate([
+      { $match: { status: 'completed', ...dateFilter } },
+      { $group: { _id: { $ifNull: ['$currency', 'PKR'] }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ])
+
     const sixMonthsAgo = new Date()
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
     const monthlyDateFilter = dateFilter.createdAt ? dateFilter : { createdAt: { $gte: sixMonthsAgo } }
@@ -165,9 +172,56 @@ export async function getStats(req, res) {
       { $sort: { _id: 1 } },
     ])
 
+    // Monthly revenue grouped by currency
+    const monthlyByCurrency = await Payment.aggregate([
+      { $match: { status: 'completed', ...monthlyDateFilter } },
+      {
+        $group: {
+          _id: {
+            month: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
+            currency: { $ifNull: ['$currency', 'PKR'] },
+          },
+          revenue: { $sum: '$amount' },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { '_id.month': 1 } },
+    ])
+
     const recent = await Payment.find(dateFilter).sort({ createdAt: -1 }).limit(5)
 
-    res.json({ total, completed, pending, failed, expired, totalRevenue, monthly, recent })
+    // Total students count
+    const Student = (await import('../models/Student.js')).default
+    const totalStudents = await Student.countDocuments()
+
+    // Weekly revenue (current week Mon–Sun) — NOT affected by date filters
+    const now = new Date()
+    const dayOfWeek = now.getDay() // 0=Sun, 1=Mon, ...
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset)
+    const sunday = new Date(monday)
+    sunday.setDate(sunday.getDate() + 6)
+    sunday.setHours(23, 59, 59, 999)
+
+    const weeklyRevenue = await Payment.aggregate([
+      { $match: { status: 'completed', createdAt: { $gte: monday, $lte: sunday } } },
+      {
+        $group: {
+          _id: {
+            date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            currency: { $ifNull: ['$currency', 'PKR'] },
+          },
+          revenue: { $sum: '$amount' },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { '_id.date': 1 } },
+    ])
+
+    // Build the week range string for frontend label
+    const weekRange = `${monday.toISOString().slice(0, 10)} to ${sunday.toISOString().slice(0, 10)}`
+
+    res.json({ total, completed, pending, failed, expired, totalRevenue, revenueByCurrency, monthly, monthlyByCurrency, recent, totalStudents, weeklyRevenue, weekRange })
   } catch (err) {
     console.error('Payment stats error:', err)
     res.status(500).json({ error: 'Server error' })

@@ -4,7 +4,7 @@ import crypto from 'crypto'
 const paymentLinkSchema = new mongoose.Schema({
   // Payee info
   payeeName: { type: String, required: true, trim: true },
-  payeeEmail: { type: String, required: true, lowercase: true, trim: true },
+  payeeEmail: { type: String, lowercase: true, trim: true, default: '' },
   payeePhone: { type: String, trim: true },
 
   // Payment details
@@ -26,8 +26,14 @@ const paymentLinkSchema = new mongoose.Schema({
     default: 'active',
   },
 
-  // Linked payment (created when user clicks Pay Now)
+  // Invoice number — auto-generated, updated on each payment for recurring links
+  invoiceNo: { type: String, trim: true, default: '' },
+
+  // Linked payment (most recent — created when user clicks Pay Now)
   payment: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
+
+  // All payments made on this link (for recurring/reusable links)
+  payments: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Payment' }],
 
   // Line items shown on the payment page
   items: [{ type: String, trim: true }],

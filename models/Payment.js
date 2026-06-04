@@ -17,6 +17,9 @@ const paymentSchema = new mongoose.Schema({
   gatewayResult: { type: String }, // SUCCESS, FAILURE, PENDING
   gatewayResultCode: { type: String },
 
+  // Invoice number — copied from payment link
+  invoiceNo: { type: String, trim: true, default: '' },
+
   // Status
   status: {
     type: String,

@@ -87,7 +87,7 @@ function adminLayout(content) {
         <tr><td style="padding:32px 0 0" align="center">
           <span style="display:inline-block;width:32px;height:2px;background:linear-gradient(90deg,#D4A843,#1B6B5A);border-radius:1px"></span>
           <p style="color:#8AA89C;font-size:11px;line-height:18px;letter-spacing:0.3px;margin:12px 0 0">
-            Hidaya Online &middot; Rawalpindi, Pakistan<br>
+            Hidaya Online<br>
             <a href="https://hidaya.online" style="color:#1B6B5A;text-decoration:none">hidaya.online</a>
           </p>
         </td></tr>
@@ -154,8 +154,7 @@ function userLayout(content) {
         <!-- Footer -->
         <tr><td style="padding:8px 0 0" align="center">
           <p style="color:#8AA89C;font-size:11px;line-height:20px;letter-spacing:0.3px;margin:0">
-            Hidaya Online<br>
-            D-804 5th Road, Satellite Town, Rawalpindi, Pakistan
+            Hidaya Online
           </p>
           <p style="margin:10px 0 0">
             <a href="https://hidaya.online" style="color:#1B6B5A;text-decoration:none;font-size:12px;font-weight:600">hidaya.online</a>
@@ -916,8 +915,7 @@ export function invoiceEmail({ link, payment }) {
         <td style="vertical-align:top;width:50%" align="right">
           <span style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">From</span>
           <p style="margin:8px 0 0;font-size:15px;font-weight:700;color:#0C3B2E">Hidaya Online</p>
-          <p style="margin:4px 0 0;font-size:13px;color:#6B8F7F">Rawalpindi, Pakistan</p>
-          <p style="margin:2px 0 0;font-size:13px;color:#6B8F7F">hidaya.online</p>
+          <p style="margin:4px 0 0;font-size:13px;color:#6B8F7F">hidaya.online</p>
         </td>
       </tr></table>
     </td></tr>

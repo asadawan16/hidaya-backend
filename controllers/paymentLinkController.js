@@ -7,15 +7,36 @@ import {
   paymentEmail, paymentConfirmationEmail, invoiceEmail,
 } from '../services/mailer.js'
 
+/* ── Generate unique invoice number: HO-YYYYMM-XXXX ── */
+async function generateInvoiceNo() {
+  const now = new Date()
+  const prefix = `HO-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
+  // Find the highest invoice number for this month
+  const latest = await PaymentLink.findOne(
+    { invoiceNo: new RegExp(`^${prefix}-`) },
+    { invoiceNo: 1 },
+    { sort: { invoiceNo: -1 } }
+  )
+  let seq = 1
+  if (latest?.invoiceNo) {
+    const parts = latest.invoiceNo.split('-')
+    const lastSeq = parseInt(parts[parts.length - 1], 10)
+    if (!isNaN(lastSeq)) seq = lastSeq + 1
+  }
+  return `${prefix}-${String(seq).padStart(4, '0')}`
+}
+
 /* ── Admin: Create a payment link ── */
 export async function create(req, res) {
   try {
     const { payeeName, payeeEmail, payeePhone, description, amount, currency, notes, expiresAfterPayment, items, listType, student } = req.body
-    if (!payeeName || !payeeEmail || !description || !amount) {
+    if (!payeeName || !description || !amount) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
     const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
+    const invoiceNo = await generateInvoiceNo()
+
     const linkData = {
       payeeName,
       payeeEmail,
@@ -27,6 +48,7 @@ export async function create(req, res) {
       expiresAfterPayment: expiresAfterPayment !== false,
       items: Array.isArray(items) ? items.filter(i => i.trim()) : [],
       listType: listType === 'numbered' ? 'numbered' : 'bullet',
+      invoiceNo,
     }
     if (student) linkData.student = student
 
@@ -82,8 +104,8 @@ export async function list(req, res) {
         { payeePhone: regex },
         { description: regex },
         { notes: regex },
+        { invoiceNo: regex },
       ]
-      // Also match amount if the search is numeric
       const num = Number(search)
       if (!isNaN(num)) filter.$or.push({ amount: num })
     }
@@ -95,7 +117,7 @@ export async function list(req, res) {
       .sort({ createdAt: -1 })
       .skip((safePage - 1) * lim)
       .limit(lim)
-      .populate('student', 'name email')
+      .populate('student', 'name email rollNo')
 
     res.json({ links, total, page: safePage, pages })
   } catch (err) {
@@ -137,6 +159,36 @@ export async function getStats(req, res) {
   }
 }
 
+/* ── Admin: Get payment history for a link ── */
+export async function getPaymentHistory(req, res) {
+  try {
+    const link = await PaymentLink.findById(req.params.id)
+      .populate('student', 'name email rollNo phone')
+    if (!link) return res.status(404).json({ error: 'Payment link not found' })
+
+    const payments = await Payment.find({ paymentLink: link._id })
+      .sort({ createdAt: -1 })
+
+    const completed = payments.filter(p => p.status === 'completed')
+    const totalPaid = completed.reduce((sum, p) => sum + (p.amount || 0), 0)
+
+    res.json({
+      link,
+      payments,
+      stats: {
+        totalPayments: payments.length,
+        completedPayments: completed.length,
+        pendingPayments: payments.filter(p => p.status === 'pending').length,
+        failedPayments: payments.filter(p => p.status === 'failed').length,
+        totalPaid,
+      },
+    })
+  } catch (err) {
+    console.error('PaymentLink getPaymentHistory error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 /* ── Admin: Delete a payment link ── */
 export async function remove(req, res) {
   try {
@@ -155,7 +207,6 @@ export async function getByToken(req, res) {
     const link = await PaymentLink.findOne({ token: req.params.token })
     if (!link) return res.status(404).json({ error: 'Payment link not found' })
 
-    // Return limited info for public
     res.json({
       payeeName: link.payeeName,
       payeeEmail: link.payeeEmail,
@@ -167,6 +218,7 @@ export async function getByToken(req, res) {
       expiresAfterPayment: link.expiresAfterPayment,
       items: link.items || [],
       listType: link.listType || 'bullet',
+      invoiceNo: link.invoiceNo,
     })
   } catch (err) {
     console.error('PaymentLink getByToken error:', err)
@@ -202,6 +254,7 @@ export async function initiate(req, res) {
       currency: link.currency || 'PKR',
       gatewayOrderId: orderId,
       paymentLink: link._id,
+      invoiceNo: link.invoiceNo,
       status: 'pending',
     }
     if (link.student) paymentData.student = link.student
@@ -272,13 +325,21 @@ export async function callback(req, res) {
 
     await payment.save()
 
-    // Only mark link as completed if expiresAfterPayment is enabled
-    if (payment.status === 'completed' && link.expiresAfterPayment) {
-      link.status = 'completed'
-      await link.save()
+    // Add payment to the link's payments array
+    if (!link.payments) link.payments = []
+    if (!link.payments.includes(payment._id)) {
+      link.payments.push(payment._id)
     }
-    // On failure, link stays active so user can retry
-    // If expiresAfterPayment is false, link stays active for reuse
+
+    if (payment.status === 'completed' && link.expiresAfterPayment) {
+      // Single-use link — mark as completed
+      link.status = 'completed'
+    } else if (payment.status === 'completed' && !link.expiresAfterPayment) {
+      // Recurring link — generate new invoice number for next payment
+      link.invoiceNo = await generateInvoiceNo()
+    }
+
+    await link.save()
 
     const paymentData = payment.toObject()
 
@@ -286,11 +347,9 @@ export async function callback(req, res) {
     notifyAdmin(paymentEmail(paymentData)).catch(() => {})
 
     if (payment.status === 'completed') {
-      // Send invoice to payee
       const invoice = invoiceEmail({ link: link.toObject(), payment: paymentData })
       sendToUser({ to: paymentData.studentEmail, ...invoice }).catch(() => {})
     } else {
-      // Send failure notification to payee
       const userEmail = paymentConfirmationEmail(paymentData)
       sendToUser({ to: paymentData.studentEmail, ...userEmail }).catch(() => {})
     }

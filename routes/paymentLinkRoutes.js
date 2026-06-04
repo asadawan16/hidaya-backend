@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { create, sendEmail, list, getStats, remove, getByToken, initiate, callback } from '../controllers/paymentLinkController.js'
+import { create, sendEmail, list, getStats, getPaymentHistory, remove, getByToken, initiate, callback } from '../controllers/paymentLinkController.js'
 import auth from '../middleware/auth.js'
 
 const router = Router()
@@ -13,6 +13,7 @@ router.post('/t/:token/callback', callback)
 router.post('/', auth, create)
 router.get('/', auth, list)
 router.get('/stats', auth, getStats)
+router.get('/:id/payments', auth, getPaymentHistory)
 router.post('/:id/send', auth, sendEmail)
 router.delete('/:id', auth, remove)
 
