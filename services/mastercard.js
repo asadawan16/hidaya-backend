@@ -3,7 +3,7 @@ function authHeader() {
 }
 
 function apiUrl(path) {
-  return `${process.env.MC_GATEWAY_URL}/api/rest/version/73/merchant/${process.env.MC_MERCHANT_ID}${path}`
+  return `${process.env.MC_GATEWAY_URL}/api/rest/version/100/merchant/${process.env.MC_MERCHANT_ID}${path}`
 }
 
 export async function createCheckoutSession({ orderId, amount, currency, plan, returnUrl, cancelUrl }) {
@@ -20,6 +20,9 @@ export async function createCheckoutSession({ orderId, amount, currency, plan, r
         returnUrl,
         cancelUrl,
         merchant: { name: 'Hidaya Online' },
+        displayControl: {
+          billingAddress: 'OPTIONAL',
+        },
       },
       order: {
         id: orderId,

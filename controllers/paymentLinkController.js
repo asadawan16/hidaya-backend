@@ -227,6 +227,7 @@ export async function initiate(req, res) {
         orderId,
         paymentId: payment._id,
         merchantId: process.env.MC_MERCHANT_ID,
+        checkoutBaseUrl: process.env.MC_GATEWAY_URL,
       })
     } else {
       payment.status = 'failed'
