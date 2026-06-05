@@ -1,5 +1,6 @@
 import PaymentLink from '../models/PaymentLink.js'
 import Payment from '../models/Payment.js'
+import DiscountCode from '../models/DiscountCode.js'
 import { createCheckoutSession, retrieveOrder } from '../services/mastercard.js'
 import {
   notifyAdmin, sendToUser,
@@ -243,6 +244,29 @@ export async function initiate(req, res) {
       )
     }
 
+    // Validate and apply discount code if provided
+    const discountCodeStr = req.body.discountCode?.trim()?.toUpperCase() || ''
+    let appliedDiscount = null
+    let finalAmount = link.amount
+
+    if (discountCodeStr) {
+      const dc = await DiscountCode.findOne({ code: discountCodeStr })
+      if (!dc || !dc.isActive) {
+        return res.status(400).json({ error: 'Invalid or inactive discount code' })
+      }
+      if (dc.currency !== (link.currency || 'PKR')) {
+        return res.status(400).json({ error: `Discount code is for ${dc.currency} payments only` })
+      }
+      if (dc.usageType === 'one_time' && dc.timesUsed >= 1) {
+        return res.status(400).json({ error: 'This discount code has already been used' })
+      }
+      if (dc.discountAmount >= link.amount) {
+        return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
+      }
+      appliedDiscount = dc
+      finalAmount = link.amount - dc.discountAmount
+    }
+
     const orderId = `PL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
     const paymentData = {
@@ -250,7 +274,7 @@ export async function initiate(req, res) {
       studentEmail: link.payeeEmail,
       studentPhone: link.payeePhone,
       plan: link.description,
-      amount: link.amount,
+      amount: finalAmount,
       currency: link.currency || 'PKR',
       gatewayOrderId: orderId,
       paymentLink: link._id,
@@ -258,6 +282,12 @@ export async function initiate(req, res) {
       status: 'pending',
     }
     if (link.student) paymentData.student = link.student
+    if (appliedDiscount) {
+      paymentData.discountCode = appliedDiscount.code
+      paymentData.discountCodeRef = appliedDiscount._id
+      paymentData.discountAmount = appliedDiscount.discountAmount
+      paymentData.originalAmount = link.amount
+    }
 
     const payment = await Payment.create(paymentData)
 
@@ -267,7 +297,7 @@ export async function initiate(req, res) {
 
     const sessionData = await createCheckoutSession({
       orderId,
-      amount: link.amount,
+      amount: finalAmount,
       currency: link.currency || 'PKR',
       plan: link.description,
       returnUrl: `${process.env.FRONTEND_URL}/pay/${link.token}/callback?orderId=${orderId}`,
@@ -340,6 +370,11 @@ export async function callback(req, res) {
     }
 
     await link.save()
+
+    // Increment discount code usage count if this payment used one
+    if (payment.status === 'completed' && payment.discountCodeRef) {
+      await DiscountCode.findByIdAndUpdate(payment.discountCodeRef, { $inc: { timesUsed: 1 } })
+    }
 
     const paymentData = payment.toObject()
 

@@ -31,6 +31,12 @@ const paymentSchema = new mongoose.Schema({
   student: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
   paymentLink: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentLink' },
 
+  // Discount code applied at payment time
+  discountCode: { type: String, trim: true },
+  discountCodeRef: { type: mongoose.Schema.Types.ObjectId, ref: 'DiscountCode' },
+  discountAmount: { type: Number, default: 0 },
+  originalAmount: { type: Number },
+
   // Notes
   notes: { type: String },
 }, { timestamps: true })

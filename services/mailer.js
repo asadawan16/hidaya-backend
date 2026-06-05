@@ -920,6 +920,23 @@ export function invoiceEmail({ link, payment }) {
     <!-- Amount summary -->
     <tr><td style="padding:20px 36px">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        ${payment.discountAmount > 0 ? `
+        <tr>
+          <td style="padding:12px 0;border-bottom:1px solid #E7F2EC">
+            <span style="font-size:13px;color:#6B8F7F">Original Amount</span>
+          </td>
+          <td style="padding:12px 0;border-bottom:1px solid #E7F2EC;text-align:right">
+            <span style="font-size:14px;color:#0C3B2E;font-weight:500">${fmtCurrency(payment.originalAmount, link.currency)}</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:12px 0;border-bottom:1px solid #E7F2EC">
+            <span style="font-size:13px;color:#059669">Discount <span style="font-family:SFMono-Regular,Menlo,monospace;font-size:11px;background:#D1FAE5;padding:2px 7px;border-radius:4px">${payment.discountCode}</span></span>
+          </td>
+          <td style="padding:12px 0;border-bottom:1px solid #E7F2EC;text-align:right">
+            <span style="font-size:14px;color:#059669;font-weight:600">-${fmtCurrency(payment.discountAmount, link.currency)}</span>
+          </td>
+        </tr>` : `
         <tr>
           <td style="padding:12px 0;border-bottom:1px solid #E7F2EC">
             <span style="font-size:13px;color:#6B8F7F">Subtotal</span>
@@ -927,13 +944,13 @@ export function invoiceEmail({ link, payment }) {
           <td style="padding:12px 0;border-bottom:1px solid #E7F2EC;text-align:right">
             <span style="font-size:14px;color:#0C3B2E;font-weight:500">${fmtCurrency(link.amount, link.currency)}</span>
           </td>
-        </tr>
+        </tr>`}
         <tr>
           <td style="padding:14px 0">
             <span style="font-size:15px;font-weight:700;color:#0C3B2E">Total Paid</span>
           </td>
           <td style="padding:14px 0;text-align:right">
-            <span style="font-size:24px;font-weight:800;color:#047857;letter-spacing:-0.3px">${fmtCurrency(link.amount, link.currency)}</span>
+            <span style="font-size:24px;font-weight:800;color:#047857;letter-spacing:-0.3px">${fmtCurrency(payment.amount, link.currency)}</span>
           </td>
         </tr>
       </table>
@@ -982,7 +999,7 @@ export function invoiceEmail({ link, payment }) {
     </td></tr>`
 
   return {
-    subject: `🧾 Invoice — ${fmtCurrency(link.amount, link.currency)} — Hidaya Online (${invoiceNo})`,
+    subject: `🧾 Invoice — ${fmtCurrency(payment.amount, link.currency)} — Hidaya Online (${invoiceNo})`,
     html: userLayout(content),
   }
 }

@@ -17,6 +17,7 @@ import paymentLinkRoutes from './routes/paymentLinkRoutes.js'
 import planRoutes from './routes/planRoutes.js'
 import studentRoutes from './routes/studentRoutes.js'
 import exportRoutes from './routes/exportRoutes.js'
+import discountCodeRoutes from './routes/discountCodeRoutes.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
 
 const app = express()
@@ -39,6 +40,7 @@ app.use('/api/payments/initiate', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 
 app.use('/api/enrollments', rateLimit({ windowMs: 15 * 60 * 1000, max: 30 }))
 app.use('/api/subscribers/subscribe', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }))
 app.use('/api/payment-links/t', rateLimit({ windowMs: 15 * 60 * 1000, max: 15 }))
+app.use('/api/discount-codes/validate', rateLimit({ windowMs: 15 * 60 * 1000, max: 30 }))
 
 // Routes
 app.use('/api/auth', authRoutes)
@@ -51,6 +53,7 @@ app.use('/api/payment-links', paymentLinkRoutes)
 app.use('/api/plans', planRoutes)
 app.use('/api/students', studentRoutes)
 app.use('/api/export', exportRoutes)
+app.use('/api/discount-codes', discountCodeRoutes)
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))
