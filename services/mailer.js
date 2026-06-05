@@ -67,17 +67,7 @@ function adminLayout(content) {
     <tr><td align="center">
       <table role="presentation" width="580" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%">
         <tr><td style="padding:0 0 24px" align="center">
-          <table role="presentation" cellpadding="0" cellspacing="0">
-            <tr>
-              <td style="width:40px;height:40px;background:linear-gradient(135deg,#1B6B5A,#D4A843);border-radius:12px;text-align:center;vertical-align:middle">
-                <span style="color:#fff;font-size:18px;font-weight:700;line-height:40px">H</span>
-              </td>
-              <td style="padding-left:12px">
-                <span style="font-size:20px;font-weight:700;color:#0C3B2E;letter-spacing:-0.3px">Hidaya</span>
-                <span style="font-size:20px;font-weight:400;color:#6B8F7F;letter-spacing:-0.3px"> Online</span>
-              </td>
-            </tr>
-          </table>
+          <img src="https://bexbucket.s3.eu-north-1.amazonaws.com/Logo/hidayaonlinelogo.jpeg" alt="Hidaya Online" width="140" style="display:block;height:auto;border:0;outline:0;text-decoration:none">
         </td></tr>
         <tr><td>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(12,59,46,0.06),0 8px 24px -8px rgba(12,59,46,0.08)">
@@ -115,17 +105,7 @@ function userLayout(content) {
 
         <!-- Logo -->
         <tr><td style="padding:0 0 24px" align="center">
-          <table role="presentation" cellpadding="0" cellspacing="0">
-            <tr>
-              <td style="width:44px;height:44px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);border-radius:14px;text-align:center;vertical-align:middle">
-                <span style="color:#D4A843;font-size:20px;font-weight:700;line-height:44px;font-family:'Amiri',serif">ه</span>
-              </td>
-              <td style="padding-left:12px">
-                <span style="font-size:22px;font-weight:700;color:#0C3B2E;letter-spacing:-0.3px;font-family:'Amiri',serif">Hidaya</span>
-                <span style="font-size:22px;font-weight:400;color:#6B8F7F;letter-spacing:-0.3px;font-family:'Amiri',serif"> Online</span>
-              </td>
-            </tr>
-          </table>
+          <img src="https://bexbucket.s3.eu-north-1.amazonaws.com/Logo/hidayaonlinelogo.jpeg" alt="Hidaya Online" width="140" style="display:block;height:auto;border:0;outline:0;text-decoration:none">
         </td></tr>
 
         <!-- Main card -->
