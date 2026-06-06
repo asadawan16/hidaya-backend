@@ -6,7 +6,11 @@ function apiUrl(path) {
   return `${process.env.MC_GATEWAY_URL}/api/rest/version/100/merchant/${process.env.MC_MERCHANT_ID}${path}`
 }
 
-export async function createCheckoutSession({ orderId, amount, currency, plan, returnUrl, cancelUrl }) {
+export async function createCheckoutSession({ orderId, amount, currency, plan, returnUrl, cancelUrl, customerName, customerEmail }) {
+  const customer = {}
+  if (customerName) customer.firstName = customerName
+  if (customerEmail) customer.email = customerEmail
+
   const res = await fetch(apiUrl('/session'), {
     method: 'POST',
     headers: {
@@ -21,7 +25,7 @@ export async function createCheckoutSession({ orderId, amount, currency, plan, r
         cancelUrl,
         merchant: { name: 'Hidaya Online' },
         displayControl: {
-          billingAddress: 'OPTIONAL',
+          billingAddress: 'MANDATORY',
         },
       },
       order: {
@@ -30,6 +34,7 @@ export async function createCheckoutSession({ orderId, amount, currency, plan, r
         currency: currency || 'PKR',
         description: `Hidaya Online - ${plan}`,
       },
+      ...(Object.keys(customer).length > 0 && { customer }),
     }),
   })
 

@@ -302,6 +302,8 @@ export async function initiate(req, res) {
       plan: link.description,
       returnUrl: `${process.env.FRONTEND_URL}/pay/${link.token}/callback?orderId=${orderId}`,
       cancelUrl: `${process.env.FRONTEND_URL}/pay/${link.token}`,
+      customerName: link.payeeName,
+      customerEmail: link.payeeEmail || undefined,
     })
 
     if (sessionData.session?.id) {
