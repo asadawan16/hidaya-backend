@@ -7,6 +7,7 @@ import {
   paymentLinkEmail, paymentLinkAdminEmail,
   paymentEmail, paymentConfirmationEmail, invoiceEmail,
 } from '../services/mailer.js'
+import { logActivity } from '../utils/activityLogger.js'
 
 /* ── Generate unique invoice number: HO-YYYYMM-XXXX ── */
 async function generateInvoiceNo() {
@@ -379,6 +380,24 @@ export async function callback(req, res) {
     }
 
     const paymentData = payment.toObject()
+
+    // Log payment outcome
+    logActivity({
+      level: payment.status === 'completed' ? 'info' : 'warning',
+      category: 'payment_link',
+      action: `payment_${payment.status}`,
+      message: `Payment ${payment.status} — ${payment.currency} ${payment.amount} from ${payment.studentName || 'unknown'} (${link.invoiceNo})`,
+      req,
+      meta: {
+        orderId,
+        paymentId: payment._id,
+        linkId: link._id,
+        amount: payment.amount,
+        currency: payment.currency,
+        discountCode: payment.discountCode || null,
+        gatewayResult: payment.gatewayResult,
+      },
+    })
 
     // Notify admin
     notifyAdmin(paymentEmail(paymentData)).catch(() => {})

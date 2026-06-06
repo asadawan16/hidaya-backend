@@ -1,5 +1,6 @@
 import Enrollment from '../models/Enrollment.js'
 import { notifyAdmin, sendToUser, enrollmentEmail, enrollmentConfirmationEmail } from '../services/mailer.js'
+import { logActivity } from '../utils/activityLogger.js'
 
 export async function create(req, res) {
   try {
@@ -17,6 +18,15 @@ export async function create(req, res) {
     })
 
     const enrollmentData = enrollment.toObject()
+
+    logActivity({
+      level: 'info',
+      category: 'enrollment',
+      action: 'enrollment_created',
+      message: `New enrollment from ${name} (${email}) via ${source || 'hero_form'}`,
+      req,
+      meta: { enrollmentId: enrollment._id, source: source || 'hero_form' },
+    })
 
     // Notify admin via email (non-blocking)
     notifyAdmin(enrollmentEmail(enrollmentData)).catch(() => {})
