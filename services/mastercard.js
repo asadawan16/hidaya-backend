@@ -41,6 +41,32 @@ export async function createCheckoutSession({ orderId, amount, currency, plan, r
   return res.json()
 }
 
+export async function initiateBrowserPayment({ orderId, transactionId, amount, currency, plan, returnUrl }) {
+  const res = await fetch(apiUrl(`/order/${orderId}/transaction/${transactionId}`), {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': authHeader(),
+    },
+    body: JSON.stringify({
+      apiOperation: 'INITIATE_BROWSER_PAYMENT',
+      sourceOfFunds: { type: 'PAYPAL' },
+      browserPayment: {
+        operation: 'PAY',
+        paypal: { paymentConfirmation: 'CONFIRM_AT_PROVIDER' },
+        returnUrl,
+      },
+      order: {
+        amount: String(amount),
+        currency,
+        description: `Hidaya Online - ${plan}`,
+      },
+    }),
+  })
+
+  return res.json()
+}
+
 export async function retrieveOrder(orderId) {
   const res = await fetch(apiUrl(`/order/${orderId}`), {
     method: 'GET',

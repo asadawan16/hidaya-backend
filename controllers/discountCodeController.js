@@ -78,49 +78,60 @@ export async function remove(req, res) {
   }
 }
 
-/* ── Public: Validate a discount code for a payment link ── */
+/* ── Public: Validate a discount code ──
+   Supports two modes:
+   - { code, token }                   → validates against a payment link
+   - { code, currency, amount }        → validates for a direct plan payment
+─────────────────────────────────────── */
 export async function validate(req, res) {
   try {
-    const { code, token } = req.body
-    if (!code || !token) {
-      return res.status(400).json({ valid: false, message: 'Code and payment link token are required' })
+    const { code, token, currency: directCurrency, amount: directAmount } = req.body
+    if (!code) {
+      return res.status(400).json({ valid: false, message: 'Discount code is required' })
     }
 
-    const link = await PaymentLink.findOne({ token })
-    if (!link) {
-      return res.status(404).json({ valid: false, message: 'Payment link not found' })
-    }
-    if (link.status !== 'active') {
-      return res.status(400).json({ valid: false, message: 'Payment link is no longer active' })
+    let paymentCurrency, paymentAmount
+
+    if (token) {
+      const link = await PaymentLink.findOne({ token })
+      if (!link) return res.status(404).json({ valid: false, message: 'Payment link not found' })
+      if (link.status !== 'active') {
+        return res.status(400).json({ valid: false, message: 'Payment link is no longer active' })
+      }
+      paymentCurrency = link.currency
+      paymentAmount = link.amount
+    } else if (directCurrency && directAmount) {
+      const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
+      if (!validCurrencies.includes(directCurrency)) {
+        return res.status(400).json({ valid: false, message: 'Invalid currency' })
+      }
+      paymentCurrency = directCurrency
+      paymentAmount = Number(directAmount)
+    } else {
+      return res.status(400).json({ valid: false, message: 'Provide either a payment link token or currency + amount' })
     }
 
     const dc = await DiscountCode.findOne({ code: code.trim().toUpperCase() })
-    if (!dc) {
-      return res.status(400).json({ valid: false, message: 'Invalid discount code' })
-    }
-    if (!dc.isActive) {
-      return res.status(400).json({ valid: false, message: 'This discount code is no longer active' })
-    }
-    if (dc.currency !== link.currency) {
-      return res.status(400).json({
-        valid: false,
-        message: `This code is for ${dc.currency} payments only`,
-      })
+    if (!dc) return res.status(400).json({ valid: false, message: 'Invalid discount code' })
+    if (!dc.isActive) return res.status(400).json({ valid: false, message: 'This discount code is no longer active' })
+    if (dc.currency !== paymentCurrency) {
+      return res.status(400).json({ valid: false, message: `This code is for ${dc.currency} payments only` })
     }
     if (dc.usageType === 'one_time' && dc.timesUsed >= 1) {
       return res.status(400).json({ valid: false, message: 'This discount code has already been used' })
     }
-    if (dc.discountAmount >= link.amount) {
+    if (dc.discountAmount >= paymentAmount) {
       return res.status(400).json({ valid: false, message: 'Discount cannot exceed the payment amount' })
     }
 
+    const sym = { PKR: 'Rs.', USD: '$', EUR: '€', GBP: '£' }[dc.currency] || dc.currency
     res.json({
       valid: true,
       discountAmount: dc.discountAmount,
       currency: dc.currency,
-      finalAmount: link.amount - dc.discountAmount,
+      finalAmount: paymentAmount - dc.discountAmount,
       usageType: dc.usageType,
-      message: `Discount applied: -${dc.currency === 'PKR' ? 'Rs.' : dc.currency === 'USD' ? '$' : dc.currency === 'EUR' ? '€' : '£'} ${dc.discountAmount.toLocaleString()}`,
+      message: `Discount applied: -${sym} ${dc.discountAmount.toLocaleString()}`,
     })
   } catch (err) {
     console.error('DiscountCode validate error:', err)

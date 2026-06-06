@@ -1,32 +1,57 @@
 import Payment from '../models/Payment.js'
-import { createCheckoutSession, retrieveOrder } from '../services/mastercard.js'
+import DiscountCode from '../models/DiscountCode.js'
+import { createCheckoutSession, initiateBrowserPayment, retrieveOrder } from '../services/mastercard.js'
 import { notifyAdmin, sendToUser, paymentEmail, paymentConfirmationEmail } from '../services/mailer.js'
 
 export async function initiate(req, res) {
   try {
-    const { studentName, studentEmail, studentPhone, plan, amount, currency } = req.body
+    const { studentName, studentEmail, studentPhone, plan, amount, currency, discountCode: discountCodeStr } = req.body
     if (!studentName || !studentEmail || !plan || !amount) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
     const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
     const cur = validCurrencies.includes(currency) ? currency : 'PKR'
+
+    // Validate and apply discount code if provided
+    let appliedDiscount = null
+    let finalAmount = Number(amount)
+    const codeStr = discountCodeStr?.trim()?.toUpperCase() || ''
+
+    if (codeStr) {
+      const dc = await DiscountCode.findOne({ code: codeStr })
+      if (!dc || !dc.isActive) return res.status(400).json({ error: 'Invalid or inactive discount code' })
+      if (dc.currency !== cur) return res.status(400).json({ error: `Discount code is for ${dc.currency} payments only` })
+      if (dc.usageType === 'one_time' && dc.timesUsed >= 1) return res.status(400).json({ error: 'This discount code has already been used' })
+      if (dc.discountAmount >= Number(amount)) return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
+      appliedDiscount = dc
+      finalAmount = Number(amount) - dc.discountAmount
+    }
+
     const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
-    const payment = await Payment.create({
+    const paymentData = {
       studentName,
       studentEmail,
       studentPhone,
       plan,
-      amount: Number(amount),
+      amount: finalAmount,
       currency: cur,
       gatewayOrderId: orderId,
       status: 'pending',
-    })
+    }
+    if (appliedDiscount) {
+      paymentData.discountCode = appliedDiscount.code
+      paymentData.discountCodeRef = appliedDiscount._id
+      paymentData.discountAmount = appliedDiscount.discountAmount
+      paymentData.originalAmount = Number(amount)
+    }
+
+    const payment = await Payment.create(paymentData)
 
     const sessionData = await createCheckoutSession({
       orderId,
-      amount,
+      amount: finalAmount,
       currency: cur,
       plan,
       returnUrl: `${process.env.FRONTEND_URL}/payment/callback?orderId=${orderId}`,
@@ -51,6 +76,85 @@ export async function initiate(req, res) {
     }
   } catch (err) {
     console.error('Payment initiate error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function initiatePayPal(req, res) {
+  try {
+    const { studentName, studentEmail, studentPhone, plan, amount, currency, discountCode: discountCodeStr } = req.body
+    if (!studentName || !studentEmail || !plan || !amount) {
+      return res.status(400).json({ error: 'Missing required fields' })
+    }
+
+    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
+    const cur = validCurrencies.includes(currency) ? currency : 'PKR'
+
+    if (cur === 'PKR') {
+      return res.status(400).json({ error: 'PayPal is not available for PKR payments' })
+    }
+
+    // Validate and apply discount code if provided
+    let appliedDiscount = null
+    let finalAmount = Number(amount)
+    const codeStr = discountCodeStr?.trim()?.toUpperCase() || ''
+
+    if (codeStr) {
+      const dc = await DiscountCode.findOne({ code: codeStr })
+      if (!dc || !dc.isActive) return res.status(400).json({ error: 'Invalid or inactive discount code' })
+      if (dc.currency !== cur) return res.status(400).json({ error: `Discount code is for ${dc.currency} payments only` })
+      if (dc.usageType === 'one_time' && dc.timesUsed >= 1) return res.status(400).json({ error: 'This discount code has already been used' })
+      if (dc.discountAmount >= Number(amount)) return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
+      appliedDiscount = dc
+      finalAmount = Number(amount) - dc.discountAmount
+    }
+
+    const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+    const transactionId = `TXN-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+
+    const paymentData = {
+      studentName,
+      studentEmail,
+      studentPhone,
+      plan,
+      amount: finalAmount,
+      currency: cur,
+      gatewayOrderId: orderId,
+      status: 'pending',
+      paymentMethod: 'PAYPAL',
+    }
+    if (appliedDiscount) {
+      paymentData.discountCode = appliedDiscount.code
+      paymentData.discountCodeRef = appliedDiscount._id
+      paymentData.discountAmount = appliedDiscount.discountAmount
+      paymentData.originalAmount = Number(amount)
+    }
+
+    const payment = await Payment.create(paymentData)
+
+    const result = await initiateBrowserPayment({
+      orderId,
+      transactionId,
+      amount: finalAmount,
+      currency: cur,
+      plan,
+      returnUrl: `${process.env.FRONTEND_URL}/payment/callback?orderId=${orderId}`,
+    })
+
+    if (result.browserPayment?.redirectUrl) {
+      res.json({
+        redirectUrl: result.browserPayment.redirectUrl,
+        orderId,
+        paymentId: payment._id,
+      })
+    } else {
+      payment.status = 'failed'
+      payment.gatewayResult = result.result || 'PAYPAL_INIT_FAILED'
+      await payment.save()
+      res.status(400).json({ error: 'Failed to initiate PayPal payment', details: result })
+    }
+  } catch (err) {
+    console.error('Payment initiatePayPal error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
@@ -80,6 +184,11 @@ export async function callback(req, res) {
     }
 
     await payment.save()
+
+    // Increment discount code usage if applicable
+    if (payment.status === 'completed' && payment.discountCodeRef) {
+      await DiscountCode.findByIdAndUpdate(payment.discountCodeRef, { $inc: { timesUsed: 1 } })
+    }
 
     const paymentData = payment.toObject()
 
