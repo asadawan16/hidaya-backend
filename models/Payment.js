@@ -40,6 +40,10 @@ const paymentSchema = new mongoose.Schema({
   discountAmount: { type: Number, default: 0 },
   originalAmount: { type: Number },
 
+  // Multi-student support
+  quantity: { type: Number, default: 1, min: 1 },
+  studentNames: [{ type: String, trim: true }],
+
   // Notes
   notes: { type: String },
 }, { timestamps: true })

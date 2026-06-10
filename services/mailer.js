@@ -411,6 +411,8 @@ export function paymentEmail(data) {
         ${row('Student', data.studentName)}
         ${row('Email', data.studentEmail, { link: `mailto:${data.studentEmail}` })}
         ${row('Plan', data.plan)}
+        ${data.quantity > 1 ? row('Students', `${data.quantity} students`) : ''}
+        ${data.studentNames?.length > 0 ? row('Student Names', data.studentNames.join(', ')) : ''}
         ${row('Order ID', data.gatewayOrderId || '—', { mono: true })}
         ${data.gatewayTransactionId ? row('Transaction ID', data.gatewayTransactionId, { mono: true }) : ''}
       </table>
@@ -427,7 +429,7 @@ export function paymentEmail(data) {
     </td></tr>`
 
   return {
-    subject: `${isSuccess ? '✅' : '❌'} Payment ${data.status} — ${data.studentName} (${fmtCurrency(data.amount, data.currency)})`,
+    subject: `${isSuccess ? '✅' : '❌'} Payment ${data.status} — ${data.studentName}${data.quantity > 1 ? ` (×${data.quantity})` : ''} (${fmtCurrency(data.amount, data.currency)})`,
     html: adminLayout(content),
   }
 }
@@ -496,9 +498,17 @@ export function paymentConfirmationEmail(data) {
         <tr><td style="padding:20px 24px">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr>
-              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC"><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Student</span></td>
+              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC"><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Registered By</span></td>
               <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-size:14px;color:#0C3B2E;font-weight:600">${data.studentName}</span></td>
             </tr>
+            ${data.quantity > 1 ? `<tr>
+              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC"><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Students</span></td>
+              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-size:14px;color:#0C3B2E;font-weight:600">${data.quantity} students</span></td>
+            </tr>` : ''}
+            ${data.studentNames?.length > 0 ? `<tr>
+              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC"><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Student Names</span></td>
+              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-size:13px;color:#0C3B2E;font-weight:500">${data.studentNames.join(', ')}</span></td>
+            </tr>` : ''}
             <tr>
               <td style="padding:8px 0;border-bottom:1px solid #E7F2EC"><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Order ID</span></td>
               <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-family:SFMono-Regular,Menlo,monospace;font-size:12px;color:#6B8F7F">${data.gatewayOrderId || '—'}</span></td>

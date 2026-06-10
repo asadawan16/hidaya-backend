@@ -5,7 +5,7 @@ import { notifyAdmin, sendToUser, paymentEmail, paymentConfirmationEmail } from 
 
 export async function initiate(req, res) {
   try {
-    const { studentName, studentEmail, studentPhone, plan, amount, currency, discountCode: discountCodeStr } = req.body
+    const { studentName, studentEmail, studentPhone, plan, amount, currency, discountCode: discountCodeStr, quantity: rawQty, studentNames: rawStudentNames } = req.body
     if (!studentName || !studentEmail || !plan || !amount) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
@@ -13,9 +13,18 @@ export async function initiate(req, res) {
     const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
     const cur = validCurrencies.includes(currency) ? currency : 'PKR'
 
+    // Multi-student: quantity defaults to 1, studentNames is optional array
+    const quantity = Math.max(1, Math.floor(Number(rawQty) || 1))
+    const studentNames = Array.isArray(rawStudentNames)
+      ? rawStudentNames.map(n => (n || '').trim()).filter(Boolean)
+      : []
+
+    // Total amount = unit price × quantity
+    const totalAmount = Number(amount) * quantity
+
     // Validate and apply discount code if provided
     let appliedDiscount = null
-    let finalAmount = Number(amount)
+    let finalAmount = totalAmount
     const codeStr = discountCodeStr?.trim()?.toUpperCase() || ''
 
     if (codeStr) {
@@ -23,9 +32,9 @@ export async function initiate(req, res) {
       if (!dc || !dc.isActive) return res.status(400).json({ error: 'Invalid or inactive discount code' })
       if (dc.currency !== cur) return res.status(400).json({ error: `Discount code is for ${dc.currency} payments only` })
       if (dc.usageType === 'one_time' && dc.timesUsed >= 1) return res.status(400).json({ error: 'This discount code has already been used' })
-      if (dc.discountAmount >= Number(amount)) return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
+      if (dc.discountAmount >= totalAmount) return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
       appliedDiscount = dc
-      finalAmount = Number(amount) - dc.discountAmount
+      finalAmount = totalAmount - dc.discountAmount
     }
 
     const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
@@ -39,12 +48,14 @@ export async function initiate(req, res) {
       currency: cur,
       gatewayOrderId: orderId,
       status: 'pending',
+      quantity,
+      studentNames,
     }
     if (appliedDiscount) {
       paymentData.discountCode = appliedDiscount.code
       paymentData.discountCodeRef = appliedDiscount._id
       paymentData.discountAmount = appliedDiscount.discountAmount
-      paymentData.originalAmount = Number(amount)
+      paymentData.originalAmount = totalAmount
     }
 
     const payment = await Payment.create(paymentData)
@@ -53,7 +64,7 @@ export async function initiate(req, res) {
       orderId,
       amount: finalAmount,
       currency: cur,
-      plan,
+      plan: quantity > 1 ? `${plan} (×${quantity} students)` : plan,
       returnUrl: `${process.env.FRONTEND_URL}/payment/callback?orderId=${orderId}`,
       cancelUrl: `${process.env.FRONTEND_URL}/fee`,
       customerName: studentName,
@@ -82,7 +93,7 @@ export async function initiate(req, res) {
 
 export async function initiatePayPal(req, res) {
   try {
-    const { studentName, studentEmail, studentPhone, plan, amount, currency, discountCode: discountCodeStr } = req.body
+    const { studentName, studentEmail, studentPhone, plan, amount, currency, discountCode: discountCodeStr, quantity: rawQty, studentNames: rawStudentNames } = req.body
     if (!studentName || !studentEmail || !plan || !amount) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
@@ -94,9 +105,18 @@ export async function initiatePayPal(req, res) {
       return res.status(400).json({ error: 'PayPal is not available for PKR payments' })
     }
 
+    // Multi-student: quantity defaults to 1, studentNames is optional array
+    const quantity = Math.max(1, Math.floor(Number(rawQty) || 1))
+    const studentNames = Array.isArray(rawStudentNames)
+      ? rawStudentNames.map(n => (n || '').trim()).filter(Boolean)
+      : []
+
+    // Total amount = unit price × quantity
+    const totalAmount = Number(amount) * quantity
+
     // Validate and apply discount code if provided
     let appliedDiscount = null
-    let finalAmount = Number(amount)
+    let finalAmount = totalAmount
     const codeStr = discountCodeStr?.trim()?.toUpperCase() || ''
 
     if (codeStr) {
@@ -104,9 +124,9 @@ export async function initiatePayPal(req, res) {
       if (!dc || !dc.isActive) return res.status(400).json({ error: 'Invalid or inactive discount code' })
       if (dc.currency !== cur) return res.status(400).json({ error: `Discount code is for ${dc.currency} payments only` })
       if (dc.usageType === 'one_time' && dc.timesUsed >= 1) return res.status(400).json({ error: 'This discount code has already been used' })
-      if (dc.discountAmount >= Number(amount)) return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
+      if (dc.discountAmount >= totalAmount) return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
       appliedDiscount = dc
-      finalAmount = Number(amount) - dc.discountAmount
+      finalAmount = totalAmount - dc.discountAmount
     }
 
     const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
@@ -122,12 +142,14 @@ export async function initiatePayPal(req, res) {
       gatewayOrderId: orderId,
       status: 'pending',
       paymentMethod: 'PAYPAL',
+      quantity,
+      studentNames,
     }
     if (appliedDiscount) {
       paymentData.discountCode = appliedDiscount.code
       paymentData.discountCodeRef = appliedDiscount._id
       paymentData.discountAmount = appliedDiscount.discountAmount
-      paymentData.originalAmount = Number(amount)
+      paymentData.originalAmount = totalAmount
     }
 
     const payment = await Payment.create(paymentData)
@@ -137,7 +159,7 @@ export async function initiatePayPal(req, res) {
       transactionId,
       amount: finalAmount,
       currency: cur,
-      plan,
+      plan: quantity > 1 ? `${plan} (×${quantity} students)` : plan,
       returnUrl: `${process.env.FRONTEND_URL}/payment/callback?orderId=${orderId}`,
     })
 
