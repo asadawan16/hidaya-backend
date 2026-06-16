@@ -11,6 +11,7 @@ export async function logActivity({ level = 'info', category, action, message, r
       path: req?.path || req?.url,
       ip: req?.ip || req?.headers?.['x-forwarded-for'] || req?.socket?.remoteAddress,
       adminId: req?.adminId || null,
+      userId: req?.userId || null,
       meta,
     })
   } catch {
