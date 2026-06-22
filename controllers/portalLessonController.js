@@ -12,8 +12,16 @@ export async function listLessons(req, res) {
     const { studentId, tutorId, dateFrom, dateTo, kind } = req.query
 
     const filter = {}
-    if (studentId) filter.studentId = studentId
-    if (tutorId) filter.tutorId = tutorId
+    // Scope: students see only their own, tutors see only their students
+    if (req.user.linkedStudentId) {
+      filter.studentId = req.user.linkedStudentId
+    } else if (req.user.linkedTutorId) {
+      filter.tutorId = req.user.linkedTutorId
+      if (studentId) filter.studentId = studentId
+    } else {
+      if (studentId) filter.studentId = studentId
+      if (tutorId) filter.tutorId = tutorId
+    }
     if (kind) filter.kind = kind
     if (dateFrom || dateTo) {
       filter.date = {}
@@ -106,8 +114,16 @@ export async function listPermanentLessons(req, res) {
     const { studentId, tutorId, status } = req.query
 
     const filter = {}
-    if (studentId) filter.studentId = studentId
-    if (tutorId) filter.tutorId = tutorId
+    // Scope: students see only their own, tutors see only their students
+    if (req.user.linkedStudentId) {
+      filter.studentId = req.user.linkedStudentId
+    } else if (req.user.linkedTutorId) {
+      filter.tutorId = req.user.linkedTutorId
+      if (studentId) filter.studentId = studentId
+    } else {
+      if (studentId) filter.studentId = studentId
+      if (tutorId) filter.tutorId = tutorId
+    }
     if (status) filter.status = status
 
     const total = await PermanentLesson.countDocuments(filter)
@@ -125,9 +141,10 @@ export async function listPermanentLessons(req, res) {
       .limit(lim)
       .lean()
 
-    // Stats
+    // Stats — use the same scoped filter
+    const statsId = filter.studentId || filter.tutorId ? filter : {}
     const statusStats = await PermanentLesson.aggregate([
-      ...(studentId ? [{ $match: { studentId: new mongoose.Types.ObjectId(studentId) } }] : []),
+      ...(Object.keys(statsId).length ? [{ $match: statsId }] : []),
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ])
 

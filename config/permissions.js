@@ -148,6 +148,5 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'schedule.read',
     'lesson.read',
     'assessment.read',
-    'report.read',
   ],
 }

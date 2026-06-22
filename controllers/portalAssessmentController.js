@@ -70,7 +70,18 @@ export async function listAssessments(req, res) {
     const { studentId, dateFrom, dateTo } = req.query
 
     const filter = {}
-    if (studentId) filter.studentId = studentId
+    // Scope: students see only their own, tutors see only assessments they conducted/are assigned to
+    if (req.user.linkedStudentId) {
+      filter.studentId = req.user.linkedStudentId
+    } else if (req.user.linkedTutorId) {
+      filter.$or = [
+        { testTeacherId: req.user.linkedTutorId },
+        { regularTeacherId: req.user.linkedTutorId },
+      ]
+      if (studentId) filter.studentId = studentId
+    } else {
+      if (studentId) filter.studentId = studentId
+    }
     if (dateFrom || dateTo) {
       filter.date = {}
       if (dateFrom) filter.date.$gte = new Date(dateFrom)

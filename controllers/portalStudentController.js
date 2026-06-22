@@ -61,7 +61,12 @@ export async function listStudents(req, res) {
     const statusCounts = {}
     stats.forEach(s => { statusCounts[s._id] = s.count })
 
-    res.json({ records, total, page: safePage, pages, statusCounts })
+    // Strip billing data if the user lacks finance.read permission
+    const cleanRecords = req.userPermissions?.has('finance.read')
+      ? records
+      : records.map(({ billing, ...rest }) => rest)
+
+    res.json({ records: cleanRecords, total, page: safePage, pages, statusCounts })
   } catch (err) {
     console.error('List students error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -100,7 +105,13 @@ export async function getStudent(req, res) {
       }).select('name rollNo status courseLabels').lean()
     }
 
-    res.json({ ...student, statusHistory, relationships, familyMembers })
+    // Strip billing data if the user lacks finance.read permission
+    const result = { ...student, statusHistory, relationships, familyMembers }
+    if (!req.userPermissions?.has('finance.read')) {
+      delete result.billing
+    }
+
+    res.json(result)
   } catch (err) {
     console.error('Get student error:', err)
     res.status(500).json({ error: 'Server error' })

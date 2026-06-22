@@ -8,8 +8,16 @@ export async function listSlots(req, res) {
   try {
     const { tutorId, studentId, dayOfWeek, active } = req.query
     const filter = {}
-    if (tutorId) filter.tutorId = tutorId
-    if (studentId) filter.studentId = studentId
+    // Scope: students see only their own, tutors see only their students
+    if (req.user.linkedStudentId) {
+      filter.studentId = req.user.linkedStudentId
+    } else if (req.user.linkedTutorId) {
+      filter.tutorId = req.user.linkedTutorId
+      if (studentId) filter.studentId = studentId
+    } else {
+      if (tutorId) filter.tutorId = tutorId
+      if (studentId) filter.studentId = studentId
+    }
     if (dayOfWeek !== undefined) filter.dayOfWeek = Number(dayOfWeek)
     if (active !== undefined) filter.active = active === 'true'
 
@@ -53,6 +61,27 @@ export async function createSlot(req, res) {
       req,
       meta: { slotId: slot._id },
     })
+
+    // Auto-create a session for today if the slot matches today's day-of-week
+    const today = new Date()
+    if (today.getDay() === Number(dayOfWeek)) {
+      const todayStart = new Date(today); todayStart.setHours(0, 0, 0, 0)
+      const todayEnd = new Date(today); todayEnd.setHours(23, 59, 59, 999)
+      const existing = await ClassSession.findOne({ slotId: slot._id, date: { $gte: todayStart, $lt: todayEnd } })
+      if (!existing) {
+        const [h, m] = startTime.split(':').map(Number)
+        const endMins = h * 60 + m + (durationMinutes || 30)
+        const endTime = `${String(Math.floor(endMins / 60) % 24).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`
+        await ClassSession.create({
+          slotId: slot._id,
+          studentId, tutorId,
+          date: todayStart,
+          scheduledStart: startTime,
+          scheduledEnd: endTime,
+          status: 'scheduled',
+        })
+      }
+    }
 
     const populated = await ClassSlot.findById(slot._id)
       .populate('studentId', 'name rollNo')
@@ -108,8 +137,16 @@ export async function listSessions(req, res) {
     const { tutorId, studentId, date, dateFrom, dateTo, status } = req.query
 
     const filter = {}
-    if (tutorId) filter.tutorId = tutorId
-    if (studentId) filter.studentId = studentId
+    // Scope: students see only their own, tutors see only their students
+    if (req.user.linkedStudentId) {
+      filter.studentId = req.user.linkedStudentId
+    } else if (req.user.linkedTutorId) {
+      filter.tutorId = req.user.linkedTutorId
+      if (studentId) filter.studentId = studentId
+    } else {
+      if (tutorId) filter.tutorId = tutorId
+      if (studentId) filter.studentId = studentId
+    }
     if (status) filter.status = status
     if (date) {
       const d = new Date(date)
@@ -184,7 +221,7 @@ export async function completeSession(req, res) {
     const session = await ClassSession.findById(req.params.id)
     if (!session) return res.status(404).json({ error: 'Session not found' })
 
-    const { attendance, actualStudentJoinTime, notes } = req.body
+    const { attendance, actualStudentJoinTime, notes, lesson } = req.body
 
     session.status = 'completed'
     session.autoEndedAt = new Date()
@@ -193,12 +230,29 @@ export async function completeSession(req, res) {
 
     if (actualStudentJoinTime) {
       session.actualStudentJoinTime = new Date(actualStudentJoinTime)
-      // Compute duration = scheduledEnd - actualJoinTime
       const endParts = session.scheduledEnd.split(':').map(Number)
       const joinTime = new Date(actualStudentJoinTime)
       const endMinutes = endParts[0] * 60 + endParts[1]
       const joinMinutes = joinTime.getHours() * 60 + joinTime.getMinutes()
       session.computedDuration = Math.max(0, endMinutes - joinMinutes)
+    }
+
+    // Create lesson entry if provided
+    if (lesson && lesson.items?.length > 0) {
+      const LessonEntry = (await import('../models/LessonEntry.js')).default
+      const entry = await LessonEntry.create({
+        sessionId: session._id,
+        studentId: session.studentId,
+        tutorId: session.tutorId,
+        date: session.date,
+        classStart: session.scheduledStart,
+        classEnd: session.scheduledEnd,
+        kind: lesson.kind || 'daily',
+        items: lesson.items,
+        customText: lesson.customText || '',
+        notes: lesson.notes || '',
+      })
+      session.lessonEntryId = entry._id
     }
 
     await session.save()
@@ -240,7 +294,15 @@ export async function markSessionMissed(req, res) {
 
 export async function getLiveBoard(req, res) {
   try {
-    const activeSessions = await ClassSession.find({ status: 'started' })
+    const filter = { status: 'started' }
+    // Scope: students see only their own, tutors see only their students
+    if (req.user.linkedStudentId) {
+      filter.studentId = req.user.linkedStudentId
+    } else if (req.user.linkedTutorId) {
+      filter.tutorId = req.user.linkedTutorId
+    }
+
+    const activeSessions = await ClassSession.find(filter)
       .populate('studentId', 'name rollNo')
       .populate('tutorId', 'name tutorId roomNo meetLink')
       .populate('slotId', 'track')

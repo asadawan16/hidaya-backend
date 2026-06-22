@@ -112,6 +112,8 @@ export async function portalLogin(req, res) {
         roles: roleData,
         mfaEnabled: user.mfa?.enabled || false,
         lastLoginAt: user.lastLoginAt,
+        linkedStudentId: user.linkedStudentId || null,
+        linkedTutorId: user.linkedTutorId || null,
       },
     })
   } catch (err) {
@@ -138,6 +140,8 @@ export async function portalGetMe(req, res) {
       roles: roleData,
       mfaEnabled: req.user.mfa?.enabled || false,
       lastLoginAt: req.user.lastLoginAt,
+      linkedStudentId: req.user.linkedStudentId || null,
+      linkedTutorId: req.user.linkedTutorId || null,
     })
   } catch (err) {
     console.error('Portal getMe error:', err)
@@ -165,12 +169,52 @@ export async function enrollMfa(req, res) {
     const secretEnc = encryptSecret(secret)
     const qrDataUrl = await generateQRDataUrl(otpauthUrl)
 
+    // Store secret but keep MFA disabled until user confirms with a valid code
     user.mfa = {
-      enabled: true,
+      enabled: false,
       secretEnc,
       enrolledBy: req.userId,
       enrolledAt: new Date(),
     }
+    await user.save()
+
+    res.json({
+      qrDataUrl,
+      manualKey: secret,
+      message: 'Scan the QR code, then enter the 6-digit code to confirm.',
+    })
+  } catch (err) {
+    console.error('Enroll MFA error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function confirmMfa(req, res) {
+  try {
+    const { userId, token } = req.body
+    if (!userId || !token) {
+      return res.status(400).json({ error: 'userId and token are required' })
+    }
+
+    const user = await User.findById(userId)
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+
+    if (user.mfa?.enabled) {
+      return res.status(400).json({ error: 'MFA is already enabled' })
+    }
+
+    if (!user.mfa?.secretEnc) {
+      return res.status(400).json({ error: 'No pending MFA enrollment found. Generate a QR code first.' })
+    }
+
+    const valid = verifyToken(user.mfa.secretEnc, token)
+    if (!valid) {
+      return res.status(400).json({ error: 'Invalid code. Please check your authenticator app and try again.' })
+    }
+
+    user.mfa.enabled = true
     await user.save()
 
     await logActivity({
@@ -182,13 +226,9 @@ export async function enrollMfa(req, res) {
       meta: { targetUserId: userId },
     })
 
-    res.json({
-      qrDataUrl,
-      manualKey: secret,
-      message: 'MFA enrolled successfully. Scan the QR code with Google Authenticator.',
-    })
+    res.json({ message: 'MFA enabled successfully.' })
   } catch (err) {
-    console.error('Enroll MFA error:', err)
+    console.error('Confirm MFA error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
@@ -205,7 +245,7 @@ export async function revokeMfa(req, res) {
       return res.status(404).json({ error: 'User not found' })
     }
 
-    if (!user.mfa?.enabled) {
+    if (!user.mfa?.enabled && !user.mfa?.secretEnc) {
       return res.status(400).json({ error: 'MFA is not enabled for this user' })
     }
 
