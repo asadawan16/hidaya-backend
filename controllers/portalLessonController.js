@@ -10,7 +10,7 @@ export async function listLessons(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 30))
-    const { studentId, tutorId, dateFrom, dateTo, kind } = req.query
+    const { studentId, tutorId, dateFrom, dateTo, kind, search, sort } = req.query
 
     const filter = {}
     // Scope: students see only their own, tutors see only their students
@@ -29,16 +29,24 @@ export async function listLessons(req, res) {
       if (dateFrom) filter.date.$gte = new Date(dateFrom)
       if (dateTo) filter.date.$lte = new Date(dateTo)
     }
+    if (search) {
+      const regex = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      filter.$or = [{ customText: regex }, { notes: regex }]
+    }
 
     const total = await LessonEntry.countDocuments(filter)
     const pages = Math.ceil(total / lim) || 1
     const safePage = Math.min(pg, pages)
 
+    let sortObj = { date: -1 }
+    if (sort === 'date') sortObj = { date: 1 }
+    if (sort === '-date') sortObj = { date: -1 }
+
     const records = await LessonEntry.find(filter)
       .populate('studentId', 'name rollNo')
       .populate('tutorId', 'name tutorId')
       .populate('items.curriculumItemId', 'label track type')
-      .sort({ date: -1 })
+      .sort(sortObj)
       .skip((safePage - 1) * lim)
       .limit(lim)
       .lean()

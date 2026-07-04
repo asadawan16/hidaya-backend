@@ -18,20 +18,30 @@ export async function listInvoices(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
-    const { studentId, status } = req.query
+    const { studentId, status, search, sort } = req.query
 
     const filter = {}
     if (studentId) filter.studentId = studentId
     if (status) filter.status = status
+    if (search) {
+      const regex = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      filter.invoiceNo = regex
+    }
 
     const total = await Invoice.countDocuments(filter)
     const pages = Math.ceil(total / lim) || 1
+    const safePage = Math.min(pg, pages)
+
+    let sortObj = { createdAt: -1 }
+    if (sort === 'dueDate') sortObj = { dueDate: 1 }
+    if (sort === '-amount') sortObj = { amount: -1 }
+    if (sort === 'status') sortObj = { status: 1, createdAt: -1 }
 
     const records = await Invoice.find(filter)
       .populate('studentId', 'name rollNo')
       .populate('createdBy', 'displayName')
-      .sort({ createdAt: -1 })
-      .skip((pg - 1) * lim)
+      .sort(sortObj)
+      .skip((safePage - 1) * lim)
       .limit(lim)
       .lean()
 
@@ -40,7 +50,7 @@ export async function listInvoices(req, res) {
       { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$amount' } } },
     ])
 
-    res.json({ records, total, page: pg, pages, stats })
+    res.json({ records, total, page: safePage, pages, stats })
   } catch (err) {
     console.error('List invoices error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -100,12 +110,24 @@ export async function listSalaryRecords(req, res) {
     if (month) filter.month = Number(month)
     if (year) filter.year = Number(year)
 
-    const records = await SalaryRecord.find(filter)
+    const query = () => SalaryRecord.find(filter)
       .populate('tutorId', 'name tutorId salary')
       .sort({ year: -1, month: -1 })
-      .lean()
 
-    res.json(records)
+    // Legacy callers (no ?page) get a flat array; paginated callers get an envelope
+    if (!req.query.page) {
+      const records = await query().limit(500).lean()
+      return res.json(records)
+    }
+
+    const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
+    const total = await SalaryRecord.countDocuments(filter)
+    const pages = Math.ceil(total / lim) || 1
+    const safePage = Math.min(pg, pages)
+    const records = await query().skip((safePage - 1) * lim).limit(lim).lean()
+
+    res.json({ records, total, page: safePage, pages })
   } catch (err) {
     console.error('List salary records error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -284,13 +306,25 @@ export async function listSalaryIncrements(req, res) {
     const filter = {}
     if (req.query.tutorId) filter.tutorId = req.query.tutorId
 
-    const records = await SalaryIncrement.find(filter)
+    const query = () => SalaryIncrement.find(filter)
       .populate('tutorId', 'name tutorId salary')
       .populate('approvedBy', 'displayName')
       .sort({ effectiveDate: -1 })
-      .lean()
 
-    res.json(records)
+    // Legacy callers (no ?page) get a flat array; paginated callers get an envelope
+    if (!req.query.page) {
+      const records = await query().limit(500).lean()
+      return res.json(records)
+    }
+
+    const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
+    const total = await SalaryIncrement.countDocuments(filter)
+    const pages = Math.ceil(total / lim) || 1
+    const safePage = Math.min(pg, pages)
+    const records = await query().skip((safePage - 1) * lim).limit(lim).lean()
+
+    res.json({ records, total, page: safePage, pages })
   } catch (err) {
     console.error('List salary increments error:', err)
     res.status(500).json({ error: 'Server error' })

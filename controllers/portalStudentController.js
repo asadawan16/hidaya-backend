@@ -83,6 +83,37 @@ export async function listStudents(req, res) {
   }
 }
 
+// Lightweight typeahead picker for dropdowns — supports 1000+ students via search
+export async function pickerStudents(req, res) {
+  try {
+    const lim = Math.max(1, Math.min(30, parseInt(req.query.limit, 10) || 20))
+    const { q, status, ids } = req.query
+
+    const filter = {}
+    if (status) filter.status = status
+
+    if (ids) {
+      // Hydration mode: resolve already-selected values regardless of q
+      const idList = String(ids).split(',').map(s => s.trim()).filter(Boolean).slice(0, 50)
+      filter._id = { $in: idList }
+    } else if (q) {
+      const regex = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      filter.$or = [{ name: regex }, { rollNo: regex }]
+    }
+
+    const records = await Student.find(filter)
+      .select('name rollNo status')
+      .sort({ name: 1 })
+      .limit(ids ? 50 : lim)
+      .lean()
+
+    res.json(records)
+  } catch (err) {
+    console.error('Student picker error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 export async function getStudent(req, res) {
   try {
     const student = await Student.findById(req.params.id)

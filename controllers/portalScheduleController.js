@@ -21,14 +21,25 @@ export async function listSlots(req, res) {
     if (dayOfWeek !== undefined) filter.dayOfWeek = Number(dayOfWeek)
     if (active !== undefined) filter.active = active === 'true'
 
-    const records = await ClassSlot.find(filter)
+    const query = () => ClassSlot.find(filter)
       .populate('studentId', 'name rollNo')
       .populate('tutorId', 'name tutorId meetLink')
       .sort({ dayOfWeek: 1, startTime: 1 })
-      .limit(200)
-      .lean()
 
-    res.json(records)
+    // Legacy callers (no ?page) get a flat array; paginated callers get an envelope
+    if (!req.query.page) {
+      const records = await query().limit(500).lean()
+      return res.json(records)
+    }
+
+    const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 30))
+    const total = await ClassSlot.countDocuments(filter)
+    const pages = Math.ceil(total / lim) || 1
+    const safePage = Math.min(pg, pages)
+    const records = await query().skip((safePage - 1) * lim).limit(lim).lean()
+
+    res.json({ records, total, page: safePage, pages })
   } catch (err) {
     console.error('List slots error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -151,7 +162,7 @@ export async function listSessions(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 30))
-    const { tutorId, studentId, date, dateFrom, dateTo, status } = req.query
+    const { tutorId, studentId, date, dateFrom, dateTo, status, sort } = req.query
 
     const filter = {}
     // Scope: students see only their own, tutors see only their students
@@ -179,11 +190,15 @@ export async function listSessions(req, res) {
     const pages = Math.ceil(total / lim) || 1
     const safePage = Math.min(pg, pages)
 
+    let sortObj = { date: -1, scheduledStart: -1 }
+    if (sort === 'date') sortObj = { date: 1, scheduledStart: 1 }
+    if (sort === 'status') sortObj = { status: 1, date: -1 }
+
     const records = await ClassSession.find(filter)
       .populate('studentId', 'name rollNo')
       .populate('tutorId', 'name tutorId')
       .populate('slotId', 'track meetLink')
-      .sort({ date: -1, scheduledStart: -1 })
+      .sort(sortObj)
       .skip((safePage - 1) * lim)
       .limit(lim)
       .lean()

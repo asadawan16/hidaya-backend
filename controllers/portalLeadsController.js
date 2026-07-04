@@ -26,7 +26,7 @@ export async function listLeads(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
-    const { status, search, source } = req.query
+    const { status, search, source, sort } = req.query
 
     const filter = {}
     if (status) filter.status = status
@@ -40,8 +40,12 @@ export async function listLeads(req, res) {
     const pages = Math.ceil(total / lim) || 1
     const safePage = Math.min(pg, pages)
 
+    let sortObj = { createdAt: -1 }
+    if (sort === 'name') sortObj = { name: 1 }
+    if (sort === 'status') sortObj = { status: 1, createdAt: -1 }
+
     const records = await Enrollment.find(filter)
-      .sort({ createdAt: -1 })
+      .sort(sortObj)
       .skip((safePage - 1) * lim)
       .limit(lim)
       .lean()

@@ -57,6 +57,36 @@ export async function listTutors(req, res) {
   }
 }
 
+// Lightweight typeahead picker for dropdowns
+export async function pickerTutors(req, res) {
+  try {
+    const lim = Math.max(1, Math.min(30, parseInt(req.query.limit, 10) || 20))
+    const { q, status, ids } = req.query
+
+    const filter = {}
+    if (status) filter.status = status
+
+    if (ids) {
+      const idList = String(ids).split(',').map(s => s.trim()).filter(Boolean).slice(0, 50)
+      filter._id = { $in: idList }
+    } else if (q) {
+      const regex = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      filter.$or = [{ name: regex }, { tutorId: regex }]
+    }
+
+    const records = await TutorProfile.find(filter)
+      .select('name tutorId status')
+      .sort({ name: 1 })
+      .limit(ids ? 50 : lim)
+      .lean()
+
+    res.json(records)
+  } catch (err) {
+    console.error('Tutor picker error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 export async function getTutor(req, res) {
   try {
     const tutor = await TutorProfile.findById(req.params.id)

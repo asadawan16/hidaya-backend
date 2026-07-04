@@ -7,6 +7,7 @@ import Assignment from '../models/Assignment.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification } from './portalNotificationController.js'
+import { emitToAll } from '../config/socket.js'
 
 // ─── Notices ───
 
@@ -54,6 +55,9 @@ export async function createNotice(req, res) {
 
     await logActivity({ level: 'info', category: 'notice', action: 'notice_created', message: `Notice created: ${type} (${noticeCategory})`, req })
 
+    // Live-push: clients refetch their active notices (server-side targeting applies on fetch)
+    try { emitToAll('notice_changed', { noticeId: notice._id, category: noticeCategory }) } catch {}
+
     // Notify the target tutor
     if (targetTutorId) {
       const tutor = await TutorProfile.findById(targetTutorId).lean()
@@ -86,6 +90,8 @@ export async function updateNotice(req, res) {
     if (req.body.acknowledge) notice.acknowledgedAt = new Date()
     await notice.save()
 
+    try { emitToAll('notice_changed', { noticeId: notice._id }) } catch {}
+
     res.json(notice)
   } catch (err) {
     console.error('Update notice error:', err)
@@ -97,6 +103,7 @@ export async function deleteNotice(req, res) {
   try {
     const notice = await Notice.findByIdAndDelete(req.params.id)
     if (!notice) return res.status(404).json({ error: 'Notice not found' })
+    try { emitToAll('notice_changed', { noticeId: notice._id }) } catch {}
     res.json({ message: 'Notice deleted' })
   } catch (err) {
     console.error('Delete notice error:', err)

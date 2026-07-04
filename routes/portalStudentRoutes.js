@@ -4,6 +4,7 @@ import {
   listStudents, getStudent, createStudent, updateStudent,
   deleteStudent, changeStudentStatus, getStudentStats,
   getStudentDetailExtended, addAdminNote, addManualTutorLog,
+  pickerStudents,
 } from '../controllers/portalStudentController.js'
 
 const router = Router()
@@ -12,6 +13,7 @@ router.use(portalAuth)
 
 router.get('/', requirePermission('student.read'), listStudents)
 router.get('/stats', requirePermission('student.read'), getStudentStats)
+router.get('/picker', requirePermission('student.read'), pickerStudents)
 router.get('/:id', requirePermission('student.read'), getStudent)
 router.get('/:id/detail', requirePermission('student.read'), getStudentDetailExtended)
 router.post('/:id/notes', requirePermission('student.update'), addAdminNote)

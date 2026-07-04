@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { listUsers, getUser, createUser, updateUser, deleteUser, resetPassword, getProfile, updateProfile, changePassword } from '../controllers/portalUserController.js'
+import { listUsers, getUser, createUser, updateUser, deleteUser, resetPassword, getProfile, updateProfile, changePassword, pickerUsers } from '../controllers/portalUserController.js'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 
 const router = Router()
@@ -12,6 +12,7 @@ router.patch('/profile', updateProfile)
 router.post('/profile/change-password', changePassword)
 
 router.get('/', requirePermission('user.read'), listUsers)
+router.get('/picker', requirePermission('user.read'), pickerUsers)
 router.post('/', requirePermission('user.create'), createUser)
 router.get('/:id', requirePermission('user.read'), getUser)
 router.patch('/:id', requirePermission('user.update'), updateUser)

@@ -5,7 +5,7 @@ export async function listAttendance(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 30))
-    const { tutorId, dateFrom, dateTo, status } = req.query
+    const { tutorId, dateFrom, dateTo, status, sort } = req.query
 
     const filter = {}
     if (tutorId) filter.tutorId = tutorId
@@ -22,7 +22,7 @@ export async function listAttendance(req, res) {
 
     const records = await TutorAttendance.find(filter)
       .populate('tutorId', 'name tutorId')
-      .sort({ date: -1 })
+      .sort(sort === 'date' ? { date: 1 } : { date: -1 })
       .skip((safePage - 1) * lim)
       .limit(lim)
       .lean()

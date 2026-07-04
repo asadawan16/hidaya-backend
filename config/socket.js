@@ -82,6 +82,12 @@ export function emitToRole(roleKey, event, data) {
   if (portal) portal.to(`role:${roleKey}`).emit(event, data)
 }
 
+// Emit to every connected portal user
+export function emitToAll(event, data) {
+  const portal = getPortalNamespace()
+  if (portal) portal.emit(event, data)
+}
+
 // Emit to live-board watchers
 export function emitToLiveBoard(event, data) {
   const portal = getPortalNamespace()

@@ -2,6 +2,7 @@ import Certificate from '../models/Certificate.js'
 import Student from '../models/Student.js'
 import Notification from '../models/Notification.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { emitToUser } from '../config/socket.js'
 
 const POPULATE = [
   { path: 'studentId', select: 'name rollNo country' },
@@ -100,6 +101,11 @@ export async function createCertificate(req, res) {
       req,
     })
 
+    // Live-push to the student when issued directly as approved
+    if (canApprove && student.userId) {
+      try { emitToUser(student.userId.toString(), 'certificate_awarded', { certificateId: cert._id, title }) } catch {}
+    }
+
     const populated = await Certificate.findById(cert._id).populate(POPULATE).lean()
     res.status(201).json(populated)
   } catch (err) {
@@ -119,7 +125,7 @@ export async function bulkCreateCertificates(req, res) {
       return res.status(400).json({ error: 'Maximum 100 students per bulk operation' })
     }
 
-    const students = await Student.find({ _id: { $in: studentIds } }).select('name rollNo').lean()
+    const students = await Student.find({ _id: { $in: studentIds } }).select('name rollNo userId').lean()
     if (students.length === 0) return res.status(404).json({ error: 'No valid students found' })
 
     const canApprove = req.userPermissions?.has('certificate.approve')
@@ -134,6 +140,17 @@ export async function bulkCreateCertificates(req, res) {
     }))
 
     const certs = await Certificate.insertMany(docs)
+
+    // Live-push to each student when issued directly as approved
+    if (canApprove) {
+      const userByStudent = new Map(students.filter(s => s.userId).map(s => [s._id.toString(), s.userId.toString()]))
+      for (const c of certs) {
+        const uid = userByStudent.get(c.studentId.toString())
+        if (uid) {
+          try { emitToUser(uid, 'certificate_awarded', { certificateId: c._id, title }) } catch {}
+        }
+      }
+    }
 
     await logActivity({
       level: 'info', category: 'certificate', action: 'bulk_certificates_submitted',
@@ -192,6 +209,7 @@ export async function approveCertificate(req, res) {
         body: `Congratulations! You have been awarded: ${cert.title}`,
         payload: { certificateId: cert._id, certificateTitle: cert.title, certificateType: cert.type, templateDesign: cert.templateDesign },
       })
+      try { emitToUser(student.userId.toString(), 'certificate_awarded', { certificateId: cert._id, title: cert.title }) } catch {}
     }
 
     await logActivity({
