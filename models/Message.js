@@ -37,8 +37,42 @@ const messageSchema = new mongoose.Schema({
   // Attachments (files, images)
   attachments: [attachmentSchema],
 
-  // Mentions (@user)
+  // Mentions (@user), plus @all / @here broadcast mentions
   mentions: [mentionSchema],
+  mentionsAll: { type: Boolean, default: false },
+  mentionsHere: { type: Boolean, default: false },
+
+  // #student tags — deep-link chips to student records
+  studentTags: [{
+    _id: false,
+    studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true },
+    name: { type: String, trim: true, default: '' },
+    rollNo: { type: String, trim: true, default: '' },
+  }],
+
+  // Emoji reactions
+  reactions: [{
+    _id: false,
+    emoji: { type: String, required: true },
+    users: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  }],
+
+  // Inline quote-reply (denormalized snapshot)
+  quotedMessage: {
+    messageId: { type: mongoose.Schema.Types.ObjectId, ref: 'Message' },
+    senderName: { type: String, trim: true },
+    body: { type: String, trim: true },
+  },
+
+  // Forwarded-message marker
+  forwardedFrom: {
+    threadId: { type: mongoose.Schema.Types.ObjectId, ref: 'ChatThread' },
+    threadName: { type: String, trim: true },
+    senderName: { type: String, trim: true },
+  },
+
+  // URLs extracted from body (Links tab)
+  linkUrls: [{ type: String, trim: true }],
 
   // Threading
   parentId: {

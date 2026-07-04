@@ -25,6 +25,25 @@ const chatThreadSchema = new mongoose.Schema({
     required: true,
   }],
 
+  // Channel member roles (channels only). Creator is owner.
+  memberRoles: [{
+    _id: false,
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    role: { type: String, enum: ['owner', 'admin', 'member'], default: 'member' },
+  }],
+
+  // Per-user conversation preferences (pin/favourite/mute/label/background)
+  userPrefs: [{
+    _id: false,
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    pinned: { type: Boolean, default: false },
+    favourite: { type: Boolean, default: false },
+    mutedUntil: { type: Date, default: null }, // null = unmuted; year 9999 = forever
+    label: { type: String, trim: true, default: '' },
+    labelColor: { type: String, trim: true, default: '' },
+    background: { type: String, trim: true, default: '' },
+  }],
+
   // Last message info (denormalized for list performance)
   lastMessageAt: { type: Date, default: Date.now },
   lastMessagePreview: { type: String, trim: true, default: '' },

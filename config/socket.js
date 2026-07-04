@@ -4,6 +4,13 @@ import User from '../models/User.js'
 
 let io = null
 
+// Presence — userId -> live socket count
+const onlineCounts = new Map()
+
+export function getOnlineUserIds() {
+  return [...onlineCounts.keys()]
+}
+
 export function initSocket(server) {
   io = new Server(server, {
     cors: {
@@ -54,8 +61,47 @@ export function initSocket(server) {
       socket.join('live-board')
     }
 
+    // ── Presence ──
+    const wasOffline = !onlineCounts.has(socket.userId)
+    onlineCounts.set(socket.userId, (onlineCounts.get(socket.userId) || 0) + 1)
+    if (wasOffline) portal.emit('presence_update', { userId: socket.userId, online: true })
+    // Bootstrap the connecting client with the current online set
+    socket.emit('presence_state', getOnlineUserIds())
+
+    // ── Chat thread rooms (typing indicators scoped per conversation) ──
+    socket.on('join_thread', async (threadId) => {
+      try {
+        if (!threadId) return
+        const { default: ChatThread } = await import('../models/ChatThread.js')
+        const thread = await ChatThread.findById(threadId).select('participants').lean()
+        if (thread && thread.participants.some(p => p.toString() === socket.userId)) {
+          socket.join(`thread:${threadId}`)
+        }
+      } catch { /* ignore */ }
+    })
+    socket.on('leave_thread', (threadId) => {
+      if (threadId) socket.leave(`thread:${threadId}`)
+    })
+
+    // ── Typing indicators ──
+    socket.on('typing', ({ threadId, isTyping }) => {
+      if (!threadId) return
+      socket.to(`thread:${threadId}`).emit('typing', {
+        threadId,
+        userId: socket.userId,
+        displayName: socket.user.displayName || socket.user.email || 'Someone',
+        isTyping: !!isTyping,
+      })
+    })
+
     socket.on('disconnect', () => {
-      // Cleanup handled automatically by socket.io
+      const count = (onlineCounts.get(socket.userId) || 1) - 1
+      if (count <= 0) {
+        onlineCounts.delete(socket.userId)
+        portal.emit('presence_update', { userId: socket.userId, online: false })
+      } else {
+        onlineCounts.set(socket.userId, count)
+      }
     })
   })
 
