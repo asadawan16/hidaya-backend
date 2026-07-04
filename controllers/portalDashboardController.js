@@ -3,6 +3,9 @@ import TutorProfile from '../models/TutorProfile.js'
 import ClassSession from '../models/ClassSession.js'
 import AdmissionApplication from '../models/AdmissionApplication.js'
 import LessonEntry from '../models/LessonEntry.js'
+import Payment from '../models/Payment.js'
+import Invoice from '../models/Invoice.js'
+import Expense from '../models/Expense.js'
 
 // Helper: last N months labels + boundaries
 function lastNMonths(n) {
@@ -328,4 +331,150 @@ async function studentCharts(_req, res, user, monthCount) {
     lessonTrend,
     sessionStatus: sessionStatusMap,
   })
+}
+
+/**
+ * GET /api/portal/dashboard/revenue
+ * Returns revenue/finance statistics for admin dashboard.
+ */
+export async function getRevenueStats(req, res) {
+  try {
+    const { dateFrom, dateTo, currency } = req.query
+
+    // Build date filter
+    const dateFilter = {}
+    if (dateFrom) dateFilter.$gte = new Date(dateFrom)
+    if (dateTo) dateFilter.$lte = new Date(dateTo)
+    const hasDateFilter = Object.keys(dateFilter).length > 0
+
+    const paymentMatch = { status: 'completed' }
+    if (hasDateFilter) paymentMatch.createdAt = dateFilter
+    if (currency) paymentMatch.currency = currency
+
+    const expenseMatch = {}
+    if (hasDateFilter) expenseMatch.date = dateFilter
+
+    // 1. Revenue by currency (completed payments)
+    const revenueByCurrency = await Payment.aggregate([
+      { $match: paymentMatch },
+      { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 }, avgAmount: { $avg: '$amount' } } },
+      { $sort: { total: -1 } },
+    ])
+
+    // 2. Monthly revenue trend (last 12 months or date range)
+    const monthlyRevenue = await Payment.aggregate([
+      { $match: paymentMatch },
+      { $group: {
+        _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' }, currency: '$currency' },
+        total: { $sum: '$amount' },
+        count: { $sum: 1 },
+      }},
+      { $sort: { '_id.year': 1, '_id.month': 1 } },
+    ])
+
+    // 3. Payment status breakdown (all payments, not just completed)
+    const allPaymentMatch = {}
+    if (hasDateFilter) allPaymentMatch.createdAt = dateFilter
+    const paymentsByStatus = await Payment.aggregate([
+      { $match: allPaymentMatch },
+      { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$amount' } } },
+    ])
+
+    // 4. Payment method breakdown
+    const paymentsByMethod = await Payment.aggregate([
+      { $match: paymentMatch },
+      { $group: { _id: '$paymentMethod', count: { $sum: 1 }, total: { $sum: '$amount' } } },
+    ])
+
+    // 5. Invoice stats
+    const invoiceMatch = {}
+    if (hasDateFilter) invoiceMatch.createdAt = dateFilter
+    const invoicesByStatus = await Invoice.aggregate([
+      { $match: invoiceMatch },
+      { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$amount' }, paid: { $sum: '$paidAmount' } } },
+    ])
+
+    // 6. Expenses vs Income
+    const expenseVsIncome = await Expense.aggregate([
+      { $match: expenseMatch },
+      { $group: { _id: '$type', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ])
+
+    // 7. Monthly expenses trend
+    const monthlyExpenses = await Expense.aggregate([
+      { $match: expenseMatch },
+      { $group: {
+        _id: { year: { $year: '$date' }, month: { $month: '$date' }, type: '$type' },
+        total: { $sum: '$amount' },
+        count: { $sum: 1 },
+      }},
+      { $sort: { '_id.year': 1, '_id.month': 1 } },
+    ])
+
+    // 8. Expense by category
+    const expenseByCategory = await Expense.aggregate([
+      { $match: { ...expenseMatch, type: 'expense' } },
+      { $group: { _id: '$category', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+      { $sort: { total: -1 } },
+    ])
+
+    // 9. Discount usage stats
+    const discountStats = await Payment.aggregate([
+      { $match: { ...paymentMatch, discountAmount: { $gt: 0 } } },
+      { $group: {
+        _id: '$discountCode',
+        timesUsed: { $sum: 1 },
+        totalDiscount: { $sum: '$discountAmount' },
+        totalRevenue: { $sum: '$amount' },
+      }},
+      { $sort: { totalDiscount: -1 } },
+      { $limit: 10 },
+    ])
+
+    // 10. Recent payments (last 10)
+    const recentPayments = await Payment.find({ status: 'completed' })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .select('amount currency studentName studentEmail paymentMethod createdAt discountCode discountAmount')
+      .lean()
+
+    // PKR conversion rates (approximate live rates)
+    const conversionRates = { PKR: 1, USD: 278, EUR: 312, GBP: 355 }
+
+    // Total revenue in PKR
+    const totalRevenuePKR = revenueByCurrency.reduce((sum, r) => {
+      const rate = conversionRates[r._id] || 1
+      return sum + (r.total * rate)
+    }, 0)
+
+    const totalExpenses = expenseVsIncome.find(e => e._id === 'expense')?.total || 0
+    const totalIncome = expenseVsIncome.find(e => e._id === 'income')?.total || 0
+    const totalPayments = paymentsByStatus.reduce((sum, s) => sum + s.count, 0)
+    const completedPayments = paymentsByStatus.find(s => s._id === 'completed')?.count || 0
+    const conversionRate = totalPayments > 0 ? Math.round((completedPayments / totalPayments) * 100) : 0
+
+    res.json({
+      conversionRates,
+      totalRevenuePKR: Math.round(totalRevenuePKR),
+      totalExpenses,
+      totalIncome,
+      netProfit: Math.round(totalRevenuePKR) - totalExpenses + totalIncome,
+      paymentConversionRate: conversionRate,
+      totalPayments,
+      completedPayments,
+      revenueByCurrency,
+      monthlyRevenue,
+      paymentsByStatus,
+      paymentsByMethod,
+      invoicesByStatus,
+      expenseVsIncome,
+      monthlyExpenses,
+      expenseByCategory,
+      discountStats,
+      recentPayments,
+    })
+  } catch (err) {
+    console.error('Revenue stats error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
 }

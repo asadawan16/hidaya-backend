@@ -37,58 +37,75 @@ export async function listSlots(req, res) {
 
 export async function createSlot(req, res) {
   try {
-    const { studentId, tutorId, track, dayOfWeek, startTime, durationMinutes, timezone, meetLink } = req.body
-    if (!studentId || !tutorId || dayOfWeek === undefined || !startTime) {
-      return res.status(400).json({ error: 'studentId, tutorId, dayOfWeek, and startTime are required' })
+    const { studentId, tutorId, track, dayOfWeek, days, startTime, durationMinutes, timezone, meetLink } = req.body
+    if (!studentId || !tutorId || !startTime) {
+      return res.status(400).json({ error: 'studentId, tutorId, and startTime are required' })
     }
 
-    const slot = await ClassSlot.create({
-      studentId, tutorId,
-      track: track || 'nazra',
-      dayOfWeek,
-      startTime,
-      durationMinutes: durationMinutes || 30,
-      timezone: timezone || 'Asia/Karachi',
-      meetLink: meetLink || '',
-      active: true,
-    })
+    // Determine which days to create slots for
+    const daysToCreate = Array.isArray(days) && days.length > 0
+      ? days.map(Number)
+      : (dayOfWeek !== undefined ? [Number(dayOfWeek)] : [])
+
+    if (daysToCreate.length === 0) {
+      return res.status(400).json({ error: 'dayOfWeek or days array is required' })
+    }
+
+    const createdSlots = []
+    const today = new Date()
+    const todayStart = new Date(today); todayStart.setHours(0, 0, 0, 0)
+    const todayEnd = new Date(today); todayEnd.setHours(23, 59, 59, 999)
+    const todayDow = today.getDay()
+
+    for (const dow of daysToCreate) {
+      const slot = await ClassSlot.create({
+        studentId, tutorId,
+        track: track || 'nazra',
+        dayOfWeek: dow,
+        startTime,
+        durationMinutes: durationMinutes || 30,
+        timezone: timezone || 'Asia/Karachi',
+        meetLink: meetLink || '',
+        active: true,
+      })
+
+      // Auto-create session for today if matching
+      if (todayDow === dow) {
+        const existing = await ClassSession.findOne({ slotId: slot._id, date: { $gte: todayStart, $lt: todayEnd } })
+        if (!existing) {
+          const [h, m] = startTime.split(':').map(Number)
+          const endMins = h * 60 + m + (durationMinutes || 30)
+          const endTime = `${String(Math.floor(endMins / 60) % 24).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`
+          await ClassSession.create({
+            slotId: slot._id,
+            studentId, tutorId,
+            date: todayStart,
+            scheduledStart: startTime,
+            scheduledEnd: endTime,
+            status: 'scheduled',
+          })
+        }
+      }
+
+      const populated = await ClassSlot.findById(slot._id)
+        .populate('studentId', 'name rollNo')
+        .populate('tutorId', 'name tutorId')
+        .lean()
+
+      createdSlots.push(populated)
+    }
 
     await logActivity({
       level: 'info',
       category: 'schedule',
       action: 'slot_created',
-      message: `Class slot created: day ${dayOfWeek} at ${startTime}`,
+      message: `${createdSlots.length} class slot(s) created: days [${daysToCreate.join(',')}] at ${startTime}`,
       req,
-      meta: { slotId: slot._id },
+      meta: { slotIds: createdSlots.map(s => s._id) },
     })
 
-    // Auto-create a session for today if the slot matches today's day-of-week
-    const today = new Date()
-    if (today.getDay() === Number(dayOfWeek)) {
-      const todayStart = new Date(today); todayStart.setHours(0, 0, 0, 0)
-      const todayEnd = new Date(today); todayEnd.setHours(23, 59, 59, 999)
-      const existing = await ClassSession.findOne({ slotId: slot._id, date: { $gte: todayStart, $lt: todayEnd } })
-      if (!existing) {
-        const [h, m] = startTime.split(':').map(Number)
-        const endMins = h * 60 + m + (durationMinutes || 30)
-        const endTime = `${String(Math.floor(endMins / 60) % 24).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`
-        await ClassSession.create({
-          slotId: slot._id,
-          studentId, tutorId,
-          date: todayStart,
-          scheduledStart: startTime,
-          scheduledEnd: endTime,
-          status: 'scheduled',
-        })
-      }
-    }
-
-    const populated = await ClassSlot.findById(slot._id)
-      .populate('studentId', 'name rollNo')
-      .populate('tutorId', 'name tutorId')
-      .lean()
-
-    res.status(201).json(populated)
+    // Return single slot for backward compat, array if multiple
+    res.status(201).json(createdSlots.length === 1 ? createdSlots[0] : createdSlots)
   } catch (err) {
     console.error('Create slot error:', err)
     res.status(500).json({ error: 'Server error' })

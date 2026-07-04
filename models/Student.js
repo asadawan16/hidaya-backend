@@ -80,6 +80,10 @@ const studentSchema = new mongoose.Schema({
     status: { type: String, enum: ['pending', 'paid', 'overdue', ''], default: 'pending' },
   },
 
+  performanceFlag: { type: String, enum: ['normal', 'weak', 'strong', ''], default: '' },
+  leaveStartDate: { type: Date },
+  expectedResumeDate: { type: Date },
+
   status: {
     type: String,
     enum: ['active', 'leave', 'left', 'pending'],
@@ -96,6 +100,11 @@ const studentSchema = new mongoose.Schema({
   email: { type: String, lowercase: true, trim: true, default: '' },
   phone: { type: String, trim: true, default: '' },
   notes: { type: String, trim: true, default: '' },
+  adminNotes: [{
+    text: { type: String, required: true, trim: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    createdAt: { type: Date, default: Date.now },
+  }],
 }, { timestamps: true })
 
 studentSchema.index({ name: 1 })

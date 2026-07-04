@@ -16,6 +16,8 @@ const tutorAttendanceSchema = new mongoose.Schema({
     default: 'absent',
   },
   notes: { type: String, trim: true, default: '' },
+  isOvertime: { type: Boolean, default: false },
+  overtimeReason: { type: String, enum: ['extra_classes', 'late_checkout', 'approved_overtime', ''], default: '' },
 }, { timestamps: true })
 
 tutorAttendanceSchema.index({ tutorId: 1, date: -1 })

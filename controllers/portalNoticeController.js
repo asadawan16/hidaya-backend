@@ -3,6 +3,8 @@ import Complaint from '../models/Complaint.js'
 import WhatsappReminderLog from '../models/WhatsappReminderLog.js'
 import TutorProfile from '../models/TutorProfile.js'
 import Student from '../models/Student.js'
+import Assignment from '../models/Assignment.js'
+import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification } from './portalNotificationController.js'
 
@@ -34,16 +36,23 @@ export async function listNotices(req, res) {
 
 export async function createNotice(req, res) {
   try {
-    const { type, targetTutorId, targetStudentId, message, severity } = req.body
+    const { type, targetTutorId, targetStudentId, targetStudentIds, message, severity, category, autoDisableAt, classTime } = req.body
     if (!type || !message) return res.status(400).json({ error: 'Type and message are required' })
 
+    const noticeCategory = category || 'information'
+    const requiresAcknowledgment = noticeCategory === 'urgent'
+
     const notice = await Notice.create({
-      type, targetTutorId, targetStudentId,
+      type, targetTutorId, targetStudentId, targetStudentIds,
       message, severity: severity || 'info',
+      category: noticeCategory,
+      requiresAcknowledgment,
+      autoDisableAt: autoDisableAt ? new Date(autoDisableAt) : undefined,
+      classTime: classTime || undefined,
       createdBy: req.userId,
     })
 
-    await logActivity({ level: 'info', category: 'notice', action: 'notice_created', message: `Notice created: ${type}`, req })
+    await logActivity({ level: 'info', category: 'notice', action: 'notice_created', message: `Notice created: ${type} (${noticeCategory})`, req })
 
     // Notify the target tutor
     if (targetTutorId) {
@@ -51,7 +60,8 @@ export async function createNotice(req, res) {
       if (tutor?.userId) {
         await createNotification({
           userId: tutor.userId, type: 'notice',
-          title: 'New Notice', body: message.slice(0, 100),
+          title: noticeCategory === 'urgent' ? '⚠️ Urgent Notice' : 'New Notice',
+          body: message.slice(0, 100),
           payload: { noticeId: notice._id },
         })
       }
@@ -79,6 +89,128 @@ export async function updateNotice(req, res) {
     res.json(notice)
   } catch (err) {
     console.error('Update notice error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function deleteNotice(req, res) {
+  try {
+    const notice = await Notice.findByIdAndDelete(req.params.id)
+    if (!notice) return res.status(404).json({ error: 'Notice not found' })
+    res.json({ message: 'Notice deleted' })
+  } catch (err) {
+    console.error('Delete notice error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Active Notices for Current User ───
+
+export async function getActiveNoticesForUser(req, res) {
+  try {
+    const now = new Date()
+    const baseFilter = { active: true }
+
+    // Build OR conditions based on the user's role
+    const orConditions = []
+
+    // Global notices (no specific target)
+    orConditions.push({ targetTutorId: { $exists: false }, targetStudentId: { $exists: false }, targetStudentIds: { $size: 0 } })
+    orConditions.push({ targetTutorId: null, targetStudentId: null, targetStudentIds: { $size: 0 } })
+
+    // If user is linked to a tutor profile, get tutor-targeted notices
+    if (req.user.linkedTutorId) {
+      orConditions.push({ targetTutorId: req.user.linkedTutorId })
+
+      // Student-specific notices for students assigned to this tutor
+      const assignments = await Assignment.find({ tutorId: req.user.linkedTutorId, endDate: null }).select('studentId').lean()
+      const assignedStudentIds = assignments.map(a => a.studentId)
+      if (assignedStudentIds.length > 0) {
+        orConditions.push({ category: 'student_specific', targetStudentIds: { $in: assignedStudentIds } })
+      }
+    }
+
+    const notices = await Notice.find({ ...baseFilter, $or: orConditions })
+      .populate('targetTutorId', 'name tutorId')
+      .populate('targetStudentId', 'name rollNo')
+      .populate('targetStudentIds', 'name rollNo')
+      .populate('createdBy', 'displayName')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean()
+
+    // Filter out expired temporary/information notices
+    const filtered = notices.filter(n => {
+      if (n.autoDisableAt && new Date(n.autoDisableAt) <= now) return false
+      return true
+    })
+
+    // Mark which notices the current user has already acknowledged
+    const userId = req.userId.toString()
+    const enriched = filtered.map(n => ({
+      ...n,
+      userAcknowledged: n.acknowledgedBy?.some(a => a.userId?.toString() === userId) || false,
+    }))
+
+    res.json(enriched)
+  } catch (err) {
+    console.error('Get active notices error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function acknowledgeNotice(req, res) {
+  try {
+    const notice = await Notice.findById(req.params.id)
+    if (!notice) return res.status(404).json({ error: 'Notice not found' })
+
+    // Check if already acknowledged by this user
+    const already = notice.acknowledgedBy.some(a => a.userId?.toString() === req.userId.toString())
+    if (!already) {
+      notice.acknowledgedBy.push({ userId: req.userId, acknowledgedAt: new Date() })
+      await notice.save()
+    }
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('Acknowledge notice error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function getNoticeAckStatus(req, res) {
+  try {
+    const notice = await Notice.findById(req.params.id)
+      .populate('acknowledgedBy.userId', 'displayName email')
+      .lean()
+    if (!notice) return res.status(404).json({ error: 'Notice not found' })
+
+    // Get target users who should acknowledge
+    let targetUsers = []
+    if (notice.targetTutorId) {
+      const tutor = await TutorProfile.findById(notice.targetTutorId).populate('userId', 'displayName email').lean()
+      if (tutor?.userId) targetUsers.push({ userId: tutor.userId._id, displayName: tutor.userId.displayName || tutor.name })
+    } else if (notice.type === 'teacher') {
+      // All active tutors
+      const tutors = await TutorProfile.find({ status: 'active' }).populate('userId', 'displayName email').lean()
+      targetUsers = tutors.filter(t => t.userId).map(t => ({ userId: t.userId._id, displayName: t.userId.displayName || t.name }))
+    }
+
+    const ackUserIds = new Set(notice.acknowledgedBy.map(a => a.userId?._id?.toString()))
+    const status = targetUsers.map(u => ({
+      ...u,
+      acknowledged: ackUserIds.has(u.userId.toString()),
+      acknowledgedAt: notice.acknowledgedBy.find(a => a.userId?._id?.toString() === u.userId.toString())?.acknowledgedAt,
+    }))
+
+    res.json({
+      total: targetUsers.length,
+      acknowledged: status.filter(s => s.acknowledged).length,
+      pending: status.filter(s => !s.acknowledged).length,
+      users: status,
+    })
+  } catch (err) {
+    console.error('Notice ack status error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
@@ -123,6 +255,29 @@ export async function createComplaint(req, res) {
     }
 
     const complaint = await Complaint.create({ ...data, createdBy: req.userId })
+
+    // Notify the tutor if complaint is against them
+    if (data.againstTutorId) {
+      try {
+        const User = (await import('../models/User.js')).default
+        const Notification = (await import('../models/Notification.js')).default
+        const { emitToUser } = await import('../config/socket.js')
+
+        const tutorUser = await User.findOne({ linkedTutorId: data.againstTutorId, status: 'active' })
+        if (tutorUser) {
+          await Notification.create({
+            userId: tutorUser._id,
+            type: 'complaint',
+            title: 'New Complaint Filed',
+            body: data.actionRequired
+              ? `A complaint has been filed regarding your student. Action required: ${data.actionRequired}`
+              : `A complaint has been filed regarding one of your students. Please review.`,
+            payload: { complaintId: complaint._id, studentId: data.studentId },
+          })
+          emitToUser(tutorUser._id, 'complaint_filed', { complaintId: complaint._id })
+        }
+      } catch {}
+    }
 
     await logActivity({ level: 'warning', category: 'complaint', action: 'complaint_created', message: `Complaint filed for student ${data.studentId}`, req })
     res.status(201).json(complaint)

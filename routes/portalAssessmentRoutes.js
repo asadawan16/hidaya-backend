@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
   listTemplates, createTemplate, updateTemplate, deleteTemplate,
-  listAssessments, createAssessment, getAssessment,
+  listAssessments, createAssessment, getAssessment, getReportCard,
 } from '../controllers/portalAssessmentController.js'
 
 const router = Router()
@@ -16,6 +16,7 @@ router.delete('/templates/:id', requirePermission('assessment.template_manage'),
 
 // Assessments
 router.get('/', requirePermission('assessment.read'), listAssessments)
+router.get('/:id/report-card', requirePermission('assessment.read'), getReportCard)
 router.get('/:id', requirePermission('assessment.read'), getAssessment)
 router.post('/', requirePermission('assessment.create'), createAssessment)
 

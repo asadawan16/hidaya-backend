@@ -1,6 +1,16 @@
 import TutorProfile from '../models/TutorProfile.js'
 import User from '../models/User.js'
 import Role from '../models/Role.js'
+import Assignment from '../models/Assignment.js'
+import TutorAttendance from '../models/TutorAttendance.js'
+import ClassSession from '../models/ClassSession.js'
+import ClassSlot from '../models/ClassSlot.js'
+import LessonEntry from '../models/LessonEntry.js'
+import PermanentLesson from '../models/PermanentLesson.js'
+import Complaint from '../models/Complaint.js'
+import Notice from '../models/Notice.js'
+import SalaryRecord from '../models/SalaryRecord.js'
+import SalaryIncrement from '../models/SalaryIncrement.js'
 import { logActivity } from '../utils/activityLogger.js'
 
 async function generateTutorId() {
@@ -210,6 +220,229 @@ export async function getTutorStats(req, res) {
     res.json({ total, activeCount, skillStats })
   } catch (err) {
     console.error('Tutor stats error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function getTutorDetailExtended(req, res) {
+  try {
+    const tutor = await TutorProfile.findById(req.params.id)
+      .populate('userId', 'email displayName status mfa.enabled lastLoginAt createdAt')
+      .lean()
+
+    if (!tutor) return res.status(404).json({ error: 'Tutor not found' })
+
+    // Date filter support
+    const { dateFrom, dateTo } = req.query
+    const dateFilter = {}
+    if (dateFrom) dateFilter.$gte = new Date(dateFrom)
+    if (dateTo) dateFilter.$lte = new Date(dateTo)
+    const hasDateFilter = Object.keys(dateFilter).length > 0
+
+    const tutorObjectId = tutor._id
+
+    const [
+      assignments,
+      activeStudentCount,
+      attendanceStats,
+      monthlyAttendance,
+      recentAttendance,
+      classSessionStats,
+      monthlyClassSessions,
+      lessonsByStudent,
+      permanentLessonStats,
+      complaints,
+      notices,
+      salaryRecords,
+      salaryIncrements,
+      activeSlots,
+    ] = await Promise.all([
+      // All assignments (student history)
+      Assignment.find({ tutorId: tutorObjectId })
+        .populate('studentId', 'name rollNo status courseLabels')
+        .sort({ startDate: -1 })
+        .lean(),
+
+      // Active students count
+      Assignment.countDocuments({ tutorId: tutorObjectId, endDate: null }),
+
+      // Attendance aggregate stats
+      TutorAttendance.aggregate([
+        { $match: { tutorId: tutorObjectId, ...(hasDateFilter ? { date: dateFilter } : {}) } },
+        {
+          $group: {
+            _id: null,
+            totalDays: { $sum: 1 },
+            present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+            absent: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
+            partial: { $sum: { $cond: [{ $eq: ['$status', 'partial'] }, 1, 0] } },
+            totalHours: { $sum: { $ifNull: ['$totalHours', 0] } },
+          },
+        },
+      ]),
+
+      // Monthly attendance (last 12 months)
+      TutorAttendance.aggregate([
+        {
+          $match: {
+            tutorId: tutorObjectId,
+            date: hasDateFilter ? dateFilter : { $gte: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000) },
+          },
+        },
+        {
+          $group: {
+            _id: { year: { $year: '$date' }, month: { $month: '$date' } },
+            present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+            absent: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
+            partial: { $sum: { $cond: [{ $eq: ['$status', 'partial'] }, 1, 0] } },
+          },
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1 } },
+      ]),
+
+      // Recent attendance records (last 30)
+      TutorAttendance.find({ tutorId: tutorObjectId, ...(hasDateFilter ? { date: dateFilter } : {}) })
+        .sort({ date: -1 })
+        .limit(30)
+        .lean(),
+
+      // Class session stats
+      ClassSession.aggregate([
+        { $match: { tutorId: tutorObjectId, ...(hasDateFilter ? { date: dateFilter } : {}) } },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ['$status', 'missed'] }, 1, 0] } },
+            scheduled: { $sum: { $cond: [{ $eq: ['$status', 'scheduled'] }, 1, 0] } },
+            started: { $sum: { $cond: [{ $eq: ['$status', 'started'] }, 1, 0] } },
+          },
+        },
+      ]),
+
+      // Monthly class sessions (last 12 months)
+      ClassSession.aggregate([
+        {
+          $match: {
+            tutorId: tutorObjectId,
+            date: hasDateFilter ? dateFilter : { $gte: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000) },
+          },
+        },
+        {
+          $group: {
+            _id: { year: { $year: '$date' }, month: { $month: '$date' } },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ['$status', 'missed'] }, 1, 0] } },
+          },
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1 } },
+      ]),
+
+      // Lesson entries grouped by student
+      LessonEntry.aggregate([
+        { $match: { tutorId: tutorObjectId, ...(hasDateFilter ? { date: dateFilter } : {}) } },
+        {
+          $group: {
+            _id: '$studentId',
+            count: { $sum: 1 },
+            firstDate: { $min: '$date' },
+            lastDate: { $max: '$date' },
+          },
+        },
+        {
+          $lookup: {
+            from: 'students',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'student',
+          },
+        },
+        { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id: 1,
+            count: 1,
+            firstDate: 1,
+            lastDate: 1,
+            studentName: '$student.name',
+            studentRollNo: '$student.rollNo',
+            studentStatus: '$student.status',
+          },
+        },
+        { $sort: { count: -1 } },
+      ]),
+
+      // Permanent lesson stats (submitted, approved, rejected)
+      PermanentLesson.aggregate([
+        { $match: { tutorId: tutorObjectId } },
+        {
+          $group: {
+            _id: '$status',
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+
+      // Complaints against this tutor
+      req.userPermissions.has('complaint.read')
+        ? Complaint.find({ againstTutorId: tutorObjectId })
+            .populate('studentId', 'name rollNo')
+            .populate('createdBy', 'displayName')
+            .populate('resolvedBy', 'displayName')
+            .sort({ createdAt: -1 })
+            .lean()
+        : [],
+
+      // Notices targeting this tutor
+      req.userPermissions.has('notice.read')
+        ? Notice.find({ targetTutorId: tutorObjectId })
+            .populate('createdBy', 'displayName')
+            .sort({ createdAt: -1 })
+            .lean()
+        : [],
+
+      // Salary records
+      req.userPermissions.has('finance.read')
+        ? SalaryRecord.find({ tutorId: tutorObjectId })
+            .sort({ year: -1, month: -1 })
+            .lean()
+        : [],
+
+      // Salary increments
+      req.userPermissions.has('finance.read')
+        ? SalaryIncrement.find({ tutorId: tutorObjectId })
+            .populate('approvedBy', 'displayName')
+            .sort({ effectiveDate: -1 })
+            .lean()
+        : [],
+
+      // Active class slots
+      ClassSlot.find({ tutorId: tutorObjectId, active: true })
+        .populate('studentId', 'name rollNo status')
+        .sort({ dayOfWeek: 1, startTime: 1 })
+        .lean(),
+    ])
+
+    res.json({
+      ...tutor,
+      activeStudentCount,
+      assignments,
+      attendanceStats: attendanceStats[0] || { totalDays: 0, present: 0, absent: 0, partial: 0, totalHours: 0 },
+      monthlyAttendance,
+      recentAttendance,
+      classSessionStats: classSessionStats[0] || { total: 0, completed: 0, missed: 0, scheduled: 0, started: 0 },
+      monthlyClassSessions,
+      lessonsByStudent,
+      permanentLessonStats,
+      complaints,
+      notices,
+      salaryRecords,
+      salaryIncrements,
+      activeSlots,
+    })
+  } catch (err) {
+    console.error('Get tutor detail error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

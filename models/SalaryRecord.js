@@ -32,6 +32,12 @@ const salaryRecordSchema = new mongoose.Schema({
     default: 'draft',
   },
   notes: { type: String, trim: true, default: '' },
+  overtimeHours: { type: Number, default: 0 },
+  overtimeAmount: { type: Number, default: 0 },
+  advanceDeductions: { type: Number, default: 0 },
+  paidAt: { type: Date },
+  receiptNo: { type: String, trim: true, default: '' },
+  bonusBreakdown: [{ reason: String, amount: Number }],
   generatedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

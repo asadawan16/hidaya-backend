@@ -107,7 +107,7 @@ export async function convertToStudent(req, res) {
 
     const {
       displayName, courseLabels, placementLevel, sect,
-      country, timezone, whatsappNumber, billing, notes,
+      country, timezone, whatsappNumber, billing, notes, familyId,
     } = req.body
 
     // Check if user with this email already exists
@@ -137,7 +137,7 @@ export async function convertToStudent(req, res) {
     const rollNo = await generateRollNo()
 
     // Create student record
-    const student = await Student.create({
+    const studentData = {
       rollNo,
       name: (displayName || lead.name).trim(),
       email: lead.email.toLowerCase().trim(),
@@ -152,7 +152,19 @@ export async function convertToStudent(req, res) {
       notes: notes || lead.message || '',
       status: 'active',
       userId: user._id,
-    })
+    }
+
+    if (familyId) {
+      studentData.familyId = familyId
+    }
+
+    const student = await Student.create(studentData)
+
+    // If family is linked, add student to family members array
+    if (familyId) {
+      const Family = (await import('../models/Family.js')).default
+      await Family.findByIdAndUpdate(familyId, { $addToSet: { members: student._id } })
+    }
 
     // Link user to student
     user.linkedStudentId = student._id

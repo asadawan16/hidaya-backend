@@ -51,6 +51,9 @@ export const PERMISSIONS = {
   notice: ['notice.read', 'notice.create', 'notice.manage'],
   complaint: ['complaint.read', 'complaint.create'],
 
+  // Certificates
+  certificate: ['certificate.read', 'certificate.submit', 'certificate.approve'],
+
   // Reports
   report: ['report.read', 'report.generate'],
 
@@ -75,8 +78,26 @@ export const PERMISSIONS = {
   // MFA management
   mfa: ['mfa.enroll', 'mfa.revoke'],
 
+  // Family management
+  family: ['family.read', 'family.create', 'family.update', 'family.delete'],
+
   // WhatsApp reminders
   whatsapp: ['whatsapp.send'],
+
+  // Expense management
+  expense: ['expense.read', 'expense.manage'],
+
+  // Badges
+  badge: ['badge.read', 'badge.submit', 'badge.approve'],
+
+  // Awards
+  award: ['award.read', 'award.manage'],
+
+  // Advances / loans
+  advance: ['advance.read', 'advance.manage'],
+
+  // Leave management
+  leave: ['leave.read', 'leave.request', 'leave.review'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
@@ -96,6 +117,13 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'report.read', 'report.generate',
     'liveboard.view', 'chat.use',
     'schedule.read',
+    'finance.read', 'finance.manage',
+    'family.read',
+    'expense.read',
+    'award.read',
+    'advance.read',
+    'badge.read', 'badge.approve',
+    'leave.read', 'leave.review',
   ],
 
   coordinator: [
@@ -110,6 +138,13 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'report.read', 'report.generate',
     'liveboard.view', 'chat.use',
     'whatsapp.send',
+    'finance.read',
+    'family.read', 'family.create', 'family.update',
+    'expense.read',
+    'award.read',
+    'badge.read',
+    'advance.read',
+    'leave.read', 'leave.review',
   ],
 
   qci: [
@@ -119,7 +154,10 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'notice.read', 'notice.create',
     'complaint.read', 'complaint.create',
     'report.read',
+    'certificate.read', 'certificate.approve',
+    'badge.read', 'badge.approve',
     'chat.use',
+    'leave.read', 'leave.review',
   ],
 
   qcm: [
@@ -128,6 +166,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'assessment.read',
     'notice.read',
     'complaint.read',
+    'badge.read', 'badge.approve',
     'report.read',
     'chat.use',
   ],
@@ -140,13 +179,20 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'notice.read',
     'complaint.read',
     'report.read',
+    'certificate.read', 'certificate.submit',
+    'badge.read', 'badge.submit',
     'chat.use',
     'whatsapp.send',
+    'award.read',
+    'advance.read',
+    'leave.read', 'leave.request',
   ],
 
   student: [
     'schedule.read',
     'lesson.read',
     'assessment.read',
+    'certificate.read',
+    'badge.read',
   ],
 }

@@ -39,6 +39,8 @@ import Notice from './models/Notice.js'
 import Complaint from './models/Complaint.js'
 import Invoice from './models/Invoice.js'
 import SalaryRecord from './models/SalaryRecord.js'
+import SalaryIncrement from './models/SalaryIncrement.js'
+import Certificate from './models/Certificate.js'
 import ChatThread from './models/ChatThread.js'
 import Message from './models/Message.js'
 import Notification from './models/Notification.js'
@@ -111,7 +113,8 @@ async function seed() {
       TutorAttendance.deleteMany({}), LessonEntry.deleteMany({}), PermanentLesson.deleteMany({}),
       CurriculumItem.deleteMany({}), Assignment.deleteMany({}), AssessmentTemplate.deleteMany({}),
       Assessment.deleteMany({}), Notice.deleteMany({}), Complaint.deleteMany({}),
-      Invoice.deleteMany({}), SalaryRecord.deleteMany({}), ChatThread.deleteMany({}),
+      Invoice.deleteMany({}), SalaryRecord.deleteMany({}), SalaryIncrement.deleteMany({}),
+      Certificate.deleteMany({}), ChatThread.deleteMany({}),
       Message.deleteMany({}), Notification.deleteMany({}), Role.deleteMany({}),
     ])
     console.log('   All portal collections cleared.\n')
@@ -633,14 +636,23 @@ async function seed() {
     'System maintenance on Sunday 2am-4am — portal may be unavailable',
     'Congratulations to the Hifz batch on completing Para 15!',
   ]
+  const noticeCategories = ['permanent', 'urgent', 'temporary', 'information', 'student_specific', 'information', 'urgent', 'permanent']
   for (let i = 0; i < noticeMsgs.length; i++) {
+    const cat = noticeCategories[i]
+    const isUrgent = cat === 'urgent'
     await Notice.create({
       type: i < 5 ? 'teacher' : 'student',
+      category: cat,
       targetTutorId: i < 5 ? tutors[i % tutors.length]._id : undefined,
-      targetStudentId: i >= 5 ? students[i % students.length]._id : undefined,
+      targetStudentId: i >= 5 && cat !== 'student_specific' ? students[i % students.length]._id : undefined,
+      targetStudentIds: cat === 'student_specific' ? [students[0]._id, students[1]._id, students[2]._id] : [],
       message: noticeMsgs[i],
-      severity: i === 2 ? 'warning' : i === 6 ? 'urgent' : 'info',
-      active: i < 6,
+      severity: isUrgent ? 'urgent' : i === 2 ? 'warning' : 'info',
+      requiresAcknowledgment: isUrgent,
+      acknowledgedBy: isUrgent && i === 6 ? [{ userId: tutorUsers[0]._id, acknowledgedAt: daysAgo(1) }] : [],
+      autoDisableAt: cat === 'temporary' ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : undefined,
+      classTime: cat === 'information' ? '17:00' : undefined,
+      active: i < 7,
       createdBy: coord1._id,
       createdAt: daysAgo(randomBetween(0, 30)),
     })
@@ -732,6 +744,125 @@ async function seed() {
     }
   }
   console.log(`   ${salaryCount} salary records created`)
+
+  // ──────────────────────────────────────
+  // 16b. SALARY INCREMENTS
+  // ──────────────────────────────────────
+  console.log('\n16b. Seeding Salary Increments...')
+  let incCount = 0
+  for (const tutor of tutors.filter(t => t.status === 'active').slice(0, 6)) {
+    const base = tutor.salary.baseAmount
+    // Simulate 2-3 historical increments per tutor
+    let currentAmount = Math.round(base * 0.7) // start lower
+    const numIncs = randomBetween(2, 3)
+    for (let j = 0; j < numIncs; j++) {
+      const prevAmount = currentAmount
+      const incPct = randomBetween(5, 20)
+      currentAmount = Math.round(prevAmount * (1 + incPct / 100))
+      if (j === numIncs - 1) currentAmount = base // final increment matches current base
+
+      await SalaryIncrement.create({
+        tutorId: tutor._id,
+        previousAmount: prevAmount,
+        newAmount: currentAmount,
+        incrementAmount: currentAmount - prevAmount,
+        incrementPercentage: Math.round(((currentAmount - prevAmount) / prevAmount) * 10000) / 100,
+        currency: tutor.salary.currency,
+        effectiveDate: monthsAgo((numIncs - j) * 4),
+        reason: randomFrom([
+          'Annual performance review',
+          'Promotion to senior tutor',
+          'Salary adjustment for inflation',
+          'Merit-based increment',
+          'Completion of 1 year',
+          'Positive student feedback',
+        ]),
+        approvedBy: adminUser._id,
+      })
+      incCount++
+    }
+  }
+  console.log(`   ${incCount} salary increments created`)
+
+  // ──────────────────────────────────────
+  // 16c. CERTIFICATES
+  // ──────────────────────────────────────
+  console.log('\n16c. Seeding Certificates...')
+  const certTypes = ['qaida_completion', 'para_completion', 'course_completion', 'tajweed_completion', 'assessment_excellence', 'attendance_excellence', 'hifz_completion', 'custom']
+  const certTitles = {
+    qaida_completion: 'Certificate of Qaida Completion',
+    para_completion: 'Certificate of Para Completion',
+    course_completion: 'Certificate of Course Completion',
+    tajweed_completion: 'Certificate of Tajweed Mastery',
+    assessment_excellence: 'Certificate of Academic Excellence',
+    attendance_excellence: 'Certificate of Outstanding Attendance',
+    hifz_completion: 'Certificate of Hifz Achievement',
+    custom: 'Special Recognition Certificate',
+  }
+  const certDetails = {
+    qaida_completion: 'Has successfully completed the entire Noorani Qaida with excellent recitation skills.',
+    para_completion: 'Has successfully completed recitation of the assigned Para with proper Tajweed.',
+    course_completion: 'Has demonstrated exceptional dedication in completing the assigned course curriculum.',
+    tajweed_completion: 'Has mastered the rules of Tajweed and applied them consistently in Quran recitation.',
+    assessment_excellence: 'Has achieved outstanding results in the monthly assessment with a score above 90%.',
+    attendance_excellence: 'Has maintained 95%+ attendance throughout the semester. Exemplary commitment!',
+    hifz_completion: 'Has memorized and revised the assigned portions of the Holy Quran with accuracy.',
+    custom: 'In recognition of outstanding contribution to the Hidaya Online learning community.',
+  }
+  const designs = ['classic', 'modern', 'ornate', 'minimal']
+  let certCount = 0
+  for (let i = 0; i < 20; i++) {
+    const st = activeStudents[i % activeStudents.length]
+    const type = certTypes[i % certTypes.length]
+    await Certificate.create({
+      studentId: st._id,
+      type,
+      title: certTitles[type],
+      details: certDetails[type],
+      templateDesign: designs[i % designs.length],
+      issuedDate: daysAgo(randomBetween(1, 120)),
+      issuedBy: randomFrom([adminUser._id, principal._id, qci._id]),
+      meta: {
+        trackCompleted: type.includes('qaida') ? 'qaida' : type.includes('hifz') ? 'hifz' : type.includes('tajweed') ? 'tajweed' : 'quran',
+        assessmentScore: type === 'assessment_excellence' ? randomBetween(90, 100) : undefined,
+      },
+    })
+    certCount++
+  }
+  console.log(`   ${certCount} certificates created`)
+
+  // ──────────────────────────────────────
+  // 16d. ADMIN NOTES ON STUDENTS
+  // ──────────────────────────────────────
+  console.log('\n16d. Seeding Admin Notes on Students...')
+  const adminNoteTexts = [
+    'Student shows excellent progress in Tajweed. Consider advancing to next level.',
+    'Parent requested schedule change to evening slot — pending confirmation.',
+    'Had behavioral issue during class on June 5. Counseling session scheduled.',
+    'Consistently late to classes. WhatsApp reminder sent to parent.',
+    'Top performer in monthly assessment. Consider for excellence certificate.',
+    'Family moving to new city next month — may need timezone adjustment.',
+    'Fee payment overdue for 2 months. Follow up with father.',
+    'Student expressed interest in starting Hifz track.',
+    'Absent for 2 weeks due to health issues. Doctor note received.',
+    'Recommended by QCI for special recognition.',
+  ]
+  let noteCount = 0
+  for (let i = 0; i < 15; i++) {
+    const st = students[i]
+    const numNotes = randomBetween(1, 3)
+    const notes = []
+    for (let n = 0; n < numNotes; n++) {
+      notes.push({
+        text: adminNoteTexts[(i * 3 + n) % adminNoteTexts.length],
+        createdBy: randomFrom([adminUser._id, coord1._id, coord2._id, principal._id]),
+        createdAt: daysAgo(randomBetween(1, 60)),
+      })
+      noteCount++
+    }
+    await Student.updateOne({ _id: st._id }, { $set: { adminNotes: notes } })
+  }
+  console.log(`   ${noteCount} admin notes added to students`)
 
   // ──────────────────────────────────────
   // 17. CHAT THREADS & MESSAGES
@@ -883,6 +1014,8 @@ async function seed() {
     `- **${sessions.length}** class sessions`,
     `- **${lessonCount}** lesson entries`,
     `- **${savedCurric.length}** curriculum items`,
+    `- **${incCount}** salary increments`,
+    `- **${certCount}** certificates`,
     '',
   ]
 
@@ -913,6 +1046,8 @@ async function seed() {
   console.log(`  Complaints:        ${await Complaint.countDocuments()}`)
   console.log(`  Invoices:          ${await Invoice.countDocuments()}`)
   console.log(`  Salary Records:    ${await SalaryRecord.countDocuments()}`)
+  console.log(`  Salary Increments: ${await SalaryIncrement.countDocuments()}`)
+  console.log(`  Certificates:      ${await Certificate.countDocuments()}`)
   console.log(`  Chat Threads:      ${await ChatThread.countDocuments()}`)
   console.log(`  Messages:          ${await Message.countDocuments()}`)
   console.log(`  Notifications:     ${await Notification.countDocuments()}`)

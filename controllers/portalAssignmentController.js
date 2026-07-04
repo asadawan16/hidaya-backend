@@ -30,7 +30,7 @@ export async function listAssignments(req, res) {
 
 export async function createAssignment(req, res) {
   try {
-    const { studentId, tutorId, track, reason } = req.body
+    const { studentId, tutorId, track, reason, type, endDate: tempEndDate } = req.body
     if (!studentId || !tutorId || !track) {
       return res.status(400).json({ error: 'studentId, tutorId, and track are required' })
     }
@@ -41,28 +41,46 @@ export async function createAssignment(req, res) {
     const tutor = await TutorProfile.findById(tutorId)
     if (!tutor) return res.status(404).json({ error: 'Tutor not found' })
 
-    // Close any current assignment for this student+track
-    await Assignment.updateMany(
-      { studentId, track, endDate: null },
-      { endDate: new Date() }
-    )
+    const assignmentType = type || 'permanent'
+    let replacesId = null
+
+    if (assignmentType === 'temporary') {
+      // Temporary: don't close the permanent assignment, just add a temporary one alongside
+      // Find the current permanent assignment to reference
+      const currentPermanent = await Assignment.findOne({ studentId, track, endDate: null, type: 'permanent' })
+      if (currentPermanent) replacesId = currentPermanent._id
+
+      if (!tempEndDate) {
+        return res.status(400).json({ error: 'endDate is required for temporary assignments' })
+      }
+    } else {
+      // Permanent: close any current assignment (permanent or temporary) for this student+track
+      await Assignment.updateMany(
+        { studentId, track, endDate: null },
+        { endDate: new Date(), reason: reason ? `Replaced: ${reason}` : 'Replaced by new tutor' }
+      )
+    }
 
     const assignment = await Assignment.create({
       studentId,
       tutorId,
       track,
+      type: assignmentType,
       startDate: new Date(),
+      endDate: assignmentType === 'temporary' && tempEndDate ? new Date(tempEndDate) : null,
       reason: reason || '',
+      replacesAssignmentId: replacesId || undefined,
       assignedBy: req.userId,
     })
 
+    const actionLabel = assignmentType === 'temporary' ? 'temporarily assigned' : 'assigned'
     await logActivity({
       level: 'info',
       category: 'assignment',
       action: 'assignment_created',
-      message: `${student.rollNo} assigned to ${tutor.tutorId} for ${track}`,
+      message: `${student.rollNo} ${actionLabel} to ${tutor.tutorId} for ${track}`,
       req,
-      meta: { assignmentId: assignment._id },
+      meta: { assignmentId: assignment._id, type: assignmentType },
     })
 
     const populated = await Assignment.findById(assignment._id)

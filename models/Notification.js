@@ -8,7 +8,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['assignment', 'admission', 'lesson_approved', 'lesson_rejected', 'class_start', 'notice', 'complaint', 'chat', 'system'],
+    enum: ['assignment', 'admission', 'lesson_approved', 'lesson_rejected', 'class_start', 'notice', 'complaint', 'chat', 'system', 'certificate_issued', 'employee_of_month', 'salary_paid', 'advance_created', 'leave_request', 'leave_approved', 'leave_rejected', 'badge_awarded'],
     required: true,
   },
   title: { type: String, required: true, trim: true },

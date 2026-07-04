@@ -150,3 +150,42 @@ export async function getAssessment(req, res) {
     res.status(500).json({ error: 'Server error' })
   }
 }
+
+export async function getReportCard(req, res) {
+  try {
+    const assessment = await Assessment.findById(req.params.id)
+      .populate('studentId', 'name rollNo')
+      .populate('templateId')
+      .populate('testTeacherId', 'name tutorId')
+      .populate('regularTeacherId', 'name tutorId')
+      .populate('conductedBy', 'displayName')
+      .lean()
+
+    if (!assessment) return res.status(404).json({ error: 'Assessment not found' })
+
+    // Map responses back to template fields for structured display
+    const sections = (assessment.templateId?.sections || []).map(section => ({
+      key: section.key,
+      label: section.label,
+      fields: section.fields.map(field => {
+        const response = assessment.responses.find(r => r.key === `${section.key}.${field.key}` || r.key === field.key)
+        return {
+          key: field.key,
+          label: field.label,
+          type: field.type,
+          options: field.options,
+          value: response?.value ?? '',
+          score: response?.score ?? null,
+        }
+      }),
+    }))
+
+    res.json({
+      ...assessment,
+      structuredSections: sections,
+    })
+  } catch (err) {
+    console.error('Get report card error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}

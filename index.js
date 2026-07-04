@@ -36,11 +36,21 @@ import portalAssessmentRoutes from './routes/portalAssessmentRoutes.js'
 import portalNoticeRoutes from './routes/portalNoticeRoutes.js'
 import portalFinanceRoutes from './routes/portalFinanceRoutes.js'
 import portalReportRoutes from './routes/portalReportRoutes.js'
+import portalFamilyRoutes from './routes/portalFamilyRoutes.js'
 import portalLeadsRoutes from './routes/portalLeadsRoutes.js'
 import portalDashboardRoutes from './routes/portalDashboardRoutes.js'
+import portalCertificateRoutes from './routes/portalCertificateRoutes.js'
+import portalPaymentRoutes from './routes/portalPaymentRoutes.js'
+import portalExpenseRoutes from './routes/portalExpenseRoutes.js'
+import portalEmployeeAwardRoutes from './routes/portalEmployeeAwardRoutes.js'
+import portalShiftConfigRoutes from './routes/portalShiftConfigRoutes.js'
+import portalAdvanceRoutes from './routes/portalAdvanceRoutes.js'
+import portalLeaveRoutes from './routes/portalLeaveRoutes.js'
+import portalBadgeRoutes from './routes/portalBadgeRoutes.js'
 import { initSocket } from './config/socket.js'
 import requestLogger from './middleware/requestLogger.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
+import { ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from './config/permissions.js'
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -51,6 +61,22 @@ app.set('trust proxy', 1)
 // Database
 await connectDB()
 
+// Auto-sync system role permissions on startup
+try {
+  const Role = (await import('./models/Role.js')).default
+  for (const key of Object.keys(DEFAULT_ROLE_PERMISSIONS)) {
+    const perms = DEFAULT_ROLE_PERMISSIONS[key]
+    const role = await Role.findOne({ key })
+    if (role && role.permissions.length !== perms.length) {
+      role.permissions = perms
+      await role.save()
+      console.log(`[sync] Updated ${key} role: ${perms.length} permissions`)
+    }
+  }
+} catch (err) {
+  console.error('Role permission sync error:', err.message)
+}
+
 // Security
 app.use(helmet())
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }))
@@ -59,14 +85,15 @@ app.use(express.json({ limit: '5mb' }))
 // Request logging (after body parsing, before routes)
 app.use(requestLogger)
 
-// Rate limiting
-app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }))
-app.use('/api/payments/initiate', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }))
-app.use('/api/enrollments', rateLimit({ windowMs: 15 * 60 * 1000, max: 30 }))
-app.use('/api/subscribers/subscribe', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }))
-app.use('/api/payment-links/t', rateLimit({ windowMs: 15 * 60 * 1000, max: 15 }))
-app.use('/api/discount-codes/validate', rateLimit({ windowMs: 15 * 60 * 1000, max: 30 }))
-app.use('/api/portal/auth', rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }))
+// Rate limiting (JSON responses for frontend compatibility)
+const rl = (max) => rateLimit({ windowMs: 15 * 60 * 1000, max, handler: (req, res) => res.status(429).json({ error: 'Too many requests. Please try again later.' }) })
+app.use('/api/auth', rl(100))
+app.use('/api/payments/initiate', rl(50))
+app.use('/api/enrollments', rl(100))
+app.use('/api/subscribers/subscribe', rl(50))
+app.use('/api/payment-links/t', rl(60))
+app.use('/api/discount-codes/validate', rl(100))
+app.use('/api/portal/auth', rl(100))
 
 // Routes
 app.use('/api/auth', authRoutes)
@@ -100,8 +127,17 @@ app.use('/api/portal/assessments', portalAssessmentRoutes)
 app.use('/api/portal/notices', portalNoticeRoutes)
 app.use('/api/portal/finance', portalFinanceRoutes)
 app.use('/api/portal/reports', portalReportRoutes)
+app.use('/api/portal/families', portalFamilyRoutes)
 app.use('/api/portal/leads', portalLeadsRoutes)
 app.use('/api/portal/dashboard', portalDashboardRoutes)
+app.use('/api/portal/certificates', portalCertificateRoutes)
+app.use('/api/portal/billing', portalPaymentRoutes)
+app.use('/api/portal/expenses', portalExpenseRoutes)
+app.use('/api/portal/awards', portalEmployeeAwardRoutes)
+app.use('/api/portal/shift-config', portalShiftConfigRoutes)
+app.use('/api/portal/advances', portalAdvanceRoutes)
+app.use('/api/portal/leaves', portalLeaveRoutes)
+app.use('/api/portal/badges', portalBadgeRoutes)
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))

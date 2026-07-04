@@ -16,13 +16,24 @@ const assignmentSchema = new mongoose.Schema({
     enum: ['nazra', 'hifz', 'tafseer', 'tajweed', 'translation', 'qaida'],
     required: true,
   },
+  type: {
+    type: String,
+    enum: ['permanent', 'temporary'],
+    default: 'permanent',
+  },
   startDate: { type: Date, default: Date.now },
   endDate: { type: Date, default: null },
   reason: { type: String, trim: true, default: '' },
+  replacesAssignmentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Assignment',
+  },
   assignedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
   },
+  approvalStatus: { type: String, enum: ['auto_approved', 'pending_approval', 'approved', 'rejected'], default: 'auto_approved' },
+  approvalNote: { type: String, trim: true, default: '' },
 }, { timestamps: true })
 
 // Current tutor = active assignment (endDate: null)

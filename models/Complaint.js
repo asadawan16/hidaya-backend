@@ -42,6 +42,17 @@ const complaintSchema = new mongoose.Schema({
   },
   resolvedAt: { type: Date },
   resolution: { type: String, trim: true, default: '' },
+  actionRequired: { type: String, trim: true, default: '' },
+  category: {
+    type: String,
+    enum: ['parent_complaint', 'admin_feedback', 'quality_issue', 'behavior', 'attendance', 'general'],
+    default: 'general',
+  },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high', 'urgent'],
+    default: 'medium',
+  },
 }, { timestamps: true })
 
 complaintSchema.index({ studentId: 1 })

@@ -1,34 +1,39 @@
 # Hidaya Portal — Client Demo Credentials
 
-> All accounts use password: `Demo@123`
-> Generated: 2026-06-17
+> Password for all accounts: `Demo@123`
+> Generated: 2026-06-26
 
-## Staff Accounts
+## Staff
 
 | Role | Email | Name |
 |------|-------|------|
-| Super Admin | superadmin@hidaya.com | Muhammad Owais |
-| Admin | admin@hidaya.com | Fatima Zahra |
-| Coordinator | coordinator@hidaya.com | Hira Malik |
-| QCI | qci@hidaya.com | Ustaz Imran Siddiqui |
+| super_admin | superadmin@hidaya.com | Muhammad Owais |
+| admin | admin@hidaya.com | Fatima Zahra |
+| principal | principal@hidaya.com | Ustaz Rashid Ahmed |
+| coordinator | coordinator@hidaya.com | Hira Malik |
+| qci | qci@hidaya.com | Ustaz Imran Siddiqui |
+| qcm | qcm@hidaya.com | Ustaza Rabia Sheikh |
 
-## Tutor Account
+## Tutors
 
-| Email | Name | Students |
-|-------|------|----------|
-| tutor@hidaya.com | Ustaz Hamza Ali | Ahmed, Maryam, Yusuf |
+| Email | Name |
+|-------|------|
+| tutor1@hidaya.com | Ustaz Hamza Hassan |
+| tutor2@hidaya.com | Ustaza Hafsa Malik |
+| tutor3@hidaya.com | Ustaz Bilal Ahmed |
+| tutor4@hidaya.com | Ustaza Maryam Khan |
 
-## Student Accounts
+## Students
 
-| Email | Name | Roll No | Course | Class Time (Today) |
-|-------|------|---------|--------|---------------------|
-| ahmed@hidaya.com | Ahmed Khan | HQ-0001 | Qaida | 10:00 PM |
-| maryam@hidaya.com | Maryam Ali | HQ-0002 | Nazra | 10:30 PM |
-| yusuf@hidaya.com | Yusuf Hassan | HQ-0003 | Hifz | 11:00 PM |
-
-## Demo Flow
-
-1. Login as **tutor@hidaya.com** → See 3 assigned students on Schedule page
-2. At 10:00 PM, start Ahmed's session → Complete it → Log lesson entry
-3. Login as **ahmed@hidaya.com** → My Classes shows today's session
-4. Login as **admin@hidaya.com** → Full dashboard with schedule overview
+| Email | Name |
+|-------|------|
+| student1@hidaya.com | Ahmed Khan |
+| student2@hidaya.com | Fatima Ali |
+| student3@hidaya.com | Yusuf Hassan |
+| student4@hidaya.com | Aisha Malik |
+| student5@hidaya.com | Ibrahim Sheikh |
+| student6@hidaya.com | Maryam Qureshi |
+| student7@hidaya.com | Omar Siddiqui |
+| student8@hidaya.com | Zainab Hussain |
+| student9@hidaya.com | Hassan Raza |
+| student10@hidaya.com | Sara Nawaz |

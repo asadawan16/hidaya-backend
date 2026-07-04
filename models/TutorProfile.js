@@ -49,6 +49,7 @@ const tutorProfileSchema = new mongoose.Schema({
     type: String,
     enum: ['nazra', 'hifz', 'tafseer', 'tajweed', 'translation', 'qaida'],
   }],
+  maxStudents: { type: Number, default: 15 },
   notes: { type: String, trim: true, default: '' },
 }, { timestamps: true })
 

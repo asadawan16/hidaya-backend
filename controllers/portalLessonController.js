@@ -1,6 +1,7 @@
 import mongoose from 'mongoose'
 import LessonEntry from '../models/LessonEntry.js'
 import PermanentLesson from '../models/PermanentLesson.js'
+import CurriculumItem from '../models/CurriculumItem.js'
 import { logActivity } from '../utils/activityLogger.js'
 
 // ─── Daily Lesson Entries ───
@@ -271,7 +272,13 @@ export async function rejectPermanentLesson(req, res) {
 export async function getStudentProgress(req, res) {
   try {
     const { studentId } = req.params
-    const approved = await PermanentLesson.find({ studentId, status: 'approved' })
+    const { dateFrom, dateTo } = req.query
+    const dateFilter = {}
+    if (dateFrom) dateFilter.$gte = new Date(dateFrom)
+    if (dateTo) dateFilter.$lte = new Date(dateTo)
+    const hasDateFilter = Object.keys(dateFilter).length > 0
+
+    const approved = await PermanentLesson.find({ studentId, status: 'approved', ...(hasDateFilter ? { completedDate: dateFilter } : {}) })
       .populate('curriculumItemId', 'label track type order meta')
       .populate('tutorId', 'name tutorId')
       .sort({ completedDate: 1 })
@@ -289,6 +296,62 @@ export async function getStudentProgress(req, res) {
     res.json({ total: approved.length, byTrack, lessons: approved })
   } catch (err) {
     console.error('Get student progress error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function getStudentCurriculumView(req, res) {
+  try {
+    const { studentId } = req.params
+
+    const [allItems, approved] = await Promise.all([
+      CurriculumItem.find({ active: { $ne: false } })
+        .select('track type label order parentId meta')
+        .sort({ track: 1, order: 1 })
+        .lean(),
+      PermanentLesson.find({ studentId, status: 'approved' })
+        .populate('tutorId', 'name tutorId')
+        .select('curriculumItemId completedDate tutorId notes')
+        .lean(),
+    ])
+
+    // Build a completed items map
+    const completedMap = {}
+    for (const pl of approved) {
+      const key = pl.curriculumItemId?.toString()
+      if (key) {
+        completedMap[key] = {
+          completed: true,
+          completedDate: pl.completedDate,
+          tutorName: pl.tutorId?.name,
+          notes: pl.notes,
+        }
+      }
+    }
+
+    // Group by track
+    const trackMap = {}
+    for (const item of allItems) {
+      if (!trackMap[item.track]) trackMap[item.track] = { track: item.track, items: [], completedCount: 0, totalCount: 0 }
+      const entry = {
+        _id: item._id,
+        label: item.label,
+        type: item.type,
+        order: item.order,
+        meta: item.meta,
+        completed: !!completedMap[item._id.toString()],
+        completedDate: completedMap[item._id.toString()]?.completedDate,
+        tutorName: completedMap[item._id.toString()]?.tutorName,
+      }
+      trackMap[item.track].items.push(entry)
+      trackMap[item.track].totalCount++
+      if (entry.completed) trackMap[item.track].completedCount++
+    }
+
+    const tracks = Object.values(trackMap)
+    res.json({ tracks, totalCompleted: approved.length, totalItems: allItems.length })
+  } catch (err) {
+    console.error('Student curriculum view error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

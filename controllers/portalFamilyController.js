@@ -1,0 +1,267 @@
+import Family from '../models/Family.js'
+import Student from '../models/Student.js'
+import StudentRelationship from '../models/StudentRelationship.js'
+import { logActivity } from '../utils/activityLogger.js'
+
+// Generate next family code: FAM001, FAM002, ...
+async function generateFamilyCode() {
+  const last = await Family.findOne({ familyCode: { $regex: /^FAM\d+$/ } })
+    .sort({ familyCode: -1 })
+    .select('familyCode')
+    .lean()
+
+  if (!last) return 'FAM001'
+  const num = parseInt(last.familyCode.replace('FAM', ''), 10) + 1
+  return `FAM${String(num).padStart(3, '0')}`
+}
+
+// ─── List families ───
+export async function listFamilies(req, res) {
+  try {
+    const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
+    const { search } = req.query
+
+    const filter = {}
+
+    if (search) {
+      const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      filter.$or = [
+        { familyCode: regex },
+        { 'primaryGuardian.name': regex },
+        { 'primaryGuardian.phone': regex },
+        { 'primaryGuardian.email': regex },
+      ]
+    }
+
+    const total = await Family.countDocuments(filter)
+    const pages = Math.ceil(total / lim) || 1
+    const safePage = Math.min(pg, pages)
+
+    const records = await Family.find(filter)
+      .populate('members', 'name rollNo status courseLabels')
+      .sort({ createdAt: -1 })
+      .skip((safePage - 1) * lim)
+      .limit(lim)
+      .lean()
+
+    res.json({ records, total, page: safePage, pages })
+  } catch (err) {
+    console.error('List families error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Get single family ───
+export async function getFamily(req, res) {
+  try {
+    const family = await Family.findById(req.params.id)
+      .populate('members', 'name rollNo status courseLabels country guardians whatsappNumber billing createdAt dob timezone placementLevel sect')
+      .lean()
+
+    if (!family) return res.status(404).json({ error: 'Family not found' })
+
+    // Fetch inter-student relationships for family members
+    const memberIds = family.members.map(m => m._id)
+    const relationships = memberIds.length > 0
+      ? await StudentRelationship.find({
+          $or: [
+            { studentA: { $in: memberIds } },
+            { studentB: { $in: memberIds } },
+          ],
+        }).populate('studentA', 'name').populate('studentB', 'name').lean()
+      : []
+
+    family.relationships = relationships
+
+    res.json(family)
+  } catch (err) {
+    console.error('Get family error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Create family ───
+export async function createFamily(req, res) {
+  try {
+    const { primaryGuardian, notes, memberIds } = req.body
+
+    const familyCode = await generateFamilyCode()
+
+    const family = await Family.create({
+      familyCode,
+      primaryGuardian: primaryGuardian || {},
+      members: memberIds || [],
+      notes: notes || '',
+    })
+
+    // Set familyId on all member students
+    if (memberIds?.length) {
+      await Student.updateMany(
+        { _id: { $in: memberIds } },
+        { familyId: family._id },
+      )
+    }
+
+    await logActivity({
+      level: 'info',
+      category: 'family_management',
+      action: 'family_created',
+      message: `Family created: ${familyCode}`,
+      req,
+      meta: { familyId: family._id },
+    })
+
+    // Return populated
+    const populated = await Family.findById(family._id)
+      .populate('members', 'name rollNo status courseLabels')
+      .lean()
+
+    res.status(201).json(populated)
+  } catch (err) {
+    console.error('Create family error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Update family ───
+export async function updateFamily(req, res) {
+  try {
+    const family = await Family.findById(req.params.id)
+    if (!family) return res.status(404).json({ error: 'Family not found' })
+
+    const { primaryGuardian, notes, memberIds } = req.body
+
+    if (primaryGuardian !== undefined) family.primaryGuardian = primaryGuardian
+    if (notes !== undefined) family.notes = notes
+
+    // Handle member changes
+    if (memberIds !== undefined) {
+      const oldMemberIds = family.members.map(m => m.toString())
+      const newMemberIds = memberIds.map(String)
+
+      // Remove familyId from students no longer in this family
+      const removed = oldMemberIds.filter(id => !newMemberIds.includes(id))
+      if (removed.length) {
+        await Student.updateMany(
+          { _id: { $in: removed }, familyId: family._id },
+          { $unset: { familyId: 1 } },
+        )
+      }
+
+      // Set familyId on new members
+      const added = newMemberIds.filter(id => !oldMemberIds.includes(id))
+      if (added.length) {
+        await Student.updateMany(
+          { _id: { $in: added } },
+          { familyId: family._id },
+        )
+      }
+
+      family.members = memberIds
+    }
+
+    await family.save()
+
+    await logActivity({
+      level: 'info',
+      category: 'family_management',
+      action: 'family_updated',
+      message: `Family updated: ${family.familyCode}`,
+      req,
+      meta: { familyId: family._id },
+    })
+
+    const populated = await Family.findById(family._id)
+      .populate('members', 'name rollNo status courseLabels')
+      .lean()
+
+    res.json(populated)
+  } catch (err) {
+    console.error('Update family error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Delete family ───
+export async function deleteFamily(req, res) {
+  try {
+    const family = await Family.findById(req.params.id)
+    if (!family) return res.status(404).json({ error: 'Family not found' })
+
+    // Unset familyId from all member students
+    await Student.updateMany(
+      { familyId: family._id },
+      { $unset: { familyId: 1 } },
+    )
+
+    await Family.findByIdAndDelete(req.params.id)
+
+    await logActivity({
+      level: 'warning',
+      category: 'family_management',
+      action: 'family_deleted',
+      message: `Family deleted: ${family.familyCode}`,
+      req,
+      meta: { familyId: family._id },
+    })
+
+    res.json({ message: 'Family deleted' })
+  } catch (err) {
+    console.error('Delete family error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Family stats ───
+export async function getFamilyStats(req, res) {
+  try {
+    const [total, withMembers] = await Promise.all([
+      Family.countDocuments(),
+      Family.countDocuments({ 'members.0': { $exists: true } }),
+    ])
+
+    const memberStats = await Family.aggregate([
+      { $project: { memberCount: { $size: '$members' } } },
+      { $group: { _id: null, totalMembers: { $sum: '$memberCount' }, avgMembers: { $avg: '$memberCount' } } },
+    ])
+
+    res.json({
+      total,
+      withMembers,
+      empty: total - withMembers,
+      totalMembers: memberStats[0]?.totalMembers || 0,
+      avgMembers: Math.round((memberStats[0]?.avgMembers || 0) * 10) / 10,
+    })
+  } catch (err) {
+    console.error('Family stats error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Search families (for dropdowns) ───
+export async function searchFamilies(req, res) {
+  try {
+    const { q } = req.query
+    const filter = {}
+
+    if (q) {
+      const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      filter.$or = [
+        { familyCode: regex },
+        { 'primaryGuardian.name': regex },
+      ]
+    }
+
+    const families = await Family.find(filter)
+      .populate('members', 'name rollNo')
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean()
+
+    res.json(families)
+  } catch (err) {
+    console.error('Search families error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}

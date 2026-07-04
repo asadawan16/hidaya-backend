@@ -49,6 +49,35 @@ export async function markRead(req, res) {
   }
 }
 
+export async function deleteNotifications(req, res) {
+  try {
+    const { ids } = req.body
+    if (ids && Array.isArray(ids) && ids.length > 0) {
+      await Notification.deleteMany({ _id: { $in: ids }, userId: req.userId })
+    }
+    res.json({ message: 'Deleted' })
+  } catch (err) {
+    console.error('Delete notifications error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function markUnread(req, res) {
+  try {
+    const { ids } = req.body
+    if (ids && Array.isArray(ids)) {
+      await Notification.updateMany(
+        { _id: { $in: ids }, userId: req.userId },
+        { readAt: null }
+      )
+    }
+    res.json({ message: 'Marked as unread' })
+  } catch (err) {
+    console.error('Mark unread error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // Helper to create and push a notification
 export async function createNotification({ userId, type, title, body, payload }) {
   const notif = await Notification.create({ userId, type, title, body, payload })

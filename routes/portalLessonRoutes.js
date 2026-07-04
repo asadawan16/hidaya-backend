@@ -4,7 +4,7 @@ import {
   listLessons, createLesson, getLesson,
   listPermanentLessons, submitPermanentLesson,
   approvePermanentLesson, rejectPermanentLesson,
-  getStudentProgress,
+  getStudentProgress, getStudentCurriculumView,
 } from '../controllers/portalLessonController.js'
 
 const router = Router()
@@ -22,6 +22,7 @@ router.post('/permanent/:id/reject', requirePermission('lesson.approve'), reject
 
 // Student progress
 router.get('/progress/:studentId', requirePermission('lesson.read'), getStudentProgress)
+router.get('/curriculum-view/:studentId', requirePermission('lesson.read'), getStudentCurriculumView)
 
 // Single lesson by ID — AFTER all specific routes
 router.get('/:id', requirePermission('lesson.read'), getLesson)

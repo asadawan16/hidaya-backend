@@ -95,6 +95,8 @@ export async function checkOut(req, res) {
     record.checkOutAt = new Date()
     const diffMs = record.checkOutAt - record.checkInAt
     record.totalHours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100
+    if (req.body.isOvertime) record.isOvertime = true
+    if (req.body.overtimeReason) record.overtimeReason = req.body.overtimeReason
     await record.save()
 
     await logActivity({
@@ -109,6 +111,44 @@ export async function checkOut(req, res) {
     res.json(record)
   } catch (err) {
     console.error('Check out error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function markAbsent(req, res) {
+  try {
+    const { tutorId, date, notes } = req.body
+    if (!tutorId || !date) return res.status(400).json({ error: 'tutorId and date are required' })
+
+    const d = new Date(date)
+    d.setHours(0, 0, 0, 0)
+
+    let record = await TutorAttendance.findOne({ tutorId, date: d })
+    if (record && record.status === 'present') {
+      return res.status(400).json({ error: 'Tutor is already marked present for this date' })
+    }
+
+    if (!record) {
+      record = await TutorAttendance.create({
+        tutorId, date: d, status: 'absent',
+        notes: notes || 'Marked absent by admin',
+      })
+    } else {
+      record.status = 'absent'
+      record.notes = notes || 'Marked absent by admin'
+      await record.save()
+    }
+
+    await logActivity({
+      level: 'info', category: 'attendance', action: 'tutor_marked_absent',
+      message: `Tutor ${tutorId} marked absent for ${d.toDateString()}`,
+      req,
+      meta: { tutorId, date: d },
+    })
+
+    res.json(record)
+  } catch (err) {
+    console.error('Mark absent error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
