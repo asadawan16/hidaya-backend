@@ -185,6 +185,62 @@ const sourceStyle = {
 /* ═══════════════════════════════════════════════════════
    ADMIN — ENROLLMENT NOTIFICATION
    ═══════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   USER — ADMISSION DECISION (approved / rejected)
+   ═══════════════════════════════════════════════════════ */
+export function admissionDecisionEmail({ studentName, approved, rollNo, reviewNotes }) {
+  const headline = approved ? 'Admission Approved!' : 'Admission Update'
+  const badge = approved
+    ? '<span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#ECFDF5;color:#059669;text-transform:uppercase">Approved</span>'
+    : '<span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#FEF2F2;color:#DC2626;text-transform:uppercase">Not Approved</span>'
+  const lead = approved
+    ? `Assalamu Alaikum! We are delighted to let you know that the admission application for <b style="color:#0C3B2E">${studentName}</b> has been approved. Welcome to the Hidaya Online family!`
+    : `Assalamu Alaikum. Thank you for applying to Hidaya Online. After careful review, we are unable to approve the admission application for <b style="color:#0C3B2E">${studentName}</b> at this time.`
+
+  const content = `
+    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="padding:32px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td>${badge}</td>
+        <td align="right"><span style="font-size:11px;color:#8AA89C;font-family:SFMono-Regular,Menlo,monospace">${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span></td>
+      </tr></table>
+    </td></tr>
+    <tr><td style="padding:20px 36px 4px">
+      <h1 style="margin:0;font-size:24px;font-weight:700;color:#0C3B2E">${headline}</h1>
+      <p style="margin:10px 0 0;font-size:14px;line-height:1.7;color:#4B6357">${lead}</p>
+    </td></tr>
+    ${approved && rollNo ? `
+    <tr><td style="padding:22px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5FAF7;border:1px solid #DBEDE3;border-radius:12px">
+        <tr><td style="padding:16px 20px">
+          <span style="font-size:11px;font-weight:700;letter-spacing:1px;color:#6B8F7F;text-transform:uppercase">Student Roll Number</span><br>
+          <span style="font-size:20px;font-weight:700;color:#0C3B2E;font-family:SFMono-Regular,Menlo,monospace">${rollNo}</span>
+        </td></tr>
+      </table>
+      <p style="margin:14px 0 0;font-size:13px;line-height:1.7;color:#4B6357">Our team will reach out shortly with class schedule details and next steps. Please keep this roll number for your records.</p>
+    </td></tr>` : ''}
+    ${!approved && reviewNotes ? `
+    <tr><td style="padding:22px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px">
+        <tr><td style="padding:16px 20px">
+          <span style="font-size:11px;font-weight:700;letter-spacing:1px;color:#92400E;text-transform:uppercase">Note from our team</span><br>
+          <span style="font-size:13px;line-height:1.7;color:#4B6357">${reviewNotes}</span>
+        </td></tr>
+      </table>
+      <p style="margin:14px 0 0;font-size:13px;line-height:1.7;color:#4B6357">You are welcome to apply again or contact us if you have any questions — we would be glad to help.</p>
+    </td></tr>` : ''}
+    <tr><td style="padding:26px 36px 36px" align="center">
+      <a href="https://hidaya.online" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 12px rgba(12,59,46,0.25)">Visit Hidaya Online</a>
+    </td></tr>`
+
+  return {
+    subject: approved
+      ? `🎓 Admission Approved — Welcome to Hidaya Online, ${studentName}!`
+      : `Admission Update — ${studentName}`,
+    html: userLayout(content),
+  }
+}
+
 export function enrollmentEmail(data) {
   const src = sourceStyle[data.source] || sourceStyle.enrollment
   const isContact = data.source === 'contact'

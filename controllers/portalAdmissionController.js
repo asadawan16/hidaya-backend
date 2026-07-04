@@ -5,6 +5,24 @@ import StudentRelationship from '../models/StudentRelationship.js'
 import StudentStatusHistory from '../models/StudentStatusHistory.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { notifyRoles } from './portalNotificationController.js'
+import { sendToUser, admissionDecisionEmail } from '../services/mailer.js'
+
+/** Email the primary guardian about an admission decision — never throws. */
+async function emailAdmissionDecision(admission, { approved, rollNo }) {
+  try {
+    const to = admission.guardians?.find(g => g.email)?.email
+    if (!to) return
+    const { subject, html } = admissionDecisionEmail({
+      studentName: admission.studentName,
+      approved,
+      rollNo,
+      reviewNotes: approved ? '' : (admission.reviewNotes || ''),
+    })
+    await sendToUser({ to, subject, html })
+  } catch (e) {
+    console.error('Admission decision email failed:', e.message)
+  }
+}
 
 // Generate next roll number
 async function generateRollNo() {
@@ -218,6 +236,8 @@ export async function approveAdmission(req, res) {
       meta: { admissionId: admission._id, studentId: student._id },
     })
 
+    await emailAdmissionDecision(admission, { approved: true, rollNo: finalRollNo })
+
     res.json({ message: 'Admission approved', student, admission })
   } catch (err) {
     console.error('Approve admission error:', err)
@@ -248,6 +268,8 @@ export async function rejectAdmission(req, res) {
       req,
       meta: { admissionId: admission._id },
     })
+
+    await emailAdmissionDecision(admission, { approved: false })
 
     res.json({ message: 'Admission rejected', admission })
   } catch (err) {
