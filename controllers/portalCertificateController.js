@@ -3,6 +3,7 @@ import Student from '../models/Student.js'
 import Notification from '../models/Notification.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { emitToUser } from '../config/socket.js'
+import { createNotification, notifyRoles } from './portalNotificationController.js'
 
 const POPULATE = [
   { path: 'studentId', select: 'name rollNo country' },
@@ -101,9 +102,23 @@ export async function createCertificate(req, res) {
       req,
     })
 
-    // Live-push to the student when issued directly as approved
+    // Notify: student when issued directly, approvers when pending review
     if (canApprove && student.userId) {
+      await createNotification({
+        userId: student.userId,
+        type: 'certificate_issued',
+        title: 'Certificate Issued!',
+        body: `Congratulations! You have been awarded: ${title}`,
+        payload: { certificateId: cert._id, certificateTitle: title, certificateType: type },
+      })
       try { emitToUser(student.userId.toString(), 'certificate_awarded', { certificateId: cert._id, title }) } catch {}
+    } else if (!canApprove) {
+      await notifyRoles(['super_admin', 'admin', 'qci'], {
+        type: 'system',
+        title: 'Certificate Pending Approval',
+        body: `A certificate "${title}" for ${student.name} needs your approval.`,
+        payload: { certificateId: cert._id },
+      })
     }
 
     const populated = await Certificate.findById(cert._id).populate(POPULATE).lean()
@@ -141,12 +156,19 @@ export async function bulkCreateCertificates(req, res) {
 
     const certs = await Certificate.insertMany(docs)
 
-    // Live-push to each student when issued directly as approved
+    // Notify + live-push each student when issued directly as approved
     if (canApprove) {
       const userByStudent = new Map(students.filter(s => s.userId).map(s => [s._id.toString(), s.userId.toString()]))
       for (const c of certs) {
         const uid = userByStudent.get(c.studentId.toString())
         if (uid) {
+          await createNotification({
+            userId: uid,
+            type: 'certificate_issued',
+            title: 'Certificate Issued!',
+            body: `Congratulations! You have been awarded: ${title}`,
+            payload: { certificateId: c._id, certificateTitle: title, certificateType: type },
+          })
           try { emitToUser(uid, 'certificate_awarded', { certificateId: c._id, title }) } catch {}
         }
       }
@@ -202,7 +224,7 @@ export async function approveCertificate(req, res) {
     // Notify the student (if they have a portal user account)
     const student = await Student.findById(cert.studentId).select('name userId').lean()
     if (student?.userId) {
-      await Notification.create({
+      await createNotification({
         userId: student.userId,
         type: 'certificate_issued',
         title: 'Certificate Issued!',
@@ -237,6 +259,17 @@ export async function rejectCertificate(req, res) {
     cert.status = 'rejected'
     cert.rejectionReason = req.body.reason || ''
     await cert.save()
+
+    // Notify the submitter
+    if (cert.submittedBy) {
+      await createNotification({
+        userId: cert.submittedBy,
+        type: 'system',
+        title: 'Certificate Rejected',
+        body: `The certificate "${cert.title}" was rejected.${cert.rejectionReason ? ' Reason: ' + cert.rejectionReason : ''}`,
+        payload: { certificateId: cert._id },
+      })
+    }
 
     await logActivity({
       level: 'info', category: 'certificate', action: 'certificate_rejected',

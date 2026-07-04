@@ -4,6 +4,7 @@ import Notification from '../models/Notification.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { emitToUser, emitToRole } from '../config/socket.js'
+import { createNotification } from './portalNotificationController.js'
 
 export async function listLeaves(req, res) {
   try {
@@ -89,15 +90,17 @@ export async function createLeave(req, res) {
       u.roles?.some(r => reviewerRoles.includes(r.key)) && u._id.toString() !== req.userId.toString()
     )
 
-    if (notifyUsers.length > 0) {
-      await Notification.insertMany(notifyUsers.map(u => ({
-        userId: u._id,
-        type: 'leave_request',
-        title: 'New Leave Request',
-        body: notifBody,
-        payload: { leaveId: leave._id, tutorName, leaveType },
-      })))
-    }
+    try {
+      if (notifyUsers.length > 0) {
+        await Notification.insertMany(notifyUsers.map(u => ({
+          userId: u._id,
+          type: 'leave_request',
+          title: 'New Leave Request',
+          body: notifBody,
+          payload: { leaveId: leave._id, tutorName, leaveType },
+        })))
+      }
+    } catch (e) { console.error('notify failed:', e.message) }
 
     // Real-time socket push to reviewer roles
     for (const role of reviewerRoles) {
@@ -107,7 +110,7 @@ export async function createLeave(req, res) {
     // Also notify the tutor themselves (confirmation)
     const tutorUser = await User.findOne({ linkedTutorId: resolvedTutorId, status: 'active' })
     if (tutorUser && tutorUser._id.toString() !== req.userId.toString()) {
-      await Notification.create({
+      await createNotification({
         userId: tutorUser._id,
         type: 'leave_request',
         title: 'Leave Request Submitted',
@@ -181,7 +184,7 @@ export async function reviewLeave(req, res) {
     // 1. Notify the tutor who requested the leave
     const tutorUser = await User.findOne({ linkedTutorId: leave.tutorId, status: 'active' })
     if (tutorUser) {
-      await Notification.create({
+      await createNotification({
         userId: tutorUser._id,
         type: notifType,
         title: `Leave ${statusLabel}`,
@@ -201,15 +204,17 @@ export async function reviewLeave(req, res) {
       u.roles?.some(r => reviewerRoles.includes(r.key)) && u._id.toString() !== req.userId.toString()
     )
 
-    if (otherReviewers.length > 0) {
-      await Notification.insertMany(otherReviewers.map(u => ({
-        userId: u._id,
-        type: notifType,
-        title: `Leave ${statusLabel}`,
-        body: `${tutorName}'s ${leave.leaveType} leave (${dateRange}) was ${status} by ${reviewerName}.`,
-        payload: { leaveId: leave._id, tutorName, status },
-      })))
-    }
+    try {
+      if (otherReviewers.length > 0) {
+        await Notification.insertMany(otherReviewers.map(u => ({
+          userId: u._id,
+          type: notifType,
+          title: `Leave ${statusLabel}`,
+          body: `${tutorName}'s ${leave.leaveType} leave (${dateRange}) was ${status} by ${reviewerName}.`,
+          payload: { leaveId: leave._id, tutorName, status },
+        })))
+      }
+    } catch (e) { console.error('notify failed:', e.message) }
 
     // Socket push to reviewer roles
     for (const role of reviewerRoles) {

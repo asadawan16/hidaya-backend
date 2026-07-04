@@ -1,6 +1,7 @@
 import User from '../models/User.js'
 import Role from '../models/Role.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { createNotification } from './portalNotificationController.js'
 
 export async function listUsers(req, res) {
   try {
@@ -130,6 +131,14 @@ export async function createUser(req, res) {
       meta: { targetUserId: user._id },
     })
 
+    await createNotification({
+      userId: user._id,
+      type: 'user_account',
+      title: 'Welcome to Hidaya Online',
+      body: `Assalamu Alaikum ${user.displayName}! Your portal account has been created.`,
+      payload: { roles: keys },
+    })
+
     const populated = await User.findById(user._id)
       .populate('roles', 'key name')
       .select('-password -mfa.secretEnc')
@@ -230,6 +239,14 @@ export async function resetPassword(req, res) {
       message: `Password reset for ${user.email} by ${req.user.email}`,
       req,
       meta: { targetUserId: user._id },
+    })
+
+    await createNotification({
+      userId: user._id,
+      type: 'user_account',
+      title: 'Password Reset',
+      body: 'Your account password was reset by an administrator. If this was not expected, contact support.',
+      payload: {},
     })
 
     res.json({ message: 'Password reset successfully' })

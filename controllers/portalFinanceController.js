@@ -5,7 +5,20 @@ import TutorAttendance from '../models/TutorAttendance.js'
 import TutorProfile from '../models/TutorProfile.js'
 import Advance from '../models/Advance.js'
 import ShiftConfig from '../models/ShiftConfig.js'
+import Student from '../models/Student.js'
+import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { createNotification } from './portalNotificationController.js'
+
+// Resolve the portal user linked to a student / tutor profile (null-safe)
+async function studentUser(studentId) {
+  const s = await Student.findById(studentId).select('userId name').lean()
+  return s?.userId ? { userId: s.userId, name: s.name } : null
+}
+async function tutorUser(tutorId) {
+  const u = await User.findOne({ linkedTutorId: tutorId, status: 'active' }).select('_id').lean()
+  return u ? { userId: u._id } : null
+}
 
 // ─── Invoices ───
 
@@ -75,6 +88,17 @@ export async function createInvoice(req, res) {
 
     await logActivity({ level: 'info', category: 'finance', action: 'invoice_created', message: `Invoice ${invoiceNo} created`, req })
 
+    const su = await studentUser(studentId)
+    if (su) {
+      await createNotification({
+        userId: su.userId,
+        type: 'invoice_created',
+        title: 'New Invoice',
+        body: `Invoice ${invoiceNo} (${currency || 'PKR'} ${amount.toLocaleString()}) has been issued to you.`,
+        payload: { invoiceId: invoice._id, invoiceNo },
+      })
+    }
+
     const populated = await Invoice.findById(invoice._id).populate('studentId', 'name rollNo').lean()
     res.status(201).json(populated)
   } catch (err) {
@@ -89,9 +113,23 @@ export async function updateInvoiceStatus(req, res) {
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
 
     const { status, paidAmount } = req.body
+    const wasPaid = invoice.status === 'paid'
     if (status) invoice.status = status
     if (paidAmount !== undefined) invoice.paidAmount = paidAmount
     await invoice.save()
+
+    if (!wasPaid && invoice.status === 'paid') {
+      const su = await studentUser(invoice.studentId)
+      if (su) {
+        await createNotification({
+          userId: su.userId,
+          type: 'invoice_paid',
+          title: 'Payment Received',
+          body: `Invoice ${invoice.invoiceNo} has been marked as paid. JazakAllah Khair!`,
+          payload: { invoiceId: invoice._id, invoiceNo: invoice.invoiceNo },
+        })
+      }
+    }
 
     res.json(invoice)
   } catch (err) {
@@ -247,6 +285,17 @@ export async function generateSalary(req, res) {
 
     await logActivity({ level: 'info', category: 'salary', action: 'salary_generated', message: `Salary generated for ${tutor.tutorId} (${month}/${year})`, req })
 
+    const tu = await tutorUser(tutorId)
+    if (tu) {
+      await createNotification({
+        userId: tu.userId,
+        type: 'salary_generated',
+        title: 'Salary Generated',
+        body: `Your salary for ${month}/${year} has been generated (${currency} ${record.netPayable?.toLocaleString?.() || record.netPayable}).`,
+        payload: { salaryRecordId: record._id, month, year },
+      })
+    }
+
     res.status(201).json(record)
   } catch (err) {
     console.error('Generate salary error:', err)
@@ -275,6 +324,19 @@ export async function updateSalaryStatus(req, res) {
     }
     if (notes) record.notes = notes
     await record.save()
+
+    if (status === 'paid') {
+      const tu = await tutorUser(record.tutorId)
+      if (tu) {
+        await createNotification({
+          userId: tu.userId,
+          type: 'salary_paid',
+          title: 'Salary Paid',
+          body: `Your salary for ${record.month}/${record.year} has been paid (receipt ${record.receiptNo || '—'}).`,
+          payload: { salaryRecordId: record._id, receiptNo: record.receiptNo },
+        })
+      }
+    }
 
     res.json(record)
   } catch (err) {
@@ -374,6 +436,17 @@ export async function createSalaryIncrement(req, res) {
       .populate('tutorId', 'name tutorId salary')
       .populate('approvedBy', 'displayName')
       .lean()
+
+    const tu = await tutorUser(tutorId)
+    if (tu) {
+      await createNotification({
+        userId: tu.userId,
+        type: 'salary_increment',
+        title: 'Salary Increment',
+        body: `Your base salary has been updated: ${currency} ${previousAmount.toLocaleString()} → ${Number(newAmount).toLocaleString()} (effective ${new Date(effectiveDate).toLocaleDateString()}).`,
+        payload: { incrementId: increment._id },
+      })
+    }
 
     res.status(201).json(populated)
   } catch (err) {

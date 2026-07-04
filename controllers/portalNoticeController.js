@@ -305,6 +305,30 @@ export async function resolveComplaint(req, res) {
     complaint.resolution = req.body.resolution || ''
     await complaint.save()
 
+    // Notify the filer and the tutor the complaint was against
+    const resolutionNote = complaint.resolution ? ` Resolution: ${complaint.resolution}` : ''
+    if (complaint.createdBy && complaint.createdBy.toString() !== req.userId.toString()) {
+      await createNotification({
+        userId: complaint.createdBy,
+        type: 'complaint',
+        title: 'Complaint Resolved',
+        body: `A complaint you filed has been resolved.${resolutionNote}`,
+        payload: { complaintId: complaint._id },
+      })
+    }
+    if (complaint.againstTutorId) {
+      const tutorUser = await User.findOne({ linkedTutorId: complaint.againstTutorId, status: 'active' }).select('_id').lean()
+      if (tutorUser && tutorUser._id.toString() !== req.userId.toString()) {
+        await createNotification({
+          userId: tutorUser._id,
+          type: 'complaint',
+          title: 'Complaint Resolved',
+          body: `A complaint concerning you has been resolved.${resolutionNote}`,
+          payload: { complaintId: complaint._id },
+        })
+      }
+    }
+
     res.json(complaint)
   } catch (err) {
     console.error('Resolve complaint error:', err)

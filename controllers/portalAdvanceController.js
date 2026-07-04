@@ -1,5 +1,12 @@
 import Advance from '../models/Advance.js'
+import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { createNotification } from './portalNotificationController.js'
+
+async function tutorUserId(tutorId) {
+  const u = await User.findOne({ linkedTutorId: tutorId, status: 'active' }).select('_id').lean()
+  return u?._id || null
+}
 
 export async function listAdvances(req, res) {
   try {
@@ -58,6 +65,17 @@ export async function createAdvance(req, res) {
       .populate('approvedBy', 'displayName')
       .lean()
 
+    const uid = await tutorUserId(tutorId)
+    if (uid) {
+      await createNotification({
+        userId: uid,
+        type: 'advance_created',
+        title: 'Advance Approved',
+        body: `A ${type} of ${currency || 'PKR'} ${Number(totalAmount).toLocaleString()} has been approved for you (repaid ${installmentFrequency || 'monthly'}).`,
+        payload: { advanceId: advance._id },
+      })
+    }
+
     res.status(201).json(populated)
   } catch (err) {
     console.error('Create advance error:', err)
@@ -94,6 +112,22 @@ export async function updateAdvance(req, res) {
       .populate('tutorId', 'name tutorId')
       .populate('approvedBy', 'displayName')
       .lean()
+
+    const uid = await tutorUserId(advance.tutorId)
+    if (uid) {
+      const what = status === 'cancelled'
+        ? 'Your advance has been cancelled.'
+        : repayment?.amount > 0
+          ? `A repayment of ${advance.currency} ${Number(repayment.amount).toLocaleString()} was recorded on your advance.`
+          : 'Your advance details were updated.'
+      await createNotification({
+        userId: uid,
+        type: 'advance_updated',
+        title: 'Advance Updated',
+        body: what,
+        payload: { advanceId: advance._id },
+      })
+    }
 
     res.json(populated)
   } catch (err) {

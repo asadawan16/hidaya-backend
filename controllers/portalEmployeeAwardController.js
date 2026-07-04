@@ -85,9 +85,11 @@ export async function createAward(req, res) {
       payload: { awardId: award._id, tutorName: populated.tutorId?.name },
     }))
 
-    if (notifications.length > 0) {
-      await Notification.insertMany(notifications)
-    }
+    try {
+      if (notifications.length > 0) {
+        await Notification.insertMany(notifications)
+      }
+    } catch (e) { console.error('notify failed:', e.message) }
 
     // Socket emit
     try {

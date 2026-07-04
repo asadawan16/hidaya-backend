@@ -346,6 +346,17 @@ export async function changeStudentStatus(req, res) {
       meta: { studentId: student._id, oldStatus, newStatus: status },
     })
 
+    if (student.userId) {
+      const { createNotification } = await import('./portalNotificationController.js')
+      await createNotification({
+        userId: student.userId,
+        type: 'system',
+        title: 'Account Status Updated',
+        body: `Your enrollment status has changed to "${status}".${comment ? ' Note: ' + comment : ''}`,
+        payload: { studentId: student._id, status },
+      })
+    }
+
     res.json({ message: 'Status updated', student })
   } catch (err) {
     console.error('Change student status error:', err)

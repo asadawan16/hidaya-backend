@@ -78,9 +78,33 @@ export async function markUnread(req, res) {
   }
 }
 
-// Helper to create and push a notification
+// Helper to create and push a notification.
+// Never throws — a notification failure must not fail the parent action.
 export async function createNotification({ userId, type, title, body, payload }) {
-  const notif = await Notification.create({ userId, type, title, body, payload })
-  emitToUser(userId.toString(), 'notification', notif)
-  return notif
+  try {
+    if (!userId) return null
+    const notif = await Notification.create({ userId, type, title, body, payload })
+    emitToUser(userId.toString(), 'notification', notif)
+    return notif
+  } catch (err) {
+    console.error('Create notification failed:', err.message)
+    return null
+  }
+}
+
+// Notify every active user holding any of the given role keys. Guarded.
+export async function notifyRoles(roleKeys, { type, title, body, payload }) {
+  try {
+    const { default: User } = await import('../models/User.js')
+    const { default: Role } = await import('../models/Role.js')
+    const roles = await Role.find({ key: { $in: roleKeys } }).select('_id').lean()
+    if (!roles.length) return
+    const users = await User.find({ status: 'active', roles: { $in: roles.map(r => r._id) } })
+      .select('_id').lean()
+    for (const u of users) {
+      await createNotification({ userId: u._id, type, title, body, payload })
+    }
+  } catch (err) {
+    console.error('Notify roles failed:', err.message)
+  }
 }

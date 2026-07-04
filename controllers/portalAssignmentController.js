@@ -1,7 +1,9 @@
 import Assignment from '../models/Assignment.js'
 import Student from '../models/Student.js'
 import TutorProfile from '../models/TutorProfile.js'
+import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { createNotification } from './portalNotificationController.js'
 
 export async function listAssignments(req, res) {
   try {
@@ -89,6 +91,27 @@ export async function createAssignment(req, res) {
       .populate('assignedBy', 'displayName')
       .lean()
 
+    // Notify the tutor and the student (when they have portal accounts)
+    const tutorUser = await User.findOne({ linkedTutorId: tutorId, status: 'active' }).select('_id').lean()
+    if (tutorUser) {
+      await createNotification({
+        userId: tutorUser._id,
+        type: 'assignment',
+        title: assignmentType === 'temporary' ? 'Temporary Student Assigned' : 'New Student Assigned',
+        body: `${student.name} has been ${actionLabel} to you for ${track}.`,
+        payload: { assignmentId: assignment._id, studentId, track },
+      })
+    }
+    if (student.userId) {
+      await createNotification({
+        userId: student.userId,
+        type: 'assignment',
+        title: 'Tutor Assigned',
+        body: `${tutor.name} is now your ${assignmentType === 'temporary' ? 'temporary ' : ''}tutor for ${track}.`,
+        payload: { assignmentId: assignment._id, tutorId, track },
+      })
+    }
+
     res.status(201).json(populated)
   } catch (err) {
     console.error('Create assignment error:', err)
@@ -105,6 +128,17 @@ export async function endAssignment(req, res) {
     assignment.endDate = new Date()
     assignment.reason = req.body.reason || assignment.reason
     await assignment.save()
+
+    const endedTutorUser = await User.findOne({ linkedTutorId: assignment.tutorId, status: 'active' }).select('_id').lean()
+    if (endedTutorUser) {
+      await createNotification({
+        userId: endedTutorUser._id,
+        type: 'assignment',
+        title: 'Assignment Ended',
+        body: `One of your ${assignment.track} student assignments has ended.${req.body.reason ? ' Reason: ' + req.body.reason : ''}`,
+        payload: { assignmentId: assignment._id, track: assignment.track },
+      })
+    }
 
     await logActivity({
       level: 'info',

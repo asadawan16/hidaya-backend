@@ -1,6 +1,9 @@
 import ClassSlot from '../models/ClassSlot.js'
 import ClassSession from '../models/ClassSession.js'
+import Student from '../models/Student.js'
+import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { createNotification } from './portalNotificationController.js'
 
 // ─── ClassSlot CRUD ───
 
@@ -314,6 +317,29 @@ export async function markSessionMissed(req, res) {
     session.attendance = 'no_show'
     session.notes = req.body.notes || ''
     await session.save()
+
+    // Notify tutor + student about the missed session
+    const when = session.date ? new Date(session.date).toLocaleDateString() : 'recently'
+    const tutorU = await User.findOne({ linkedTutorId: session.tutorId, status: 'active' }).select('_id').lean()
+    if (tutorU) {
+      await createNotification({
+        userId: tutorU._id,
+        type: 'session_missed',
+        title: 'Class Marked Missed',
+        body: `A class session on ${when} was marked as missed (student no-show).`,
+        payload: { sessionId: session._id },
+      })
+    }
+    const missedStudent = await Student.findById(session.studentId).select('userId').lean()
+    if (missedStudent?.userId) {
+      await createNotification({
+        userId: missedStudent.userId,
+        type: 'session_missed',
+        title: 'Missed Class',
+        body: `You missed your class on ${when}. Please contact your tutor to reschedule.`,
+        payload: { sessionId: session._id },
+      })
+    }
 
     res.json(session)
   } catch (err) {

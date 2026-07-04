@@ -4,6 +4,7 @@ import Family from '../models/Family.js'
 import StudentRelationship from '../models/StudentRelationship.js'
 import StudentStatusHistory from '../models/StudentStatusHistory.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { notifyRoles } from './portalNotificationController.js'
 
 // Generate next roll number
 async function generateRollNo() {
@@ -32,6 +33,13 @@ export async function submitAdmission(req, res) {
     const application = await AdmissionApplication.create({
       ...data,
       status: 'pending',
+    })
+
+    await notifyRoles(['super_admin', 'admin'], {
+      type: 'admission',
+      title: 'New Admission Application',
+      body: `${data.studentName} has submitted an admission application.`,
+      payload: { applicationId: application._id },
     })
 
     res.status(201).json({

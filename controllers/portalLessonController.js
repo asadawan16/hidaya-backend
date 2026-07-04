@@ -3,6 +3,7 @@ import LessonEntry from '../models/LessonEntry.js'
 import PermanentLesson from '../models/PermanentLesson.js'
 import CurriculumItem from '../models/CurriculumItem.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { createNotification, notifyRoles } from './portalNotificationController.js'
 
 // ─── Daily Lesson Entries ───
 
@@ -208,6 +209,13 @@ export async function submitPermanentLesson(req, res) {
       .populate('curriculumItemId', 'label track type')
       .lean()
 
+    await notifyRoles(['super_admin', 'admin', 'qci', 'qcm'], {
+      type: 'lesson_submitted',
+      title: 'Lesson Pending Approval',
+      body: `${populated.tutorId?.name || 'A tutor'} submitted "${populated.curriculumItemId?.label || 'a lesson'}" for ${populated.studentId?.name || 'a student'}.`,
+      payload: { permanentLessonId: lesson._id },
+    })
+
     res.status(201).json(populated)
   } catch (err) {
     console.error('Submit permanent lesson error:', err)
@@ -228,6 +236,16 @@ export async function approvePermanentLesson(req, res) {
     lesson.approvedAt = new Date()
     lesson.notes = req.body.notes || lesson.notes
     await lesson.save()
+
+    if (lesson.submittedBy && lesson.submittedBy.toString() !== req.userId.toString()) {
+      await createNotification({
+        userId: lesson.submittedBy,
+        type: 'lesson_approved',
+        title: 'Lesson Approved',
+        body: 'Your submitted lesson has been approved.',
+        payload: { permanentLessonId: lesson._id },
+      })
+    }
 
     await logActivity({
       level: 'info',
@@ -258,6 +276,16 @@ export async function rejectPermanentLesson(req, res) {
     lesson.approvedBy = req.userId
     lesson.approvedAt = new Date()
     await lesson.save()
+
+    if (lesson.submittedBy && lesson.submittedBy.toString() !== req.userId.toString()) {
+      await createNotification({
+        userId: lesson.submittedBy,
+        type: 'lesson_rejected',
+        title: 'Lesson Rejected',
+        body: `Your submitted lesson was rejected.${lesson.rejectionReason ? ' Reason: ' + lesson.rejectionReason : ''}`,
+        payload: { permanentLessonId: lesson._id },
+      })
+    }
 
     await logActivity({
       level: 'info',

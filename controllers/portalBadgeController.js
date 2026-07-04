@@ -3,6 +3,7 @@ import Notification from '../models/Notification.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { emitToUser, emitToRole } from '../config/socket.js'
+import { createNotification } from './portalNotificationController.js'
 
 export async function listBadges(req, res) {
   try {
@@ -69,7 +70,7 @@ export async function createBadge(req, res) {
       // Notify student directly
       const studentUser = await User.findOne({ linkedStudentId: studentId, status: 'active' })
       if (studentUser) {
-        await Notification.create({
+        await createNotification({
           userId: studentUser._id,
           type: 'badge_awarded',
           title: 'Badge Awarded!',
@@ -85,7 +86,8 @@ export async function createBadge(req, res) {
       const approvers = allUsers.filter(u =>
         u.roles?.some(r => approverRoles.includes(r.key)) && u._id.toString() !== req.userId.toString()
       )
-      if (approvers.length > 0) {
+      try {
+        if (approvers.length > 0) {
         await Notification.insertMany(approvers.map(u => ({
           userId: u._id,
           type: 'badge_awarded',
@@ -93,7 +95,8 @@ export async function createBadge(req, res) {
           body: `A "${title}" badge for ${studentName} needs your approval.`,
           payload: { badgeId: badge._id, badgeType, studentName },
         })))
-      }
+        }
+      } catch (e) { console.error('notify failed:', e.message) }
       for (const role of approverRoles) {
         emitToRole(role, 'badge_pending', { badgeId: badge._id, title, studentName })
       }
@@ -132,7 +135,7 @@ export async function approveBadge(req, res) {
     // Notify student
     const studentUser = await User.findOne({ linkedStudentId: badge.studentId, status: 'active' })
     if (studentUser) {
-      await Notification.create({
+      await createNotification({
         userId: studentUser._id,
         type: 'badge_awarded',
         title: 'Badge Awarded!',
@@ -144,7 +147,7 @@ export async function approveBadge(req, res) {
 
     // Notify the tutor who submitted
     if (badge.submittedBy && badge.submittedBy.toString() !== req.userId.toString()) {
-      await Notification.create({
+      await createNotification({
         userId: badge.submittedBy,
         type: 'badge_awarded',
         title: 'Badge Approved',
@@ -179,7 +182,7 @@ export async function rejectBadge(req, res) {
 
     // Notify the tutor who submitted
     if (badge.submittedBy) {
-      await Notification.create({
+      await createNotification({
         userId: badge.submittedBy,
         type: 'system',
         title: 'Badge Rejected',

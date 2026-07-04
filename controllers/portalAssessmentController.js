@@ -1,6 +1,8 @@
 import AssessmentTemplate from '../models/AssessmentTemplate.js'
 import Assessment from '../models/Assessment.js'
+import Student from '../models/Student.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { createNotification } from './portalNotificationController.js'
 
 // ─── Templates ───
 
@@ -126,6 +128,17 @@ export async function createAssessment(req, res) {
       .populate('studentId', 'name rollNo')
       .populate('templateId', 'name')
       .lean()
+
+    const assessedStudent = await Student.findById(data.studentId).select('userId').lean()
+    if (assessedStudent?.userId) {
+      await createNotification({
+        userId: assessedStudent.userId,
+        type: 'assessment_recorded',
+        title: 'Assessment Recorded',
+        body: `A new assessment (${populated.templateId?.name || 'assessment'}) has been recorded for you${data.overallScore != null ? ` — score ${data.overallScore}%` : ''}.`,
+        payload: { assessmentId: assessment._id },
+      })
+    }
 
     res.status(201).json(populated)
   } catch (err) {
