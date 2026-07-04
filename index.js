@@ -148,9 +148,21 @@ const server = createServer(app)
 // Socket.io for portal real-time features
 initSocket(server)
 
-// Legacy WebSocket for admin export
-const wss = new WebSocketServer({ server, path: '/ws/export' })
+// Legacy WebSocket for admin export.
+// noServer + manual routing: attaching ws directly to the server would register
+// an upgrade listener that aborts every non-/ws/export upgrade — including all
+// Socket.IO websocket handshakes.
+const wss = new WebSocketServer({ noServer: true })
 app.set('wss', wss)
+
+server.on('upgrade', (req, socket, head) => {
+  let pathname = ''
+  try { pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname } catch { /* ignore */ }
+  if (pathname === '/ws/export') {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+  }
+  // /socket.io upgrades are handled by Socket.IO's own listener
+})
 
 wss.on('connection', (ws, req) => {
   // Authenticate via token query param
