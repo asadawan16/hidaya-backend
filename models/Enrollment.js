@@ -15,6 +15,10 @@ const enrollmentSchema = new mongoose.Schema({
     enum: ['new', 'contacted', 'enrolled', 'closed'],
     default: 'new',
   },
+  demoTutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'TutorProfile' },
+  trialDate: { type: Date },
+  trialStatus: { type: String, enum: ['pending', 'scheduled', 'passed', 'failed', ''], default: '' },
+  trialNotes: { type: String, trim: true, default: '' },
 }, { timestamps: true })
 
 export default mongoose.model('Enrollment', enrollmentSchema)

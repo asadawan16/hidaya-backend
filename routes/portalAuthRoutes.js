@@ -1,0 +1,15 @@
+import { Router } from 'express'
+import { portalLogin, portalGetMe, enrollMfa, confirmMfa, revokeMfa, forgotPassword, resetPassword } from '../controllers/portalAuthController.js'
+import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
+
+const router = Router()
+
+router.post('/login', portalLogin)
+router.post('/forgot-password', forgotPassword)
+router.post('/reset-password', resetPassword)
+router.get('/me', portalAuth, portalGetMe)
+router.post('/mfa/enroll', portalAuth, requirePermission('mfa.enroll'), enrollMfa)
+router.post('/mfa/confirm', portalAuth, requirePermission('mfa.enroll'), confirmMfa)
+router.post('/mfa/revoke', portalAuth, requirePermission('mfa.revoke'), revokeMfa)
+
+export default router

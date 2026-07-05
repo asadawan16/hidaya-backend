@@ -185,6 +185,214 @@ const sourceStyle = {
 /* ═══════════════════════════════════════════════════════
    ADMIN — ENROLLMENT NOTIFICATION
    ═══════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   USER — ADMISSION DECISION (approved / rejected)
+   ═══════════════════════════════════════════════════════ */
+export function admissionDecisionEmail({ studentName, approved, rollNo, reviewNotes }) {
+  const headline = approved ? 'Admission Approved!' : 'Admission Update'
+  const badge = approved
+    ? '<span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#ECFDF5;color:#059669;text-transform:uppercase">Approved</span>'
+    : '<span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#FEF2F2;color:#DC2626;text-transform:uppercase">Not Approved</span>'
+  const lead = approved
+    ? `Assalamu Alaikum! We are delighted to let you know that the admission application for <b style="color:#0C3B2E">${studentName}</b> has been approved. Welcome to the Hidaya Online family!`
+    : `Assalamu Alaikum. Thank you for applying to Hidaya Online. After careful review, we are unable to approve the admission application for <b style="color:#0C3B2E">${studentName}</b> at this time.`
+
+  const content = `
+    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="padding:32px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td>${badge}</td>
+        <td align="right"><span style="font-size:11px;color:#8AA89C;font-family:SFMono-Regular,Menlo,monospace">${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span></td>
+      </tr></table>
+    </td></tr>
+    <tr><td style="padding:20px 36px 4px">
+      <h1 style="margin:0;font-size:24px;font-weight:700;color:#0C3B2E">${headline}</h1>
+      <p style="margin:10px 0 0;font-size:14px;line-height:1.7;color:#4B6357">${lead}</p>
+    </td></tr>
+    ${approved && rollNo ? `
+    <tr><td style="padding:22px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5FAF7;border:1px solid #DBEDE3;border-radius:12px">
+        <tr><td style="padding:16px 20px">
+          <span style="font-size:11px;font-weight:700;letter-spacing:1px;color:#6B8F7F;text-transform:uppercase">Student Roll Number</span><br>
+          <span style="font-size:20px;font-weight:700;color:#0C3B2E;font-family:SFMono-Regular,Menlo,monospace">${rollNo}</span>
+        </td></tr>
+      </table>
+      <p style="margin:14px 0 0;font-size:13px;line-height:1.7;color:#4B6357">Our team will reach out shortly with class schedule details and next steps. Please keep this roll number for your records.</p>
+    </td></tr>` : ''}
+    ${!approved && reviewNotes ? `
+    <tr><td style="padding:22px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px">
+        <tr><td style="padding:16px 20px">
+          <span style="font-size:11px;font-weight:700;letter-spacing:1px;color:#92400E;text-transform:uppercase">Note from our team</span><br>
+          <span style="font-size:13px;line-height:1.7;color:#4B6357">${reviewNotes}</span>
+        </td></tr>
+      </table>
+      <p style="margin:14px 0 0;font-size:13px;line-height:1.7;color:#4B6357">You are welcome to apply again or contact us if you have any questions — we would be glad to help.</p>
+    </td></tr>` : ''}
+    <tr><td style="padding:26px 36px 36px" align="center">
+      <a href="https://hidaya.online" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 12px rgba(12,59,46,0.25)">Visit Hidaya Online</a>
+    </td></tr>`
+
+  return {
+    subject: approved
+      ? `🎓 Admission Approved — Welcome to Hidaya Online, ${studentName}!`
+      : `Admission Update — ${studentName}`,
+    html: userLayout(content),
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   USER — STUDENT PORTAL ACCOUNT WELCOME (credentials)
+   ═══════════════════════════════════════════════════════ */
+export function portalWelcomeEmail({ displayName, email, password, rollNo }) {
+  const firstName = (displayName || 'Student').split(' ')[0]
+  const loginUrl = `${process.env.FRONTEND_URL || 'https://hidaya.online'}/portal/login`
+
+  const content = `
+    <!-- Accent bar -->
+    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+
+    <!-- Arabic header -->
+    <tr><td style="padding:36px 36px 0" align="center">
+      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#0C3B2E;line-height:1.4">
+        ٱقْرَأْ بِٱسْمِ رَبِّكَ ٱلَّذِى خَلَقَ
+      </p>
+      <p style="margin:6px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#8AA89C;font-weight:500">
+        Read in the name of your Lord who created &mdash; Al-Alaq 96:1
+      </p>
+    </td></tr>
+
+    <!-- Divider -->
+    <tr><td style="padding:20px 36px 0" align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
+        <td style="padding:0 10px"><span style="color:#D4A843;font-size:12px">✦</span></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+      </tr></table>
+    </td></tr>
+
+    <!-- Greeting -->
+    <tr><td style="padding:24px 36px 0" align="center">
+      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#D4A843;font-weight:700">أهلاً وسهلاً</p>
+      <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">Welcome</p>
+      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#0C3B2E;letter-spacing:-0.3px;font-family:'Amiri',serif">
+        Your Student Portal is Ready, ${firstName}
+      </h1>
+      <p style="margin:12px 0 0;font-size:15px;color:#6B8F7F;line-height:1.6;max-width:420px">
+        A student portal account has been created for you at Hidaya Online. Use the credentials below to sign in and follow your learning journey.
+      </p>
+    </td></tr>
+
+    <!-- Credentials card -->
+    <tr><td style="padding:28px 36px 8px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:linear-gradient(135deg,#F8FAF9,#F0F7F4);border-radius:16px;border:1px solid #E7F2EC">
+        <tr><td style="padding:24px 28px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            ${row('Email', email)}
+            <tr>
+              <td style="padding:14px 0;border-bottom:1px solid #f0f4f2;vertical-align:top">
+                <span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Temporary Password</span>
+              </td>
+              <td style="padding:14px 0;border-bottom:1px solid #f0f4f2;text-align:right;vertical-align:top">
+                <span style="display:inline-block;padding:6px 14px;background:#0C3B2E;color:#fff;border-radius:8px;font-family:SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:700;letter-spacing:0.5px">${password}</span>
+              </td>
+            </tr>
+            ${rollNo ? row('Roll Number', rollNo, { mono: true }) : ''}
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>
+
+    <!-- Security note -->
+    <tr><td style="padding:8px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px">
+        <tr><td style="padding:14px 18px">
+          <span style="font-size:13px;line-height:1.6;color:#92400E">🔒 For your security, please log in and change this temporary password from your profile.</span>
+        </td></tr>
+      </table>
+    </td></tr>
+
+    <!-- CTA -->
+    <tr><td style="padding:24px 36px 16px" align="center">
+      <a href="${loginUrl}" style="display:inline-block;padding:16px 48px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:16px;font-weight:700;text-decoration:none;border-radius:14px;box-shadow:0 4px 20px rgba(12,59,46,0.3);letter-spacing:0.3px">
+        Log in to Portal
+      </a>
+    </td></tr>
+
+    <!-- Closing -->
+    <tr><td style="padding:16px 36px 32px" align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+        <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
+        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
+      </tr></table>
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">بَارَكَ اللَّهُ فِيكُمْ</p>
+      <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">May Allah bless you</p>
+    </td></tr>`
+
+  return {
+    subject: `🕌 Your Hidaya Online Student Portal Account`,
+    html: userLayout(content),
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   USER — PASSWORD RESET OTP
+   ═══════════════════════════════════════════════════════ */
+export function passwordResetOtpEmail({ displayName, otp }) {
+  const firstName = (displayName || 'there').split(' ')[0]
+
+  const content = `
+    <!-- Accent bar -->
+    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+
+    <!-- Header -->
+    <tr><td style="padding:36px 36px 0" align="center">
+      <span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#EDE9FE;color:#6D28D9;text-transform:uppercase">Password Reset</span>
+      <h1 style="margin:18px 0 0;font-size:26px;font-weight:700;color:#0C3B2E;font-family:'Amiri',serif">
+        Reset Your Password, ${firstName}
+      </h1>
+      <p style="margin:12px 0 0;font-size:15px;color:#6B8F7F;line-height:1.6;max-width:420px">
+        Use the one-time code below to reset your Hidaya Online portal password. This code expires in 10 minutes.
+      </p>
+    </td></tr>
+
+    <!-- OTP card -->
+    <tr><td style="padding:28px 36px 8px" align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0" style="background:linear-gradient(135deg,#F8FAF9,#F0F7F4);border-radius:16px;border:1px solid #E7F2EC">
+        <tr><td style="padding:24px 40px" align="center">
+          <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#8AA89C;font-weight:600;margin-bottom:10px">Your Code</span>
+          <span style="font-size:40px;font-weight:800;color:#0C3B2E;letter-spacing:10px;font-family:SFMono-Regular,Menlo,monospace">${otp}</span>
+        </td></tr>
+      </table>
+    </td></tr>
+
+    <!-- Security note -->
+    <tr><td style="padding:16px 36px 0">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px">
+        <tr><td style="padding:14px 18px">
+          <span style="font-size:13px;line-height:1.6;color:#92400E">🔒 If you did not request a password reset, you can safely ignore this email — your password will remain unchanged.</span>
+        </td></tr>
+      </table>
+    </td></tr>
+
+    <!-- Closing -->
+    <tr><td style="padding:26px 36px 32px" align="center">
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+        <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
+        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
+      </tr></table>
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">بَارَكَ اللَّهُ فِيكُمْ</p>
+      <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">May Allah bless you</p>
+    </td></tr>`
+
+  return {
+    subject: `🔐 Your Hidaya Online password reset code: ${otp}`,
+    html: userLayout(content),
+  }
+}
+
 export function enrollmentEmail(data) {
   const src = sourceStyle[data.source] || sourceStyle.enrollment
   const isContact = data.source === 'contact'

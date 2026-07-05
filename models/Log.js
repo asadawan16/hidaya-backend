@@ -4,7 +4,7 @@ const logSchema = new mongoose.Schema({
   level: { type: String, enum: ['info', 'warning', 'error'], default: 'info' },
   category: {
     type: String,
-    enum: ['auth', 'payment', 'enrollment', 'payment_link', 'student', 'discount_code', 'blog', 'subscriber', 'system'],
+    enum: ['auth', 'payment', 'enrollment', 'payment_link', 'student', 'discount_code', 'blog', 'subscriber', 'system', 'portal', 'user_management', 'role_management', 'mfa'],
     required: true,
   },
   action: { type: String, required: true },
@@ -15,6 +15,7 @@ const logSchema = new mongoose.Schema({
   duration: Number,
   ip: String,
   adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   meta: { type: mongoose.Schema.Types.Mixed },
 }, { timestamps: true })
 
