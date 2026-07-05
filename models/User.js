@@ -54,6 +54,11 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  passwordReset: {
+    otpHash: { type: String, default: '' },
+    expiresAt: { type: Date },
+    attempts: { type: Number, default: 0 },
+  },
   lastLoginAt: {
     type: Date,
   },
@@ -90,6 +95,7 @@ userSchema.methods.toJSON = function () {
   const obj = this.toObject()
   delete obj.password
   delete obj.mfa?.secretEnc
+  delete obj.passwordReset
   return obj
 }
 

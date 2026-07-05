@@ -3,7 +3,7 @@ import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
   listInvoices, createInvoice, updateInvoiceStatus,
   listSalaryRecords, generateSalary, updateSalaryStatus, getSalaryReceipt,
-  listSalaryIncrements, createSalaryIncrement, getSalaryTimeline,
+  listSalaryIncrements, createSalaryIncrement, getSalaryTimeline, getSalaryRoster,
 } from '../controllers/portalFinanceController.js'
 
 const router = Router()
@@ -16,6 +16,7 @@ router.patch('/invoices/:id', requirePermission('finance.manage'), updateInvoice
 
 // Salary
 router.get('/salary', requirePermission('salary.read'), listSalaryRecords)
+router.get('/salary/roster', requirePermission('salary.read'), getSalaryRoster)
 router.post('/salary/generate', requirePermission('salary.manage'), generateSalary)
 router.get('/salary/:id/receipt', requirePermission('salary.read'), getSalaryReceipt)
 router.patch('/salary/:id', requirePermission('salary.manage'), updateSalaryStatus)

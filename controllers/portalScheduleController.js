@@ -4,6 +4,7 @@ import Student from '../models/Student.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification } from './portalNotificationController.js'
+import { emitToLiveBoard } from '../config/socket.js'
 
 // ─── ClassSlot CRUD ───
 
@@ -244,6 +245,8 @@ export async function startSession(req, res) {
     session.tutorStartedAt = new Date()
     await session.save()
 
+    emitToLiveBoard('live_board_changed', { action: 'started', sessionId: session._id })
+
     res.json(session)
   } catch (err) {
     console.error('Start session error:', err)
@@ -291,6 +294,8 @@ export async function completeSession(req, res) {
     }
 
     await session.save()
+
+    emitToLiveBoard('live_board_changed', { action: 'completed', sessionId: session._id })
 
     await logActivity({
       level: 'info',
@@ -363,13 +368,33 @@ export async function getLiveBoard(req, res) {
     const activeSessions = await ClassSession.find(filter)
       .populate('studentId', 'name rollNo')
       .populate('tutorId', 'name tutorId roomNo meetLink')
-      .populate('slotId', 'track')
+      .populate('slotId', 'track durationMinutes')
       .sort({ tutorStartedAt: -1 })
       .lean()
 
     res.json(activeSessions)
   } catch (err) {
     console.error('Live board error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── A tutor's own live (started) sessions — no liveboard.view needed ───
+
+export async function getMyLiveSessions(req, res) {
+  try {
+    if (!req.user.linkedTutorId) return res.json([])
+
+    const sessions = await ClassSession.find({ status: 'started', tutorId: req.user.linkedTutorId })
+      .populate('studentId', 'name rollNo')
+      .populate('tutorId', 'name tutorId roomNo meetLink')
+      .populate('slotId', 'track durationMinutes')
+      .sort({ tutorStartedAt: -1 })
+      .lean()
+
+    res.json(sessions)
+  } catch (err) {
+    console.error('My live sessions error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

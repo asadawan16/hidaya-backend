@@ -389,18 +389,26 @@ export async function deletePaymentLink(req, res) {
 
 export async function listDiscountCodes(req, res) {
   try {
+    const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 30))
     const { currency, usageType, isActive } = req.query
     const filter = {}
 
     if (currency) filter.currency = currency
     if (usageType) filter.usageType = usageType
-    if (isActive !== undefined) filter.isActive = isActive === 'true'
+    if (isActive === 'true' || isActive === 'false') filter.isActive = isActive === 'true'
 
-    const codes = await DiscountCode.find(filter)
+    const total = await DiscountCode.countDocuments(filter)
+    const pages = Math.ceil(total / lim) || 1
+    const safePage = Math.min(pg, pages)
+
+    const records = await DiscountCode.find(filter)
       .sort({ createdAt: -1 })
+      .skip((safePage - 1) * lim)
+      .limit(lim)
       .lean()
 
-    res.json(codes)
+    res.json({ records, total, page: safePage, pages })
   } catch (err) {
     console.error('listDiscountCodes error:', err)
     res.status(500).json({ error: 'Server error' })

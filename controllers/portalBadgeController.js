@@ -88,13 +88,15 @@ export async function createBadge(req, res) {
       )
       try {
         if (approvers.length > 0) {
-        await Notification.insertMany(approvers.map(u => ({
+        const created = await Notification.insertMany(approvers.map(u => ({
           userId: u._id,
           type: 'badge_awarded',
           title: 'Badge Pending Approval',
           body: `A "${title}" badge for ${studentName} needs your approval.`,
           payload: { badgeId: badge._id, badgeType, studentName },
         })))
+        // Live bell update — the client's SocketContext listens for 'notification'
+        created.forEach(n => emitToUser(n.userId, 'notification', n))
         }
       } catch (e) { console.error('notify failed:', e.message) }
       for (const role of approverRoles) {

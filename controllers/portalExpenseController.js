@@ -94,57 +94,87 @@ export async function deleteExpense(req, res) {
 
 export async function getExpenseStats(req, res) {
   try {
-    const { year, month } = req.query
-    const matchStage = {}
-    if (year) {
+    const { year, month, dateFrom, dateTo, groupBy } = req.query
+    const unit = groupBy === 'week' ? 'week' : 'month'
+
+    // Resolve the date range: explicit dateFrom/dateTo wins; else year/month; else all-time
+    let start = null
+    let end = null
+    if (dateFrom || dateTo) {
+      if (dateFrom) start = new Date(dateFrom)
+      if (dateTo) { end = new Date(dateTo); end.setHours(23, 59, 59, 999) }
+    } else if (year) {
       const y = Number(year)
       const m = month ? Number(month) : null
-      if (m) {
-        matchStage.date = {
-          $gte: new Date(y, m - 1, 1),
-          $lte: new Date(y, m, 0, 23, 59, 59),
-        }
-      } else {
-        matchStage.date = {
-          $gte: new Date(y, 0, 1),
-          $lte: new Date(y, 11, 31, 23, 59, 59),
-        }
-      }
+      if (m) { start = new Date(y, m - 1, 1); end = new Date(y, m, 0, 23, 59, 59, 999) }
+      else { start = new Date(y, 0, 1); end = new Date(y, 11, 31, 23, 59, 59, 999) }
     }
 
-    const [byCategory, byMonth, totals, byType] = await Promise.all([
+    const matchStage = {}
+    if (start || end) {
+      matchStage.date = {}
+      if (start) matchStage.date.$gte = start
+      if (end) matchStage.date.$lte = end
+    }
+    const expenseMatch = { ...matchStage, type: 'expense' }
+
+    const [byCategoryArr, trendArr, byType, totalsArr] = await Promise.all([
+      // Category breakdown — expenses only
       Expense.aggregate([
-        { $match: matchStage },
-        { $group: { _id: '$category', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+        { $match: expenseMatch },
+        { $group: { _id: '$category', total: { $sum: '$amount' } } },
         { $sort: { total: -1 } },
       ]),
+      // Trend — expenses only, bucketed by week or month
       Expense.aggregate([
-        { $match: matchStage },
-        {
-          $group: {
-            _id: { year: { $year: '$date' }, month: { $month: '$date' } },
-            total: { $sum: '$amount' },
-            count: { $sum: 1 },
-          },
-        },
-        { $sort: { '_id.year': 1, '_id.month': 1 } },
+        { $match: expenseMatch },
+        { $group: { _id: { $dateTrunc: { date: '$date', unit, startOfWeek: 'monday' } }, total: { $sum: '$amount' } } },
+        { $sort: { _id: 1 } },
       ]),
-      Expense.aggregate([
-        { $match: matchStage },
-        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
-      ]),
+      // Income vs expense
       Expense.aggregate([
         { $match: matchStage },
         { $group: { _id: '$type', total: { $sum: '$amount' }, count: { $sum: 1 } } },
       ]),
+      // Expense totals for averaging
+      Expense.aggregate([
+        { $match: expenseMatch },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+      ]),
     ])
+
+    // Shape data to what the frontend consumes
+    const byCategory = Object.fromEntries(byCategoryArr.map(c => [c._id, c.total]))
+    const trend = trendArr.map(t => {
+      const d = new Date(t._id)
+      const label = unit === 'week'
+        ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        : d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+      return { label, total: t.total }
+    })
+
+    const totalExpenses = totalsArr[0]?.total || 0
+    const totalIncome = byType.find(t => t._id === 'income')?.total || 0
+
+    // Average per month across the selected span
+    let monthsSpan = 1
+    if (start && end) {
+      monthsSpan = Math.max(1, (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1)
+    } else if (unit === 'month') {
+      monthsSpan = Math.max(1, trend.length)
+    }
+    const avgMonthly = Math.round(totalExpenses / monthsSpan)
 
     res.json({
       byCategory,
-      byMonth,
+      trend,
       byType,
-      total: totals[0]?.total || 0,
-      count: totals[0]?.count || 0,
+      totalExpenses,
+      totalIncome,
+      net: totalIncome - totalExpenses,
+      avgMonthly,
+      groupBy: unit,
+      count: totalsArr[0]?.count || 0,
     })
   } catch (err) {
     console.error('Expense stats error:', err)

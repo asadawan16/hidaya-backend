@@ -93,6 +93,8 @@ app.use('/api/enrollments', rl(100))
 app.use('/api/subscribers/subscribe', rl(50))
 app.use('/api/payment-links/t', rl(60))
 app.use('/api/discount-codes/validate', rl(100))
+app.use('/api/portal/auth/forgot-password', rl(10))
+app.use('/api/portal/auth/reset-password', rl(20))
 app.use('/api/portal/auth', rl(100))
 
 // Routes

@@ -1,9 +1,15 @@
 import jwt from 'jsonwebtoken'
+import crypto from 'crypto'
+import bcrypt from 'bcryptjs'
 import User from '../models/User.js'
 import { generateSecret, encryptSecret, verifyToken, generateQRDataUrl } from '../utils/totp.js'
 import { isWithinShiftWindow } from '../utils/shiftWindow.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { sendToUser, passwordResetOtpEmail } from '../services/mailer.js'
 import TutorProfile from '../models/TutorProfile.js'
+
+const OTP_TTL_MS = 10 * 60 * 1000 // 10 minutes
+const OTP_MAX_ATTEMPTS = 5
 
 export async function portalLogin(req, res) {
   try {
@@ -118,6 +124,127 @@ export async function portalLogin(req, res) {
     })
   } catch (err) {
     console.error('Portal login error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+/**
+ * Step 1 of password reset. If the account has MFA enabled, a valid TOTP code
+ * must be supplied here BEFORE any OTP email is sent (prevents an attacker who
+ * only knows the email from triggering reset codes). Responds generically to
+ * limit account enumeration — the only signal ever leaked is `mfaRequired`.
+ */
+export async function forgotPassword(req, res) {
+  try {
+    const { email, totpCode } = req.body
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' })
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() })
+    const genericResponse = { otpSent: true }
+
+    // Unknown or non-active account — pretend success, send nothing
+    if (!user || user.status !== 'active') {
+      return res.json(genericResponse)
+    }
+
+    // MFA gate: require a valid TOTP before issuing the email OTP
+    if (user.mfa?.enabled) {
+      if (!totpCode) {
+        return res.json({ mfaRequired: true })
+      }
+      const validTotp = verifyToken(user.mfa.secretEnc, totpCode)
+      if (!validTotp) {
+        await logActivity({
+          level: 'warning',
+          category: 'mfa',
+          action: 'reset_totp_failed',
+          message: `Invalid TOTP during password reset for ${user.email}`,
+          req,
+          meta: { userId: user._id },
+        })
+        return res.status(401).json({ error: 'Invalid TOTP code' })
+      }
+    }
+
+    // Generate + store a hashed 6-digit OTP
+    const otp = String(crypto.randomInt(100000, 1000000))
+    const otpHash = await bcrypt.hash(otp, 10)
+    user.passwordReset = { otpHash, expiresAt: new Date(Date.now() + OTP_TTL_MS), attempts: 0 }
+    await user.save()
+
+    const { subject, html } = passwordResetOtpEmail({ displayName: user.displayName, otp })
+    await sendToUser({ to: user.email, subject, html })
+
+    await logActivity({
+      level: 'info',
+      category: 'portal',
+      action: 'password_reset_requested',
+      message: `Password reset OTP sent to ${user.email}`,
+      req,
+      meta: { userId: user._id },
+    })
+
+    res.json(genericResponse)
+  } catch (err) {
+    console.error('Forgot password error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+/** Step 2 of password reset — verify the emailed OTP and set the new password. */
+export async function resetPassword(req, res) {
+  try {
+    const { email, otp, newPassword } = req.body
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ error: 'Email, code, and new password are required' })
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' })
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() })
+    if (!user || !user.passwordReset?.otpHash) {
+      return res.status(400).json({ error: 'Invalid or expired code. Please request a new one.' })
+    }
+
+    if (!user.passwordReset.expiresAt || user.passwordReset.expiresAt < new Date()) {
+      user.passwordReset = { otpHash: '', expiresAt: null, attempts: 0 }
+      await user.save()
+      return res.status(400).json({ error: 'This code has expired. Please request a new one.' })
+    }
+
+    if (user.passwordReset.attempts >= OTP_MAX_ATTEMPTS) {
+      user.passwordReset = { otpHash: '', expiresAt: null, attempts: 0 }
+      await user.save()
+      return res.status(429).json({ error: 'Too many incorrect attempts. Please request a new code.' })
+    }
+
+    const match = await bcrypt.compare(String(otp), user.passwordReset.otpHash)
+    if (!match) {
+      user.passwordReset.attempts += 1
+      await user.save()
+      return res.status(400).json({ error: 'Incorrect code. Please try again.' })
+    }
+
+    // Success — set new password (pre-save hook hashes it) and clear reset state
+    user.password = newPassword
+    user.passwordReset = { otpHash: '', expiresAt: null, attempts: 0 }
+    await user.save()
+
+    await logActivity({
+      level: 'info',
+      category: 'portal',
+      action: 'password_reset_completed',
+      message: `Password reset completed for ${user.email}`,
+      req,
+      meta: { userId: user._id },
+    })
+
+    res.json({ message: 'Password reset successfully. You can now sign in with your new password.' })
+  } catch (err) {
+    console.error('Reset password error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

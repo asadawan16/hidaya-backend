@@ -12,7 +12,11 @@ import Assignment from '../models/Assignment.js'
 import LessonEntry from '../models/LessonEntry.js'
 import Certificate from '../models/Certificate.js'
 import Badge from '../models/Badge.js'
+import User from '../models/User.js'
+import Role from '../models/Role.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { sendToUser, portalWelcomeEmail } from '../services/mailer.js'
+import { createNotification } from './portalNotificationController.js'
 
 // Generate next roll number
 async function generateRollNo() {
@@ -161,10 +165,31 @@ export async function getStudent(req, res) {
 
 export async function createStudent(req, res) {
   try {
-    const data = req.body
+    const { createPortalAccount, portalPassword, ...data } = req.body
 
     if (!data.name) {
       return res.status(400).json({ error: 'Student name is required' })
+    }
+
+    // Validate portal-account inputs up-front so we never create an orphan student
+    let studentRole = null
+    let portalEmail = ''
+    if (createPortalAccount) {
+      portalEmail = (data.email || '').toLowerCase().trim()
+      if (!portalEmail) {
+        return res.status(400).json({ error: 'An email is required to create a portal account for this student' })
+      }
+      if (!portalPassword || portalPassword.length < 6) {
+        return res.status(400).json({ error: 'Portal password must be at least 6 characters' })
+      }
+      const existingUser = await User.findOne({ email: portalEmail })
+      if (existingUser) {
+        return res.status(400).json({ error: 'A portal account with this email already exists' })
+      }
+      studentRole = await Role.findOne({ key: 'student' })
+      if (!studentRole) {
+        return res.status(400).json({ error: 'Student role not found — please seed roles first' })
+      }
     }
 
     // Auto-generate roll number if not provided
@@ -195,16 +220,52 @@ export async function createStudent(req, res) {
       changedBy: req.userId,
     })
 
+    // Create a linked portal (login) account if requested
+    let portalAccount = null
+    if (createPortalAccount && studentRole) {
+      const user = await User.create({
+        email: portalEmail,
+        password: portalPassword,
+        displayName: student.name,
+        phone: student.phone || '',
+        roles: [studentRole._id],
+        status: 'active',
+        linkedStudentId: student._id,
+      })
+
+      student.userId = user._id
+      await student.save()
+
+      // Email the credentials to the address used for the account
+      const { subject, html } = portalWelcomeEmail({
+        displayName: student.name,
+        email: portalEmail,
+        password: portalPassword,
+        rollNo: student.rollNo,
+      })
+      await sendToUser({ to: portalEmail, subject, html })
+
+      await createNotification({
+        userId: user._id,
+        type: 'user_account',
+        title: 'Welcome to Hidaya Online',
+        body: `Assalamu Alaikum ${student.name}! Your student portal account is ready.`,
+        payload: { rollNo: student.rollNo },
+      })
+
+      portalAccount = { created: true, email: portalEmail, userId: user._id }
+    }
+
     await logActivity({
       level: 'info',
       category: 'student_management',
       action: 'student_created',
-      message: `Student created: ${student.name} (${student.rollNo})`,
+      message: `Student created: ${student.name} (${student.rollNo})${portalAccount ? ' + portal account' : ''}`,
       req,
       meta: { studentId: student._id },
     })
 
-    res.status(201).json(student)
+    res.status(201).json({ ...student.toObject(), portalAccount })
   } catch (err) {
     console.error('Create student error:', err)
     if (err.code === 11000) {

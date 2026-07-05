@@ -3,7 +3,7 @@ import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
   listSlots, createSlot, updateSlot, deleteSlot,
   listSessions, createSession, startSession, completeSession, markSessionMissed,
-  getLiveBoard, generateSessionsForDate,
+  getLiveBoard, getMyLiveSessions, generateSessionsForDate,
 } from '../controllers/portalScheduleController.js'
 
 const router = Router()
@@ -25,5 +25,7 @@ router.post('/sessions/:id/missed', requirePermission('lesson.log'), markSession
 
 // Live board
 router.get('/live-board', requirePermission('liveboard.view'), getLiveBoard)
+// A tutor's own live sessions (for the overrun reminder) — no liveboard.view needed
+router.get('/my-live', requirePermission('schedule.read'), getMyLiveSessions)
 
 export default router

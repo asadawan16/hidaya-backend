@@ -2,7 +2,7 @@ import EmployeeOfMonth from '../models/EmployeeOfMonth.js'
 import Notification from '../models/Notification.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
-import { getIO } from '../config/socket.js'
+import { getIO, emitToUser } from '../config/socket.js'
 
 export async function listAwards(req, res) {
   try {
@@ -87,7 +87,9 @@ export async function createAward(req, res) {
 
     try {
       if (notifications.length > 0) {
-        await Notification.insertMany(notifications)
+        const created = await Notification.insertMany(notifications)
+        // Live bell update — the client's SocketContext listens for 'notification'
+        created.forEach(n => emitToUser(n.userId, 'notification', n))
       }
     } catch (e) { console.error('notify failed:', e.message) }
 

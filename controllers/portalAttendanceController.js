@@ -1,6 +1,25 @@
 import TutorAttendance from '../models/TutorAttendance.js'
 import { logActivity } from '../utils/activityLogger.js'
 
+// The requesting tutor's own attendance record for today. Self-scoped (no
+// tutor.read needed) and uses the same server-side "midnight today" basis as
+// checkIn/checkOut so the record always matches regardless of timezone.
+export async function getMyTodayAttendance(req, res) {
+  try {
+    const tutorId = req.user.linkedTutorId
+    if (!tutorId) return res.json(null)
+
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    const record = await TutorAttendance.findOne({ tutorId, date: today }).lean()
+    res.json(record || null)
+  } catch (err) {
+    console.error('My today attendance error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 export async function listAttendance(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)

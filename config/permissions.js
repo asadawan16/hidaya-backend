@@ -156,7 +156,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'report.read',
     'certificate.read', 'certificate.approve',
     'badge.read', 'badge.approve',
-    'chat.use',
+    'liveboard.view', 'chat.use',
     'leave.read', 'leave.review',
   ],
 
@@ -168,7 +168,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'complaint.read',
     'badge.read', 'badge.approve',
     'report.read',
-    'chat.use',
+    'liveboard.view', 'chat.use',
   ],
 
   tutor: [

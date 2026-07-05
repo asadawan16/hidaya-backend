@@ -496,3 +496,46 @@ export async function getSalaryTimeline(req, res) {
     res.status(500).json({ error: 'Server error' })
   }
 }
+
+// Payroll roster: every active tutor merged with their salary record for a period,
+// plus their outstanding advance balance. Drives a payroll-run view.
+export async function getSalaryRoster(req, res) {
+  try {
+    const month = Number(req.query.month)
+    const year = Number(req.query.year)
+    if (!month || !year) return res.status(400).json({ error: 'month and year are required' })
+
+    const [tutors, records, activeAdvances] = await Promise.all([
+      TutorProfile.find({ status: 'active' }).select('name tutorId salary').sort({ name: 1 }).lean(),
+      SalaryRecord.find({ month, year }).lean(),
+      Advance.find({ status: 'active' }).select('tutorId remainingBalance currency').lean(),
+    ])
+
+    const recByTutor = new Map(records.map(r => [String(r.tutorId), r]))
+    const advByTutor = new Map()
+    for (const a of activeAdvances) {
+      const k = String(a.tutorId)
+      advByTutor.set(k, (advByTutor.get(k) || 0) + (a.remainingBalance || 0))
+    }
+
+    const roster = tutors.map(t => ({
+      tutorId: { _id: t._id, name: t.name, tutorId: t.tutorId },
+      baseAmount: t.salary?.baseAmount || 0,
+      currency: t.salary?.currency || 'PKR',
+      outstandingAdvance: advByTutor.get(String(t._id)) || 0,
+      record: recByTutor.get(String(t._id)) || null,
+    }))
+
+    res.json({
+      roster,
+      month,
+      year,
+      total: tutors.length,
+      generated: records.length,
+      pending: tutors.length - records.length,
+    })
+  } catch (err) {
+    console.error('Salary roster error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}

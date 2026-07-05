@@ -272,7 +272,7 @@ export async function createComplaint(req, res) {
 
         const tutorUser = await User.findOne({ linkedTutorId: data.againstTutorId, status: 'active' })
         if (tutorUser) {
-          await Notification.create({
+          const notif = await Notification.create({
             userId: tutorUser._id,
             type: 'complaint',
             title: 'New Complaint Filed',
@@ -281,6 +281,8 @@ export async function createComplaint(req, res) {
               : `A complaint has been filed regarding one of your students. Please review.`,
             payload: { complaintId: complaint._id, studentId: data.studentId },
           })
+          // Live bell update — the client's SocketContext listens for 'notification'
+          emitToUser(tutorUser._id, 'notification', notif)
           emitToUser(tutorUser._id, 'complaint_filed', { complaintId: complaint._id })
         }
       } catch {}

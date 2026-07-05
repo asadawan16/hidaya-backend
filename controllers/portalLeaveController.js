@@ -92,13 +92,15 @@ export async function createLeave(req, res) {
 
     try {
       if (notifyUsers.length > 0) {
-        await Notification.insertMany(notifyUsers.map(u => ({
+        const created = await Notification.insertMany(notifyUsers.map(u => ({
           userId: u._id,
           type: 'leave_request',
           title: 'New Leave Request',
           body: notifBody,
           payload: { leaveId: leave._id, tutorName, leaveType },
         })))
+        // Live bell update — the client's SocketContext listens for 'notification'
+        created.forEach(n => emitToUser(n.userId, 'notification', n))
       }
     } catch (e) { console.error('notify failed:', e.message) }
 
@@ -206,13 +208,15 @@ export async function reviewLeave(req, res) {
 
     try {
       if (otherReviewers.length > 0) {
-        await Notification.insertMany(otherReviewers.map(u => ({
+        const created = await Notification.insertMany(otherReviewers.map(u => ({
           userId: u._id,
           type: notifType,
           title: `Leave ${statusLabel}`,
           body: `${tutorName}'s ${leave.leaveType} leave (${dateRange}) was ${status} by ${reviewerName}.`,
           payload: { leaveId: leave._id, tutorName, status },
         })))
+        // Live bell update — the client's SocketContext listens for 'notification'
+        created.forEach(n => emitToUser(n.userId, 'notification', n))
       }
     } catch (e) { console.error('notify failed:', e.message) }
 
