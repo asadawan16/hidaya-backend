@@ -5,6 +5,7 @@ import TutorProfile from '../models/TutorProfile.js'
 import Student from '../models/Student.js'
 import Assignment from '../models/Assignment.js'
 import User from '../models/User.js'
+import Role from '../models/Role.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification } from './portalNotificationController.js'
 import { emitToAll } from '../config/socket.js'
@@ -37,14 +38,16 @@ export async function listNotices(req, res) {
 
 export async function createNotice(req, res) {
   try {
-    const { type, targetTutorId, targetStudentId, targetStudentIds, message, severity, category, autoDisableAt, classTime } = req.body
+    const { type, targetTutorId, targetStudentId, targetStudentIds, targetRoles, message, severity, category, autoDisableAt, classTime } = req.body
     if (!type || !message) return res.status(400).json({ error: 'Type and message are required' })
 
     const noticeCategory = category || 'information'
     const requiresAcknowledgment = noticeCategory === 'urgent'
+    const roles = Array.isArray(targetRoles) ? targetRoles.filter(Boolean) : []
 
     const notice = await Notice.create({
       type, targetTutorId, targetStudentId, targetStudentIds,
+      targetRoles: roles,
       message, severity: severity || 'info',
       category: noticeCategory,
       requiresAcknowledgment,
@@ -69,6 +72,23 @@ export async function createNotice(req, res) {
           payload: { noticeId: notice._id },
         })
       }
+    }
+
+    // Notify users holding a targeted management role
+    if (roles.length) {
+      try {
+        const roleDocs = await Role.find({ key: { $in: roles } }).select('_id').lean()
+        const roleIds = roleDocs.map(r => r._id)
+        if (roleIds.length) {
+          const users = await User.find({ roles: { $in: roleIds }, status: 'active' }).select('_id').lean()
+          await Promise.all(users.map(u => createNotification({
+            userId: u._id, type: 'notice',
+            title: noticeCategory === 'urgent' ? '⚠️ Urgent Notice' : 'New Notice',
+            body: message.slice(0, 100),
+            payload: { noticeId: notice._id },
+          })))
+        }
+      } catch (e) { console.error('Notice role notify error:', e.message) }
     }
 
     res.status(201).json(notice)
@@ -121,9 +141,19 @@ export async function getActiveNoticesForUser(req, res) {
     // Build OR conditions based on the user's role
     const orConditions = []
 
-    // Global notices (no specific target)
-    orConditions.push({ targetTutorId: { $exists: false }, targetStudentId: { $exists: false }, targetStudentIds: { $size: 0 } })
-    orConditions.push({ targetTutorId: null, targetStudentId: null, targetStudentIds: { $size: 0 } })
+    // A notice is "role-targeted" when it has a non-empty targetRoles array.
+    // Global broadcasts must exclude those so role notices only reach their roles.
+    const notRoleTargeted = { $or: [{ targetRoles: { $exists: false } }, { targetRoles: { $size: 0 } }] }
+
+    // Global notices (no specific target, and not role-targeted)
+    orConditions.push({ targetTutorId: { $exists: false }, targetStudentId: { $exists: false }, targetStudentIds: { $size: 0 }, ...notRoleTargeted })
+    orConditions.push({ targetTutorId: null, targetStudentId: null, targetStudentIds: { $size: 0 }, ...notRoleTargeted })
+
+    // Role-targeted notices for the current user's roles
+    const roleKeys = (req.user.roles || []).map(r => r.key).filter(Boolean)
+    if (roleKeys.length) {
+      orConditions.push({ targetRoles: { $in: roleKeys } })
+    }
 
     // If user is linked to a tutor profile, get tutor-targeted notices
     if (req.user.linkedTutorId) {

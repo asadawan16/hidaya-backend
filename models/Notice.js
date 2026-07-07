@@ -28,6 +28,10 @@ const noticeSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Student',
   }],
+  // Target specific portal roles (e.g. ['admin','qci','principal']). When set,
+  // the notice is delivered only to users holding one of these roles (not the
+  // global broadcast). Empty = not role-targeted.
+  targetRoles: [{ type: String, trim: true }],
   message: { type: String, required: true, trim: true },
   severity: {
     type: String,
