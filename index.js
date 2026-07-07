@@ -48,6 +48,7 @@ import portalAdvanceRoutes from './routes/portalAdvanceRoutes.js'
 import portalLeaveRoutes from './routes/portalLeaveRoutes.js'
 import portalBadgeRoutes from './routes/portalBadgeRoutes.js'
 import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js'
+import portalFeeRoutes from './routes/portalFeeRoutes.js'
 import { initSocket } from './config/socket.js'
 import requestLogger from './middleware/requestLogger.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
@@ -142,6 +143,7 @@ app.use('/api/portal/advances', portalAdvanceRoutes)
 app.use('/api/portal/leaves', portalLeaveRoutes)
 app.use('/api/portal/badges', portalBadgeRoutes)
 app.use('/api/portal/student-progress', portalStudentProgressRoutes)
+app.use('/api/portal/fees', portalFeeRoutes)
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))
