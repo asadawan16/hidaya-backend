@@ -65,7 +65,7 @@ export async function getCurriculumItem(req, res) {
 
 export async function createCurriculumItem(req, res) {
   try {
-    const { track, type, label, parentId, order, meta } = req.body
+    const { track, type, label, parentId, order, meta, expectedDays } = req.body
 
     if (!track || !type || !label) {
       return res.status(400).json({ error: 'Track, type, and label are required' })
@@ -85,6 +85,7 @@ export async function createCurriculumItem(req, res) {
       label: label.trim(),
       parentId: parentId || null,
       order: finalOrder,
+      expectedDays: Math.max(0, Number(expectedDays) || 0),
       meta: meta || {},
       active: true,
     })
@@ -110,7 +111,7 @@ export async function updateCurriculumItem(req, res) {
     const item = await CurriculumItem.findById(req.params.id)
     if (!item) return res.status(404).json({ error: 'Item not found' })
 
-    const allowedFields = ['label', 'type', 'order', 'meta', 'active', 'parentId']
+    const allowedFields = ['label', 'type', 'order', 'meta', 'active', 'parentId', 'expectedDays']
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
         item[field] = req.body[field]

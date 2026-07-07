@@ -47,6 +47,7 @@ import portalShiftConfigRoutes from './routes/portalShiftConfigRoutes.js'
 import portalAdvanceRoutes from './routes/portalAdvanceRoutes.js'
 import portalLeaveRoutes from './routes/portalLeaveRoutes.js'
 import portalBadgeRoutes from './routes/portalBadgeRoutes.js'
+import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js'
 import { initSocket } from './config/socket.js'
 import requestLogger from './middleware/requestLogger.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
@@ -140,6 +141,7 @@ app.use('/api/portal/shift-config', portalShiftConfigRoutes)
 app.use('/api/portal/advances', portalAdvanceRoutes)
 app.use('/api/portal/leaves', portalLeaveRoutes)
 app.use('/api/portal/badges', portalBadgeRoutes)
+app.use('/api/portal/student-progress', portalStudentProgressRoutes)
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))

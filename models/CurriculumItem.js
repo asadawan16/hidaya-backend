@@ -18,6 +18,10 @@ const curriculumItemSchema = new mongoose.Schema({
     default: null,
   },
   order: { type: Number, default: 0 },
+  // Expected/min time (in days) a student should take to master this item.
+  // Used by the Student Progress view to flag overdue items (cumulative from
+  // the student's joining date). 0 = untracked (never flagged).
+  expectedDays: { type: Number, default: 0, min: 0 },
   meta: {
     surahNumber: { type: Number },
     paraNumber: { type: Number },

@@ -98,6 +98,12 @@ export const PERMISSIONS = {
 
   // Leave management
   leave: ['leave.read', 'leave.request', 'leave.review'],
+
+  // Student education progress (read-only aggregated view; NOT the student's own /my-progress)
+  studentProgress: ['student_progress.read'],
+
+  // Manual fee management (yearly grid, mark months received/pending, link payments)
+  fee: ['fee.read', 'fee.manage'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
@@ -124,6 +130,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read',
     'badge.read', 'badge.approve',
     'leave.read', 'leave.review',
+    'student_progress.read',
   ],
 
   coordinator: [
@@ -145,6 +152,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'badge.read',
     'advance.read',
     'leave.read', 'leave.review',
+    'student_progress.read',
   ],
 
   qci: [
@@ -158,6 +166,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'badge.read', 'badge.approve',
     'liveboard.view', 'chat.use',
     'leave.read', 'leave.review',
+    'student_progress.read', 'fee.read', 'fee.manage',
   ],
 
   qcm: [
@@ -169,6 +178,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'badge.read', 'badge.approve',
     'report.read',
     'liveboard.view', 'chat.use',
+    'student_progress.read', 'fee.read', 'fee.manage',
   ],
 
   tutor: [
@@ -186,6 +196,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'award.read',
     'advance.read',
     'leave.read', 'leave.request',
+    'student_progress.read',
   ],
 
   student: [
