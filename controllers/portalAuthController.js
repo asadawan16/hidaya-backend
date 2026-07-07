@@ -3,10 +3,8 @@ import crypto from 'crypto'
 import bcrypt from 'bcryptjs'
 import User from '../models/User.js'
 import { generateSecret, encryptSecret, verifyToken, generateQRDataUrl } from '../utils/totp.js'
-import { isWithinShiftWindow } from '../utils/shiftWindow.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { sendToUser, passwordResetOtpEmail } from '../services/mailer.js'
-import TutorProfile from '../models/TutorProfile.js'
 
 const OTP_TTL_MS = 10 * 60 * 1000 // 10 minutes
 const OTP_MAX_ATTEMPTS = 5
@@ -33,32 +31,6 @@ export async function portalLogin(req, res) {
     const valid = await user.comparePassword(password)
     if (!valid) {
       return res.status(401).json({ error: 'Invalid credentials' })
-    }
-
-    // Shift-window gate for tutors
-    if (user.mustLoginWithinShift && user.linkedTutorId) {
-      try {
-        const tutor = await TutorProfile.findById(user.linkedTutorId).lean()
-        if (tutor && tutor.shiftWindows?.length > 0) {
-          const timezone = tutor.shiftWindows[0]?.timezone || 'Asia/Karachi'
-          if (!isWithinShiftWindow(tutor.shiftWindows, timezone)) {
-            await logActivity({
-              level: 'warning',
-              category: 'portal',
-              action: 'login_shift_blocked',
-              message: `Login blocked outside shift: ${user.email}`,
-              req,
-              meta: { userId: user._id },
-            })
-            return res.status(403).json({
-              error: 'Login is not allowed outside your shift window',
-              code: 'SHIFT_BLOCKED',
-            })
-          }
-        }
-      } catch {
-        // TutorProfile query failed — skip shift check
-      }
     }
 
     // MFA check
