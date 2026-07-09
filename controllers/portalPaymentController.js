@@ -197,7 +197,7 @@ export async function listPaymentLinks(req, res) {
 
 export async function createPaymentLink(req, res) {
   try {
-    const { payeeName, payeeEmail, payeePhone, description, amount, currency, notes, expiresAfterPayment, items, listType, student, familyId, studentIds } = req.body
+    const { payeeName, payeeEmail, payeePhone, description, amount, currency, notes, expiresAfterPayment, items, listType, student, familyId, studentIds, taxType, taxValue } = req.body
 
     if (!description || !amount) {
       return res.status(400).json({ error: 'description and amount are required' })
@@ -244,6 +244,8 @@ export async function createPaymentLink(req, res) {
       description,
       amount,
       currency: currency || 'PKR',
+      taxType: ['percentage', 'fixed'].includes(taxType) ? taxType : 'none',
+      taxValue: ['percentage', 'fixed'].includes(taxType) ? Math.max(0, Number(taxValue) || 0) : 0,
       notes: notes || '',
       expiresAfterPayment: expiresAfterPayment !== undefined ? expiresAfterPayment : true,
       items: items || [],

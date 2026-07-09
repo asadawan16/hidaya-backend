@@ -9,6 +9,14 @@ import {
 } from '../services/mailer.js'
 import { logActivity } from '../utils/activityLogger.js'
 
+/* ── Compute tax added on top of a (post-discount) subtotal ── */
+function computeTax(subtotal, taxType, taxValue) {
+  const val = Number(taxValue) || 0
+  if (taxType === 'percentage') return Math.round(subtotal * (val / 100) * 100) / 100
+  if (taxType === 'fixed') return Math.max(0, val)
+  return 0
+}
+
 /* ── Generate unique invoice number: HO-YYYYMM-XXXX ── */
 async function generateInvoiceNo() {
   const now = new Date()
@@ -31,13 +39,15 @@ async function generateInvoiceNo() {
 /* ── Admin: Create a payment link ── */
 export async function create(req, res) {
   try {
-    const { payeeName, payeeEmail, payeePhone, description, amount, currency, notes, expiresAfterPayment, items, listType, student } = req.body
+    const { payeeName, payeeEmail, payeePhone, description, amount, currency, notes, expiresAfterPayment, items, listType, student, taxType, taxValue } = req.body
     if (!payeeName || !description || !amount) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
     const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
     const invoiceNo = await generateInvoiceNo()
+
+    const normalizedTaxType = ['percentage', 'fixed'].includes(taxType) ? taxType : 'none'
 
     const linkData = {
       payeeName,
@@ -46,6 +56,8 @@ export async function create(req, res) {
       description,
       amount: Number(amount),
       currency: validCurrencies.includes(currency) ? currency : 'PKR',
+      taxType: normalizedTaxType,
+      taxValue: normalizedTaxType === 'none' ? 0 : Math.max(0, Number(taxValue) || 0),
       notes,
       expiresAfterPayment: expiresAfterPayment !== false,
       items: Array.isArray(items) ? items.filter(i => i.trim()) : [],
@@ -215,6 +227,8 @@ export async function getByToken(req, res) {
       description: link.description,
       amount: link.amount,
       currency: link.currency,
+      taxType: link.taxType || 'none',
+      taxValue: link.taxValue || 0,
       status: link.status,
       token: link.token,
       expiresAfterPayment: link.expiresAfterPayment,
@@ -268,6 +282,10 @@ export async function initiate(req, res) {
       finalAmount = link.amount - dc.discountAmount
     }
 
+    // Apply tax on top of the (post-discount) subtotal
+    const taxAmount = computeTax(finalAmount, link.taxType, link.taxValue)
+    finalAmount = finalAmount + taxAmount
+
     const orderId = `PL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
     const paymentData = {
@@ -288,6 +306,12 @@ export async function initiate(req, res) {
       paymentData.discountCodeRef = appliedDiscount._id
       paymentData.discountAmount = appliedDiscount.discountAmount
       paymentData.originalAmount = link.amount
+    }
+    if (taxAmount > 0) {
+      paymentData.taxAmount = taxAmount
+      paymentData.taxType = link.taxType
+      paymentData.taxValue = link.taxValue
+      if (!appliedDiscount) paymentData.originalAmount = link.amount
     }
 
     const payment = await Payment.create(paymentData)
@@ -372,6 +396,10 @@ export async function initiatePayPal(req, res) {
       finalAmount = link.amount - dc.discountAmount
     }
 
+    // Apply tax on top of the (post-discount) subtotal
+    const taxAmount = computeTax(finalAmount, link.taxType, link.taxValue)
+    finalAmount = finalAmount + taxAmount
+
     const orderId = `PL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
     const transactionId = `TXN-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
@@ -394,6 +422,12 @@ export async function initiatePayPal(req, res) {
       paymentData.discountCodeRef = appliedDiscount._id
       paymentData.discountAmount = appliedDiscount.discountAmount
       paymentData.originalAmount = link.amount
+    }
+    if (taxAmount > 0) {
+      paymentData.taxAmount = taxAmount
+      paymentData.taxType = link.taxType
+      paymentData.taxValue = link.taxValue
+      if (!appliedDiscount) paymentData.originalAmount = link.amount
     }
 
     const payment = await Payment.create(paymentData)

@@ -1163,6 +1163,15 @@ export function invoiceEmail({ link, payment }) {
             <span style="font-size:14px;color:#0C3B2E;font-weight:500">${fmtCurrency(link.amount, link.currency)}</span>
           </td>
         </tr>`}
+        ${payment.taxAmount > 0 ? `
+        <tr>
+          <td style="padding:12px 0;border-bottom:1px solid #E7F2EC">
+            <span style="font-size:13px;color:#6B8F7F">Tax${payment.taxType === 'percentage' ? ` (${payment.taxValue}%)` : ''}</span>
+          </td>
+          <td style="padding:12px 0;border-bottom:1px solid #E7F2EC;text-align:right">
+            <span style="font-size:14px;color:#0C3B2E;font-weight:500">+${fmtCurrency(payment.taxAmount, link.currency)}</span>
+          </td>
+        </tr>` : ''}
         <tr>
           <td style="padding:14px 0">
             <span style="font-size:15px;font-weight:700;color:#0C3B2E">Total Paid</span>

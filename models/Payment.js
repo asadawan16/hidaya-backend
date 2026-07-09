@@ -40,6 +40,11 @@ const paymentSchema = new mongoose.Schema({
   discountAmount: { type: Number, default: 0 },
   originalAmount: { type: Number },
 
+  // Tax applied at payment time (added on top of the post-discount subtotal)
+  taxAmount: { type: Number, default: 0 },
+  taxType: { type: String, enum: ['none', 'percentage', 'fixed'], default: 'none' },
+  taxValue: { type: Number, default: 0 },
+
   // Multi-student support
   quantity: { type: Number, default: 1, min: 1 },
   studentNames: [{ type: String, trim: true }],

@@ -12,6 +12,10 @@ const paymentLinkSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
 
+  // Optional tax added on top of the amount (applied to the post-discount subtotal)
+  taxType: { type: String, enum: ['none', 'percentage', 'fixed'], default: 'none' },
+  taxValue: { type: Number, default: 0 }, // percentage points (3/5/6/10/custom) or a fixed amount
+
   // Unique token for the link
   token: {
     type: String,
