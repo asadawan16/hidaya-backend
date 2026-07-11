@@ -114,7 +114,8 @@ export async function updateCurriculumItem(req, res) {
     const allowedFields = ['label', 'type', 'order', 'meta', 'active', 'parentId', 'expectedDays']
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
-        item[field] = req.body[field]
+        // Empty parentId ('') isn't a valid ObjectId — normalize to null (top-level item).
+        item[field] = (field === 'parentId' && !req.body[field]) ? null : req.body[field]
       }
     }
 
