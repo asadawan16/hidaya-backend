@@ -11,11 +11,17 @@ const classSlotSchema = new mongoose.Schema({
     ref: 'TutorProfile',
     required: true,
   },
+  // Primary track — kept in sync with tracks[0] for backward compatibility.
   track: {
     type: String,
     enum: ['nazra', 'hifz', 'tafseer', 'tajweed', 'translation', 'qaida'],
     default: 'nazra',
   },
+  // A slot can cover multiple tracks (a lesson can be logged against several).
+  tracks: [{
+    type: String,
+    enum: ['nazra', 'hifz', 'tafseer', 'tajweed', 'translation', 'qaida'],
+  }],
   dayOfWeek: {
     type: Number,
     required: true,

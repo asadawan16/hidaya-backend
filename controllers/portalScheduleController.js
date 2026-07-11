@@ -52,10 +52,15 @@ export async function listSlots(req, res) {
 
 export async function createSlot(req, res) {
   try {
-    const { studentId, tutorId, track, dayOfWeek, days, startTime, durationMinutes, timezone, meetLink } = req.body
+    const { studentId, tutorId, track, tracks, dayOfWeek, days, startTime, durationMinutes, timezone, meetLink } = req.body
     if (!studentId || !tutorId || !startTime) {
       return res.status(400).json({ error: 'studentId, tutorId, and startTime are required' })
     }
+
+    // Normalize track selection — accept a tracks[] array or a single track.
+    const trackList = (Array.isArray(tracks) && tracks.length ? tracks : (track ? [track] : ['nazra']))
+      .filter((t, i, a) => t && a.indexOf(t) === i)
+    const primaryTrack = trackList[0] || 'nazra'
 
     // Determine which days to create slots for
     const daysToCreate = Array.isArray(days) && days.length > 0
@@ -75,7 +80,8 @@ export async function createSlot(req, res) {
     for (const dow of daysToCreate) {
       const slot = await ClassSlot.create({
         studentId, tutorId,
-        track: track || 'nazra',
+        track: primaryTrack,
+        tracks: trackList,
         dayOfWeek: dow,
         startTime,
         durationMinutes: durationMinutes || 30,
@@ -135,6 +141,12 @@ export async function updateSlot(req, res) {
     const fields = ['dayOfWeek', 'startTime', 'durationMinutes', 'timezone', 'meetLink', 'active', 'track']
     for (const f of fields) {
       if (req.body[f] !== undefined) slot[f] = req.body[f]
+    }
+    // Multi-track: keep track (primary) in sync with tracks[0].
+    if (Array.isArray(req.body.tracks)) {
+      const trackList = req.body.tracks.filter((t, i, a) => t && a.indexOf(t) === i)
+      slot.tracks = trackList
+      if (trackList.length) slot.track = trackList[0]
     }
     await slot.save()
 
