@@ -1,10 +1,74 @@
 import ClassSlot from '../models/ClassSlot.js'
 import ClassSession from '../models/ClassSession.js'
+import ScheduleConfig from '../models/ScheduleConfig.js'
 import Student from '../models/Student.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification } from './portalNotificationController.js'
 import { emitToLiveBoard } from '../config/socket.js'
+
+const DOW_MAP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
+
+// Current date info in a given timezone (default Asia/Karachi), server-TZ independent.
+export function tzDateInfo(base = new Date(), timeZone = 'Asia/Karachi') {
+  const dateStr = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(base)
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(base)
+  return { dateStr, dayOfWeek: DOW_MAP[weekday] }
+}
+
+// Weekday (0-6) of a 'YYYY-MM-DD' date string, independent of server timezone.
+function dayOfWeekOf(dateStr) {
+  const d = new Date(`${String(dateStr).slice(0, 10)}T00:00:00Z`)
+  return d.getUTCDay()
+}
+
+// Create any missing sessions for the given date from active slots on that weekday.
+// Idempotent (dedupes by slotId + date). Returns the number created.
+export async function generateSessionsForDay(dateStr) {
+  const dayOfWeek = dayOfWeekOf(dateStr)
+  const slots = await ClassSlot.find({ dayOfWeek, active: true }).lean()
+  if (slots.length === 0) return 0
+
+  const dateStart = new Date(dateStr); dateStart.setHours(0, 0, 0, 0)
+  const dateEnd = new Date(dateStr); dateEnd.setHours(23, 59, 59, 999)
+  const existing = await ClassSession.find({
+    slotId: { $in: slots.map(s => s._id) },
+    date: { $gte: dateStart, $lt: dateEnd },
+  }).select('slotId').lean()
+  const existingSlotIds = new Set(existing.map(s => s.slotId.toString()))
+
+  const toCreate = []
+  for (const slot of slots) {
+    if (existingSlotIds.has(slot._id.toString())) continue
+    const [h, m] = slot.startTime.split(':').map(Number)
+    const endMinutes = h * 60 + m + slot.durationMinutes
+    const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`
+    toCreate.push({
+      slotId: slot._id,
+      studentId: slot.studentId,
+      tutorId: slot.tutorId,
+      date: new Date(dateStr),
+      scheduledStart: slot.startTime,
+      scheduledEnd: endTime,
+      status: 'scheduled',
+    })
+  }
+  if (toCreate.length > 0) await ClassSession.insertMany(toCreate)
+  return toCreate.length
+}
+
+// Background job: if enabled, generate today's (Asia/Karachi) sessions.
+export async function runAutoSessionGeneration() {
+  try {
+    const cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
+    if (cfg && cfg.autoGenerateSessions === false) return
+    const { dateStr } = tzDateInfo()
+    const created = await generateSessionsForDay(dateStr)
+    if (created > 0) console.log(`[auto-sessions] generated ${created} session(s) for ${dateStr}`)
+  } catch (err) {
+    console.error('[auto-sessions] error:', err.message)
+  }
+}
 
 // ─── ClassSlot CRUD ───
 
@@ -418,45 +482,42 @@ export async function generateSessionsForDate(req, res) {
     const { date } = req.body
     if (!date) return res.status(400).json({ error: 'date is required' })
 
-    const d = new Date(date)
-    const dayOfWeek = d.getDay()
-
-    const slots = await ClassSlot.find({ dayOfWeek, active: true }).lean()
-    if (slots.length === 0) return res.json({ message: 'No slots for this day', created: 0 })
-
-    // Batch check existing sessions for this date (avoids N+1)
-    const dateStart = new Date(date); dateStart.setHours(0, 0, 0, 0)
-    const dateEnd = new Date(date); dateEnd.setHours(23, 59, 59, 999)
-    const existingSessions = await ClassSession.find({
-      slotId: { $in: slots.map(s => s._id) },
-      date: { $gte: dateStart, $lt: dateEnd },
-    }).select('slotId').lean()
-    const existingSlotIds = new Set(existingSessions.map(s => s.slotId.toString()))
-
-    const toCreate = []
-    for (const slot of slots) {
-      if (existingSlotIds.has(slot._id.toString())) continue
-
-      const [h, m] = slot.startTime.split(':').map(Number)
-      const endMinutes = h * 60 + m + slot.durationMinutes
-      const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`
-
-      toCreate.push({
-        slotId: slot._id,
-        studentId: slot.studentId,
-        tutorId: slot.tutorId,
-        date: new Date(date),
-        scheduledStart: slot.startTime,
-        scheduledEnd: endTime,
-        status: 'scheduled',
-      })
-    }
-
-    if (toCreate.length > 0) await ClassSession.insertMany(toCreate)
-
-    res.json({ message: `Generated ${toCreate.length} sessions`, created: toCreate.length })
+    const created = await generateSessionsForDay(date)
+    res.json({ message: created > 0 ? `Generated ${created} sessions` : 'No new sessions for this day', created })
   } catch (err) {
     console.error('Generate sessions error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Schedule config (auto-generation toggle) ───
+export async function getScheduleConfig(req, res) {
+  try {
+    let cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
+    if (!cfg) cfg = (await ScheduleConfig.create({ key: 'default' })).toObject()
+    res.json({ autoGenerateSessions: cfg.autoGenerateSessions !== false })
+  } catch (err) {
+    console.error('Get schedule config error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function updateScheduleConfig(req, res) {
+  try {
+    const update = {}
+    if (req.body.autoGenerateSessions !== undefined) update.autoGenerateSessions = !!req.body.autoGenerateSessions
+    const cfg = await ScheduleConfig.findOneAndUpdate(
+      { key: 'default' }, { $set: update }, { new: true, upsert: true, setDefaultsOnInsert: true },
+    ).lean()
+    // If just enabled, immediately generate today's sessions.
+    if (update.autoGenerateSessions === true) {
+      const { dateStr } = tzDateInfo()
+      await generateSessionsForDay(dateStr)
+    }
+    await logActivity({ level: 'info', category: 'schedule', action: 'schedule_config_updated', message: `Auto-generate sessions: ${cfg.autoGenerateSessions}`, req })
+    res.json({ autoGenerateSessions: cfg.autoGenerateSessions !== false })
+  } catch (err) {
+    console.error('Update schedule config error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

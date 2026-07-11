@@ -4,10 +4,15 @@ import {
   listSlots, createSlot, updateSlot, deleteSlot,
   listSessions, createSession, startSession, completeSession, markSessionMissed,
   getLiveBoard, getMyLiveSessions, generateSessionsForDate,
+  getScheduleConfig, updateScheduleConfig,
 } from '../controllers/portalScheduleController.js'
 
 const router = Router()
 router.use(portalAuth)
+
+// Schedule config (auto-generate toggle)
+router.get('/config', requirePermission('schedule.read'), getScheduleConfig)
+router.put('/config', requirePermission('schedule.manage'), updateScheduleConfig)
 
 // Class Slots
 router.get('/slots', requirePermission('schedule.read'), listSlots)

@@ -53,6 +53,7 @@ import portalFeeRoutes from './routes/portalFeeRoutes.js'
 import { initSocket } from './config/socket.js'
 import requestLogger from './middleware/requestLogger.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
+import { runAutoSessionGeneration } from './controllers/portalScheduleController.js'
 import { ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from './config/permissions.js'
 
 const app = express()
@@ -189,4 +190,9 @@ wss.on('connection', (ws, req) => {
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
   startPaymentCleanupJob()
+
+  // Auto-generate today's sessions from recurring slots (Asia/Karachi), if enabled.
+  // Runs on startup and hourly; idempotent so re-runs never duplicate.
+  runAutoSessionGeneration()
+  setInterval(runAutoSessionGeneration, 60 * 60 * 1000)
 })
