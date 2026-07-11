@@ -15,6 +15,24 @@ async function generateFamilyCode() {
   return `FAM${String(num).padStart(3, '0')}`
 }
 
+// ─── Check family code availability ───
+export async function checkFamilyCode(req, res) {
+  try {
+    const raw = (req.query.familyCode || '').trim().toUpperCase()
+    const { excludeId } = req.query
+    if (!raw) {
+      return res.json({ available: false, suggestion: await generateFamilyCode() })
+    }
+    const filter = { familyCode: raw }
+    if (excludeId) filter._id = { $ne: excludeId }
+    const existing = await Family.findOne(filter).select('_id').lean()
+    res.json({ available: !existing })
+  } catch (err) {
+    console.error('Check family code error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // ─── List families ───
 export async function listFamilies(req, res) {
   try {
@@ -86,7 +104,13 @@ export async function createFamily(req, res) {
   try {
     const { primaryGuardian, notes, memberIds } = req.body
 
-    const familyCode = await generateFamilyCode()
+    // Use the manually-entered code if provided, else auto-generate
+    const familyCode = (req.body.familyCode || '').trim().toUpperCase() || await generateFamilyCode()
+
+    const existing = await Family.findOne({ familyCode }).select('_id').lean()
+    if (existing) {
+      return res.status(409).json({ error: `Family code "${familyCode}" is already taken` })
+    }
 
     const family = await Family.create({
       familyCode,
@@ -131,6 +155,16 @@ export async function updateFamily(req, res) {
     if (!family) return res.status(404).json({ error: 'Family not found' })
 
     const { primaryGuardian, notes, memberIds } = req.body
+
+    // Allow renaming the family code, guarding uniqueness
+    const newCode = (req.body.familyCode || '').trim().toUpperCase()
+    if (newCode && newCode !== family.familyCode) {
+      const clash = await Family.findOne({ familyCode: newCode, _id: { $ne: family._id } }).select('_id').lean()
+      if (clash) {
+        return res.status(409).json({ error: `Family code "${newCode}" is already taken` })
+      }
+      family.familyCode = newCode
+    }
 
     if (primaryGuardian !== undefined) family.primaryGuardian = primaryGuardian
     if (notes !== undefined) family.notes = notes
