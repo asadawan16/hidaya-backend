@@ -21,18 +21,19 @@ async function tutorUser(tutorId) {
 }
 
 // Net payable for the user-managed salary sheet:
-//   Monthly + Extra Classes + Extra Money − Absentees − Fine − Advance Received
+//   Monthly + Extra Classes + Extra Money − Fine − Advance Received
+// Absentees is informational only (absent-day count) and is NOT deducted.
 function computeSalaryNet(r) {
   return (Number(r.baseAmount) || 0)
     + (Number(r.extraClassesAmount) || 0)
     + (Number(r.extraMoney) || 0)
-    - (Number(r.absenteesDeduction) || 0)
     - (Number(r.fine) || 0)
     - (Number(r.advanceDeductions) || 0)
 }
 
 // The editable money fields on a salary row (all optional in the request body).
-const SALARY_MONEY_FIELDS = ['baseAmount', 'absenteesDeduction', 'fine', 'extraClassesAmount', 'extraMoney', 'advanceDeductions']
+// absenteesDeduction is intentionally excluded — absentees no longer affect pay.
+const SALARY_MONEY_FIELDS = ['baseAmount', 'fine', 'extraClassesAmount', 'extraMoney', 'advanceDeductions']
 
 // ─── Invoices ───
 
@@ -227,13 +228,10 @@ export async function generateSalary(req, res) {
     // User-managed values — the request body wins; otherwise sensible suggestions.
     const baseAmount = num(req.body.baseAmount, tutor.salary?.baseAmount || 0)
     const advanceDeductions = num(req.body.advanceDeductions, await suggestAdvanceDeduction(tutorId))
-    // Suggested absentee deduction from attendance: absentDays × (Monthly ÷ working days).
-    const workingDays = presentDays + absentDays
-    const suggestedAbsentees = workingDays > 0 ? Math.round((baseAmount / workingDays) * absentDays) : 0
     const draft = {
       tutorId, month, year, currency,
       baseAmount,
-      absenteesDeduction: num(req.body.absenteesDeduction, suggestedAbsentees),
+      absenteesDeduction: 0, // informational only — absentDays is shown; no deduction
       fine: num(req.body.fine),
       extraClassesAmount: num(req.body.extraClassesAmount),
       extraMoney: num(req.body.extraMoney),
@@ -245,7 +243,7 @@ export async function generateSalary(req, res) {
     }
     draft.netPayable = computeSalaryNet(draft)
     // Keep legacy aggregate fields consistent for older readers / PDFs.
-    draft.totalDeductions = (draft.absenteesDeduction || 0) + (draft.fine || 0) + (draft.advanceDeductions || 0)
+    draft.totalDeductions = (draft.fine || 0) + (draft.advanceDeductions || 0)
     draft.bonuses = (draft.extraClassesAmount || 0) + (draft.extraMoney || 0)
 
     const record = await SalaryRecord.create(draft)
@@ -312,7 +310,7 @@ export async function updateSalaryStatus(req, res) {
 
     // Recompute net + legacy aggregates from the explicit columns
     record.netPayable = computeSalaryNet(record)
-    record.totalDeductions = (record.absenteesDeduction || 0) + (record.fine || 0) + (record.advanceDeductions || 0)
+    record.totalDeductions = (record.fine || 0) + (record.advanceDeductions || 0)
     record.bonuses = (record.extraClassesAmount || 0) + (record.extraMoney || 0)
 
     const nowPaid = status === 'paid' && record.status !== 'paid'
