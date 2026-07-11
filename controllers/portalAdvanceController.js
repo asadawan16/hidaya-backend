@@ -1,3 +1,4 @@
+import mongoose from 'mongoose'
 import Advance from '../models/Advance.js'
 import User from '../models/User.js'
 import Notification from '../models/Notification.js'
@@ -30,13 +31,14 @@ export async function listAdvances(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 20))
-    const { tutorId, status } = req.query
+    const { tutorId, status, type } = req.query
 
     const filter = {}
     // Tutors only ever see their own advances, regardless of query params.
     if (req.user.linkedTutorId) filter.tutorId = req.user.linkedTutorId
     else if (tutorId) filter.tutorId = tutorId
     if (status) filter.status = status
+    if (type) filter.type = type
 
     const total = await Advance.countDocuments(filter)
     const pages = Math.ceil(total / lim) || 1
@@ -45,12 +47,38 @@ export async function listAdvances(req, res) {
     const records = await Advance.find(filter)
       .populate('tutorId', 'name tutorId')
       .populate('approvedBy', 'displayName')
+      .populate('requestedBy', 'displayName')
+      .populate('reviewedBy', 'displayName')
       .sort({ createdAt: -1 })
       .skip((safePage - 1) * lim)
       .limit(lim)
       .lean()
 
-    res.json({ records, total, page: safePage, pages })
+    // Aggregate stats across the whole filtered set (not just the current page).
+    const matchStage = {}
+    if (filter.tutorId) matchStage.tutorId = new mongoose.Types.ObjectId(String(filter.tutorId))
+    if (filter.status) matchStage.status = filter.status
+    if (filter.type) matchStage.type = filter.type
+    const [agg] = await Advance.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: null,
+          activeCount: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+          totalOutstanding: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, '$remainingBalance', 0] } },
+          totalRepaid: { $sum: '$amountRepaid' },
+        },
+      },
+    ])
+    const cur = await Advance.findOne(filter).select('currency').lean()
+    const stats = {
+      activeCount: agg?.activeCount || 0,
+      totalOutstanding: agg?.totalOutstanding || 0,
+      totalRepaid: agg?.totalRepaid || 0,
+      currency: cur?.currency || 'PKR',
+    }
+
+    res.json({ records, total, page: safePage, pages, stats })
   } catch (err) {
     console.error('List advances error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -235,18 +263,38 @@ export async function updateAdvance(req, res) {
     const advance = await Advance.findById(req.params.id)
     if (!advance) return res.status(404).json({ error: 'Advance not found' })
 
-    const { status, installmentAmount, installmentFrequency, repayment } = req.body
+    const {
+      status, type, totalAmount, currency, installmentAmount, installmentFrequency,
+      reason, startDate, repayment, removeInstallmentId,
+    } = req.body
 
     if (status === 'cancelled') {
       advance.status = 'cancelled'
     }
+    // Editable core fields (advance.manage) — only applied when provided.
+    if (type) advance.type = type
+    if (currency) advance.currency = currency
+    if (reason !== undefined) advance.reason = reason
+    if (startDate) advance.startDate = new Date(startDate)
+    if (totalAmount != null && Number(totalAmount) > 0) advance.totalAmount = Number(totalAmount)
     if (installmentAmount) advance.installmentAmount = installmentAmount
     if (installmentFrequency) advance.installmentFrequency = installmentFrequency
+
+    // Delete a recorded repayment (from the history timeline).
+    if (removeInstallmentId) {
+      const inst = advance.installments.id(removeInstallmentId)
+      if (inst) {
+        advance.amountRepaid = Math.max(0, advance.amountRepaid - inst.amount)
+        inst.deleteOne()
+        // Reopen a previously-settled advance if it now has an outstanding balance again.
+        if (advance.status === 'fully_paid') advance.status = 'active'
+      }
+    }
 
     // Manual repayment recording
     if (repayment && repayment.amount > 0) {
       advance.installments.push({
-        date: new Date(),
+        date: repayment.date ? new Date(repayment.date) : new Date(),
         amount: repayment.amount,
         note: repayment.note || 'Manual repayment',
       })
@@ -288,12 +336,34 @@ export async function getAdvance(req, res) {
     const advance = await Advance.findById(req.params.id)
       .populate('tutorId', 'name tutorId')
       .populate('approvedBy', 'displayName')
+      .populate('requestedBy', 'displayName')
+      .populate('reviewedBy', 'displayName')
       .lean()
 
     if (!advance) return res.status(404).json({ error: 'Advance not found' })
     res.json(advance)
   } catch (err) {
     console.error('Get advance error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function deleteAdvance(req, res) {
+  try {
+    const advance = await Advance.findById(req.params.id)
+    if (!advance) return res.status(404).json({ error: 'Advance not found' })
+
+    await advance.deleteOne()
+
+    await logActivity({
+      level: 'warn', category: 'finance', action: 'advance_deleted',
+      message: `Advance ${advance._id} deleted (tutor ${advance.tutorId})`,
+      req, meta: { advanceId: advance._id },
+    })
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('Delete advance error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

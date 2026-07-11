@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
-  listAdvances, createAdvance, updateAdvance, getAdvance,
+  listAdvances, createAdvance, updateAdvance, deleteAdvance, getAdvance,
   requestAdvance, approveAdvance, rejectAdvance,
 } from '../controllers/portalAdvanceController.js'
 
@@ -16,5 +16,6 @@ router.post('/', requirePermission('advance.manage'), createAdvance)
 router.post('/:id/approve', requirePermission('advance.manage'), approveAdvance)
 router.post('/:id/reject', requirePermission('advance.manage'), rejectAdvance)
 router.patch('/:id', requirePermission('advance.manage'), updateAdvance)
+router.delete('/:id', requirePermission('advance.manage'), deleteAdvance)
 
 export default router
