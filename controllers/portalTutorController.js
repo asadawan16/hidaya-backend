@@ -24,6 +24,11 @@ async function generateTutorId() {
   return `T${String(num).padStart(2, '0')}`
 }
 
+// Normalize a user-supplied tutor ID (uppercase, trimmed). Returns '' if blank.
+function normalizeTutorId(raw) {
+  return String(raw || '').trim().toUpperCase()
+}
+
 export async function listTutors(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
@@ -110,6 +115,18 @@ export async function createTutor(req, res) {
       return res.status(400).json({ error: 'Name, email, and password are required' })
     }
 
+    // Optional manual tutor ID — validate format & uniqueness, else auto-generate
+    const manualId = normalizeTutorId(req.body.tutorId)
+    if (manualId) {
+      if (!/^[A-Z0-9-]{2,20}$/.test(manualId)) {
+        return res.status(400).json({ error: 'Tutor ID must be 2–20 letters, numbers, or hyphens' })
+      }
+      const dupe = await TutorProfile.findOne({ tutorId: manualId }).select('_id').lean()
+      if (dupe) {
+        return res.status(400).json({ error: `Tutor ID "${manualId}" is already in use` })
+      }
+    }
+
     // Check for existing user
     const existingUser = await User.findOne({ email: email.toLowerCase().trim() })
     if (existingUser) {
@@ -133,8 +150,8 @@ export async function createTutor(req, res) {
       mustLoginWithinShift: true,
     })
 
-    // Generate tutor ID
-    const tutorId = await generateTutorId()
+    // Use manual ID if provided, otherwise auto-generate
+    const tutorId = manualId || await generateTutorId()
 
     // Create tutor profile
     const tutor = await TutorProfile.create({
@@ -180,6 +197,24 @@ export async function updateTutor(req, res) {
   try {
     const tutor = await TutorProfile.findById(req.params.id)
     if (!tutor) return res.status(404).json({ error: 'Tutor not found' })
+
+    // Optional manual tutor ID change — validate format & uniqueness
+    if (req.body.tutorId !== undefined) {
+      const manualId = normalizeTutorId(req.body.tutorId)
+      if (!manualId) {
+        return res.status(400).json({ error: 'Tutor ID cannot be empty' })
+      }
+      if (!/^[A-Z0-9-]{2,20}$/.test(manualId)) {
+        return res.status(400).json({ error: 'Tutor ID must be 2–20 letters, numbers, or hyphens' })
+      }
+      if (manualId !== tutor.tutorId) {
+        const dupe = await TutorProfile.findOne({ tutorId: manualId, _id: { $ne: tutor._id } }).select('_id').lean()
+        if (dupe) {
+          return res.status(400).json({ error: `Tutor ID "${manualId}" is already in use` })
+        }
+        tutor.tutorId = manualId
+      }
+    }
 
     const allowedFields = ['name', 'phone', 'skillLevel', 'roomNo', 'meetLink', 'subjects', 'notes', 'status', 'salary', 'shiftWindows']
 
