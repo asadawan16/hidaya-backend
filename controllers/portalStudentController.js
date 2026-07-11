@@ -163,6 +163,24 @@ export async function getStudent(req, res) {
   }
 }
 
+// Live roll-no availability check (and a suggested next roll no when none given).
+export async function checkRollNo(req, res) {
+  try {
+    const raw = (req.query.rollNo || '').trim()
+    const { excludeId } = req.query
+    if (!raw) {
+      return res.json({ available: false, suggestion: await generateRollNo() })
+    }
+    const filter = { rollNo: raw }
+    if (excludeId) filter._id = { $ne: excludeId }
+    const existing = await Student.findOne(filter).select('_id').lean()
+    res.json({ available: !existing })
+  } catch (err) {
+    console.error('Check roll no error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 export async function createStudent(req, res) {
   try {
     const { createPortalAccount, portalPassword, ...data } = req.body
