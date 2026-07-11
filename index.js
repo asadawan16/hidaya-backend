@@ -27,6 +27,7 @@ import portalTutorRoutes from './routes/portalTutorRoutes.js'
 import portalAdmissionRoutes from './routes/portalAdmissionRoutes.js'
 import portalCurriculumRoutes from './routes/portalCurriculumRoutes.js'
 import portalAssignmentRoutes from './routes/portalAssignmentRoutes.js'
+import portalTutorChangeRoutes from './routes/portalTutorChangeRoutes.js'
 import portalScheduleRoutes from './routes/portalScheduleRoutes.js'
 import portalAttendanceRoutes from './routes/portalAttendanceRoutes.js'
 import portalLessonRoutes from './routes/portalLessonRoutes.js'
@@ -122,6 +123,7 @@ app.use('/api/portal/tutors', portalTutorRoutes)
 app.use('/api/portal/admissions', portalAdmissionRoutes)
 app.use('/api/portal/curriculum', portalCurriculumRoutes)
 app.use('/api/portal/assignments', portalAssignmentRoutes)
+app.use('/api/portal/tutor-change-requests', portalTutorChangeRoutes)
 app.use('/api/portal/schedule', portalScheduleRoutes)
 app.use('/api/portal/attendance', portalAttendanceRoutes)
 app.use('/api/portal/lessons', portalLessonRoutes)

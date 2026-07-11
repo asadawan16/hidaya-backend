@@ -68,6 +68,35 @@ export async function listLeads(req, res) {
   }
 }
 
+// ─── Create lead manually (portal) ───
+export async function createLead(req, res) {
+  try {
+    const { name, email, phone, message, source, status } = req.body
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' })
+    if (!email || !email.trim()) return res.status(400).json({ error: 'Email is required' })
+
+    const lead = await Enrollment.create({
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      phone: phone?.trim() || '',
+      message: message?.trim() || '',
+      source: source || 'manual',
+      status: status || 'new',
+    })
+
+    await logActivity({
+      level: 'info', category: 'leads', action: 'lead_created',
+      message: `Lead ${lead.name} added manually`, req,
+      meta: { leadId: lead._id },
+    })
+
+    res.status(201).json(lead)
+  } catch (err) {
+    console.error('Create lead error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // ─── Get single lead ───
 export async function getLead(req, res) {
   try {

@@ -17,8 +17,12 @@ const advanceSchema = new mongoose.Schema({
   amountRepaid: { type: Number, default: 0 },
   remainingBalance: { type: Number },
   installments: [installmentSchema],
-  status: { type: String, enum: ['active', 'fully_paid', 'cancelled'], default: 'active' },
+  status: { type: String, enum: ['requested', 'active', 'fully_paid', 'cancelled', 'rejected'], default: 'active' },
   approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  reviewedAt: { type: Date },
+  rejectionReason: { type: String, trim: true, default: '' },
   reason: { type: String, trim: true, default: '' },
   startDate: { type: Date, required: true },
 }, { timestamps: true })
@@ -27,10 +31,12 @@ advanceSchema.index({ tutorId: 1, status: 1 })
 
 advanceSchema.pre('save', function(next) {
   this.remainingBalance = this.totalAmount - this.amountRepaid
-  if (this.remainingBalance <= 0) {
+  // Only auto-complete an active repaying advance — never a requested/rejected/cancelled one.
+  if (this.status === 'active' && this.remainingBalance <= 0) {
     this.remainingBalance = 0
     this.status = 'fully_paid'
   }
+  if (this.remainingBalance < 0) this.remainingBalance = 0
   next()
 })
 

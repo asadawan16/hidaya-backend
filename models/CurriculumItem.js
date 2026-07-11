@@ -28,6 +28,8 @@ const curriculumItemSchema = new mongoose.Schema({
     lineCount: { type: Number },
     arabicLabel: { type: String, trim: true },
     pageNumber: { type: Number },
+    // Total pages within this item (e.g. a Quran para has 20 pages). 0/undefined = untracked.
+    totalPages: { type: Number, min: 0 },
   },
   active: { type: Boolean, default: true },
 }, { timestamps: true })

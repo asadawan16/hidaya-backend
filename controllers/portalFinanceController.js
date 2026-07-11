@@ -20,6 +20,20 @@ async function tutorUser(tutorId) {
   return u ? { userId: u._id } : null
 }
 
+// Net payable for the user-managed salary sheet:
+//   Monthly + Extra Classes + Extra Money − Absentees − Fine − Advance Received
+function computeSalaryNet(r) {
+  return (Number(r.baseAmount) || 0)
+    + (Number(r.extraClassesAmount) || 0)
+    + (Number(r.extraMoney) || 0)
+    - (Number(r.absenteesDeduction) || 0)
+    - (Number(r.fine) || 0)
+    - (Number(r.advanceDeductions) || 0)
+}
+
+// The editable money fields on a salary row (all optional in the request body).
+const SALARY_MONEY_FIELDS = ['baseAmount', 'absenteesDeduction', 'fine', 'extraClassesAmount', 'extraMoney', 'advanceDeductions']
+
 // ─── Invoices ───
 
 async function generateInvoiceNo() {
@@ -172,6 +186,19 @@ export async function listSalaryRecords(req, res) {
   }
 }
 
+// Suggest a default advance deduction for the month from the tutor's active advances
+// (does NOT mutate the advance — the amount is only posted to the ledger when the salary is paid).
+async function suggestAdvanceDeduction(tutorId) {
+  const activeAdvances = await Advance.find({ tutorId, status: 'active' }).lean()
+  let suggested = 0
+  for (const adv of activeAdvances) {
+    if (adv.installmentFrequency === 'monthly') {
+      suggested += Math.min(adv.installmentAmount || 0, adv.remainingBalance || 0)
+    }
+  }
+  return suggested
+}
+
 export async function generateSalary(req, res) {
   try {
     const { tutorId, month, year } = req.body
@@ -194,94 +221,34 @@ export async function generateSalary(req, res) {
     const absentDays = attendance.filter(a => a.status === 'absent').length
     const totalHours = attendance.reduce((sum, a) => sum + (a.totalHours || 0), 0)
 
-    const baseAmount = tutor.salary?.baseAmount || 0
-    const currency = tutor.salary?.currency || 'PKR'
+    const currency = req.body.currency || tutor.salary?.currency || 'PKR'
+    const num = (v, fallback = 0) => (v === undefined || v === null || v === '' ? fallback : Number(v))
 
-    // Load shift config for overtime/bonus calculations
-    const shiftConfig = await ShiftConfig.findOne({ key: 'default' }).lean()
-
-    // Calculate deductions
-    const deductions = []
-    if (absentDays > 0) {
-      const workingDays = presentDays + absentDays
-      const perDayRate = workingDays > 0 ? baseAmount / workingDays : 0
-      deductions.push({ reason: `Absent ${absentDays} day(s)`, amount: Math.round(perDayRate * absentDays) })
-    }
-
-    // Advance/loan deductions
-    let advanceDeductions = 0
-    const activeAdvances = await Advance.find({ tutorId, status: 'active' })
-    for (const adv of activeAdvances) {
-      if (adv.installmentFrequency === 'monthly') {
-        const deductAmt = Math.min(adv.installmentAmount, adv.remainingBalance)
-        if (deductAmt > 0) {
-          deductions.push({ reason: `Advance repayment (${adv.type})`, amount: deductAmt })
-          advanceDeductions += deductAmt
-          adv.installments.push({ date: new Date(), amount: deductAmt, note: `Auto-deducted from salary ${month}/${year}` })
-          adv.amountRepaid += deductAmt
-          await adv.save()
-        }
-      }
-    }
-
-    // Overtime calculation
-    let overtimeHours = 0
-    let overtimeAmount = 0
-    if (shiftConfig) {
-      const [shiftEndH, shiftEndM] = (shiftConfig.defaultShiftEnd || '17:00').split(':').map(Number)
-      const shiftEndMinutes = shiftEndH * 60 + shiftEndM
-      const threshold = shiftConfig.overtimeThresholdMinutes || 0
-
-      for (const a of attendance) {
-        if (a.isOvertime && a.checkOutAt && a.checkInAt) {
-          const checkOutMinutes = a.checkOutAt.getHours() * 60 + a.checkOutAt.getMinutes()
-          const extraMins = checkOutMinutes - shiftEndMinutes - threshold
-          if (extraMins > 0) {
-            overtimeHours += extraMins / 60
-          }
-        }
-      }
-      overtimeHours = Math.round(overtimeHours * 100) / 100
-      overtimeAmount = Math.round(overtimeHours * (shiftConfig.bonusRules?.extraHoursRate || 0))
-    }
-
-    // Bonus calculation
-    const bonusBreakdown = []
-    if (shiftConfig?.bonusRules) {
-      const rules = shiftConfig.bonusRules
-      if (rules.fullAttendanceBonus > 0 && absentDays === 0 && presentDays > 0) {
-        bonusBreakdown.push({ reason: 'Full attendance bonus', amount: rules.fullAttendanceBonus })
-      }
-      if (rules.onTimeBonus > 0 && presentDays > 0) {
-        const [shiftStartH, shiftStartM] = (shiftConfig.defaultShiftStart || '09:00').split(':').map(Number)
-        const shiftStartMinutes = shiftStartH * 60 + shiftStartM
-        const allOnTime = attendance.every(a => {
-          if (a.status !== 'present' || !a.checkInAt) return true
-          const checkInMinutes = a.checkInAt.getHours() * 60 + a.checkInAt.getMinutes()
-          return checkInMinutes <= shiftStartMinutes + 5
-        })
-        if (allOnTime) {
-          bonusBreakdown.push({ reason: 'On-time check-in bonus', amount: rules.onTimeBonus })
-        }
-      }
-      if (overtimeAmount > 0) {
-        bonusBreakdown.push({ reason: `Overtime (${overtimeHours}h)`, amount: overtimeAmount })
-      }
-    }
-
-    const totalBonuses = bonusBreakdown.reduce((sum, b) => sum + b.amount, 0)
-    const totalDeductions = deductions.reduce((sum, d) => sum + d.amount, 0)
-    const netPayable = baseAmount - totalDeductions + totalBonuses
-
-    const record = await SalaryRecord.create({
-      tutorId, month, year, baseAmount, currency,
-      deductions, totalDeductions,
-      bonuses: totalBonuses, bonusBreakdown,
-      netPayable,
+    // User-managed values — the request body wins; otherwise sensible suggestions.
+    const baseAmount = num(req.body.baseAmount, tutor.salary?.baseAmount || 0)
+    const advanceDeductions = num(req.body.advanceDeductions, await suggestAdvanceDeduction(tutorId))
+    // Suggested absentee deduction from attendance: absentDays × (Monthly ÷ working days).
+    const workingDays = presentDays + absentDays
+    const suggestedAbsentees = workingDays > 0 ? Math.round((baseAmount / workingDays) * absentDays) : 0
+    const draft = {
+      tutorId, month, year, currency,
+      baseAmount,
+      absenteesDeduction: num(req.body.absenteesDeduction, suggestedAbsentees),
+      fine: num(req.body.fine),
+      extraClassesAmount: num(req.body.extraClassesAmount),
+      extraMoney: num(req.body.extraMoney),
+      advanceDeductions,
+      comment: (req.body.comment || '').trim(),
       presentDays, absentDays, totalHours,
-      overtimeHours, overtimeAmount, advanceDeductions,
+      status: ['draft', 'finalized'].includes(req.body.status) ? req.body.status : 'draft',
       generatedBy: req.userId,
-    })
+    }
+    draft.netPayable = computeSalaryNet(draft)
+    // Keep legacy aggregate fields consistent for older readers / PDFs.
+    draft.totalDeductions = (draft.absenteesDeduction || 0) + (draft.fine || 0) + (draft.advanceDeductions || 0)
+    draft.bonuses = (draft.extraClassesAmount || 0) + (draft.extraMoney || 0)
+
+    const record = await SalaryRecord.create(draft)
 
     await logActivity({ level: 'info', category: 'salary', action: 'salary_generated', message: `Salary generated for ${tutor.tutorId} (${month}/${year})`, req })
 
@@ -303,29 +270,66 @@ export async function generateSalary(req, res) {
   }
 }
 
+// Post the salary's advance deduction against the tutor's active advances (oldest first).
+// Idempotent via record.advanceRepaymentApplied.
+async function applyAdvanceRepayment(record, req) {
+  if (record.advanceRepaymentApplied) return
+  let remaining = Number(record.advanceDeductions) || 0
+  if (remaining <= 0) { record.advanceRepaymentApplied = true; return }
+  const active = await Advance.find({ tutorId: record.tutorId, status: 'active' }).sort({ startDate: 1 })
+  for (const adv of active) {
+    if (remaining <= 0) break
+    const pay = Math.min(remaining, adv.remainingBalance)
+    if (pay <= 0) continue
+    adv.installments.push({ date: new Date(), amount: pay, salaryRecordId: record._id, note: `Deducted in salary ${record.month}/${record.year}` })
+    adv.amountRepaid += pay
+    await adv.save() // pre-save recomputes balance / flips to fully_paid
+    remaining -= pay
+  }
+  record.advanceRepaymentApplied = true
+}
+
 export async function updateSalaryStatus(req, res) {
   try {
     const record = await SalaryRecord.findById(req.params.id)
     if (!record) return res.status(404).json({ error: 'Record not found' })
 
-    const { status, bonuses, notes } = req.body
-    if (status) {
-      record.status = status
-      if (status === 'paid' && !record.paidAt) {
-        record.paidAt = new Date()
-        // Generate receipt number
-        const count = await SalaryRecord.countDocuments({ receiptNo: { $ne: '' } })
-        record.receiptNo = `SR-${String(count + 1).padStart(5, '0')}`
+    // Paid rows are locked — no field or status edits.
+    if (record.status === 'paid') {
+      return res.status(400).json({ error: 'This salary is marked paid and can no longer be edited' })
+    }
+
+    const { status, notes, comment } = req.body
+
+    // Editable money fields (full user control before payment)
+    for (const f of SALARY_MONEY_FIELDS) {
+      if (req.body[f] !== undefined && req.body[f] !== null && req.body[f] !== '') {
+        record[f] = Number(req.body[f])
       }
     }
-    if (bonuses !== undefined) {
-      record.bonuses = bonuses
-      record.netPayable = record.baseAmount - record.totalDeductions + bonuses
+    if (comment !== undefined) record.comment = comment
+    if (notes !== undefined) record.notes = notes
+
+    // Recompute net + legacy aggregates from the explicit columns
+    record.netPayable = computeSalaryNet(record)
+    record.totalDeductions = (record.absenteesDeduction || 0) + (record.fine || 0) + (record.advanceDeductions || 0)
+    record.bonuses = (record.extraClassesAmount || 0) + (record.extraMoney || 0)
+
+    const nowPaid = status === 'paid' && record.status !== 'paid'
+    if (status && ['draft', 'finalized', 'paid'].includes(status)) {
+      record.status = status
+      if (nowPaid) {
+        record.paidAt = new Date()
+        const count = await SalaryRecord.countDocuments({ receiptNo: { $ne: '' } })
+        record.receiptNo = `SR-${String(count + 1).padStart(5, '0')}`
+        // Post the advance deduction to the tutor's advance ledger on payment.
+        await applyAdvanceRepayment(record, req)
+      }
     }
-    if (notes) record.notes = notes
+
     await record.save()
 
-    if (status === 'paid') {
+    if (nowPaid) {
       const tu = await tutorUser(record.tutorId)
       if (tu) {
         await createNotification({
@@ -337,6 +341,8 @@ export async function updateSalaryStatus(req, res) {
         })
       }
     }
+
+    await logActivity({ level: 'info', category: 'salary', action: 'salary_updated', message: `Salary ${record._id} updated (${record.status})`, req })
 
     res.json(record)
   } catch (err) {

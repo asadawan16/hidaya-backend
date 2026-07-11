@@ -7,7 +7,7 @@ const enrollmentSchema = new mongoose.Schema({
   message: { type: String, trim: true },
   source: {
     type: String,
-    enum: ['hero_form', 'free_class', 'contact', 'enrollment'],
+    enum: ['hero_form', 'free_class', 'contact', 'enrollment', 'manual'],
     default: 'hero_form',
   },
   status: {

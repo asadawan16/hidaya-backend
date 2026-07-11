@@ -12,7 +12,7 @@ export const PERMISSIONS = {
   tutor: ['tutor.read', 'tutor.create', 'tutor.update', 'tutor.delete'],
 
   // Assignments (tutor ↔ student)
-  assignment: ['assignment.read', 'assignment.manage'],
+  assignment: ['assignment.read', 'assignment.manage', 'assignment.request', 'assignment.approve'],
 
   // Lessons (daily + permanent)
   lesson: ['lesson.read', 'lesson.log', 'lesson.approve'],
@@ -94,7 +94,7 @@ export const PERMISSIONS = {
   award: ['award.read', 'award.manage'],
 
   // Advances / loans
-  advance: ['advance.read', 'advance.manage'],
+  advance: ['advance.read', 'advance.manage', 'advance.request'],
 
   // Leave management
   leave: ['leave.read', 'leave.request', 'leave.review'],
@@ -157,6 +157,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
 
   qci: [
     'student.read', 'tutor.read',
+    'assignment.read', 'assignment.request',
     'lesson.read', 'lesson.approve',
     'assessment.read', 'assessment.create', 'assessment.template_manage',
     'notice.read', 'notice.create',
@@ -171,6 +172,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
 
   qcm: [
     'student.read', 'tutor.read',
+    'assignment.read', 'assignment.approve',
     'lesson.read',
     'assessment.read',
     'notice.read',
@@ -194,7 +196,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'chat.use',
     'whatsapp.send',
     'award.read',
-    'advance.read',
+    'advance.read', 'advance.request',
     'leave.read', 'leave.request',
     'student_progress.read',
   ],
@@ -205,5 +207,6 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'assessment.read',
     'certificate.read',
     'badge.read',
+    'assignment.request',
   ],
 }
