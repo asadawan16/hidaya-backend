@@ -66,6 +66,13 @@ const studentSchema = new mongoose.Schema({
 
   referredBy: { type: String, trim: true, default: '' },
 
+  // The existing student (if any) who referred this student in
+  referredByStudent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Student',
+    sparse: true,
+  },
+
   billing: {
     fee: { type: Number, default: 0 },
     amount: { type: Number, default: 0 },

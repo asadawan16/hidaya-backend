@@ -123,6 +123,7 @@ export async function getStudent(req, res) {
     const student = await Student.findById(req.params.id)
       .populate('familyId')
       .populate('userId', 'email displayName status')
+      .populate('referredByStudent', 'name rollNo status')
       .lean()
 
     if (!student) return res.status(404).json({ error: 'Student not found' })
@@ -188,6 +189,9 @@ export async function createStudent(req, res) {
     if (!data.name) {
       return res.status(400).json({ error: 'Student name is required' })
     }
+
+    // Empty referrer must be unset — '' is not a castable ObjectId
+    if (!data.referredByStudent) delete data.referredByStudent
 
     // Validate portal-account inputs up-front so we never create an orphan student
     let studentRole = null
@@ -302,11 +306,14 @@ export async function updateStudent(req, res) {
     const oldStatus = student.status
     const oldFamilyId = student.familyId?.toString()
 
+    // An empty referrer clears the link — '' is not a castable ObjectId
+    if (data.referredByStudent === '') data.referredByStudent = null
+
     // Update fields
     const allowedFields = [
       'name', 'parentsName', 'dob', 'country', 'timezone',
       'guardians', 'whatsappNumber', 'courseLabels', 'placementLevel',
-      'sect', 'specialNeeds', 'familyId', 'referredBy', 'billing',
+      'sect', 'specialNeeds', 'familyId', 'referredBy', 'referredByStudent', 'billing',
       'status', 'email', 'phone', 'notes', 'userId',
     ]
 
@@ -465,6 +472,7 @@ export async function getStudentDetailExtended(req, res) {
     const student = await Student.findById(req.params.id)
       .populate('familyId')
       .populate('userId', 'displayName email')
+      .populate('referredByStudent', 'name rollNo status')
       .populate('adminNotes.createdBy', 'displayName')
       .lean()
 

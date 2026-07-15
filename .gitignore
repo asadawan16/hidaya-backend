@@ -1,2 +1,4 @@
 node_modules
 .env
+# Import credential dumps — never commit
+scripts/imported-accounts.csv

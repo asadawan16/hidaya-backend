@@ -119,7 +119,18 @@ export async function listTutorChangeRequests(req, res) {
       .limit(lim)
       .lean()
 
-    res.json({ records, total, page: safePage, pages })
+    // Global counts per status (ignore the status filter, keep the student scope)
+    // so the overview cards are accurate across all pages.
+    const statsFilter = { ...filter }
+    delete statsFilter.status
+    const statsAgg = await TutorChangeRequest.aggregate([
+      ...(Object.keys(statsFilter).length ? [{ $match: statsFilter }] : []),
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ])
+    const statusStats = { pending: 0, approved: 0, rejected: 0 }
+    for (const s of statsAgg) if (statusStats[s._id] !== undefined) statusStats[s._id] = s.count
+
+    res.json({ records, total, page: safePage, pages, statusStats })
   } catch (err) {
     console.error('List tutor change requests error:', err)
     res.status(500).json({ error: 'Server error' })
