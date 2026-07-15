@@ -2,8 +2,9 @@ import { Router } from 'express'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
   listSlots, createSlot, updateSlot, deleteSlot,
-  listSessions, createSession, startSession, completeSession, markSessionMissed,
-  getLiveBoard, getMyLiveSessions, generateSessionsForDate,
+  listSessions, createSession, updateSession, deleteSession,
+  startSession, completeSession, markSessionMissed,
+  getLiveBoard, getMyLiveSessions, generateSessionsForDate, getBoard,
   getScheduleConfig, updateScheduleConfig,
 } from '../controllers/portalScheduleController.js'
 
@@ -20,6 +21,9 @@ router.post('/slots', requirePermission('schedule.manage'), createSlot)
 router.patch('/slots/:id', requirePermission('schedule.manage'), updateSlot)
 router.delete('/slots/:id', requirePermission('schedule.manage'), deleteSlot)
 
+// Board view (tutor × time-block grid for a day)
+router.get('/board', requirePermission('schedule.read'), getBoard)
+
 // Class Sessions
 router.get('/sessions', requirePermission('schedule.read'), listSessions)
 router.post('/sessions', requirePermission('schedule.manage'), createSession)
@@ -27,6 +31,8 @@ router.post('/sessions/generate', requirePermission('schedule.manage'), generate
 router.post('/sessions/:id/start', requirePermission('lesson.log'), startSession)
 router.post('/sessions/:id/complete', requirePermission('lesson.log'), completeSession)
 router.post('/sessions/:id/missed', requirePermission('lesson.log'), markSessionMissed)
+router.patch('/sessions/:id', requirePermission('schedule.manage'), updateSession)
+router.delete('/sessions/:id', requirePermission('schedule.manage'), deleteSession)
 
 // Live board
 router.get('/live-board', requirePermission('liveboard.view'), getLiveBoard)

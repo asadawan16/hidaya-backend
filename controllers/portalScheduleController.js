@@ -2,6 +2,7 @@ import ClassSlot from '../models/ClassSlot.js'
 import ClassSession from '../models/ClassSession.js'
 import ScheduleConfig from '../models/ScheduleConfig.js'
 import Student from '../models/Student.js'
+import TutorProfile from '../models/TutorProfile.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification } from './portalNotificationController.js'
@@ -486,6 +487,114 @@ export async function generateSessionsForDate(req, res) {
     res.json({ message: created > 0 ? `Generated ${created} sessions` : 'No new sessions for this day', created })
   } catch (err) {
     console.error('Generate sessions error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Board view: tutors (columns) + a day's sessions in one scoped, unpaginated call ───
+// Powers the tutor × time-block board. Returns every active tutor (so empty lanes are
+// visible for slot creation), each tutor's recurring-slot count for the weekday, and all
+// sessions on the date. Day-bounded so volume stays safe without pagination.
+export async function getBoard(req, res) {
+  try {
+    const dateStr = (req.query.date || tzDateInfo().dateStr).slice(0, 10)
+    const dow = dayOfWeekOf(dateStr)
+    const dateStart = new Date(dateStr); dateStart.setHours(0, 0, 0, 0)
+    const dateEnd = new Date(dateStr); dateEnd.setHours(23, 59, 59, 999)
+
+    const { tutorId, status, track } = req.query
+
+    // Sessions — same scoping rules as listSessions
+    const sFilter = { date: { $gte: dateStart, $lt: dateEnd } }
+    if (req.user.linkedStudentId) sFilter.studentId = req.user.linkedStudentId
+    else if (req.user.linkedTutorId) sFilter.tutorId = req.user.linkedTutorId
+    else if (tutorId) sFilter.tutorId = tutorId
+    if (status) sFilter.status = status
+
+    let sessions = await ClassSession.find(sFilter)
+      .populate('studentId', 'name rollNo')
+      .populate('tutorId', 'name tutorId')
+      .populate('slotId', 'track tracks meetLink durationMinutes')
+      .sort({ scheduledStart: 1 })
+      .lean()
+
+    // Track lives on the slot, not the session — filter in memory after populate
+    if (track) {
+      sessions = sessions.filter(s => {
+        const t = s.slotId?.tracks?.length ? s.slotId.tracks : (s.slotId?.track ? [s.slotId.track] : [])
+        return t.includes(track)
+      })
+    }
+
+    // Tutors — columns of the board
+    const tFilter = { status: 'active' }
+    if (req.user.linkedTutorId) tFilter._id = req.user.linkedTutorId
+    else if (tutorId) tFilter._id = tutorId
+    const tutors = await TutorProfile.find(tFilter).select('name tutorId status').sort({ name: 1 }).lean()
+
+    // Recurring-slot count per tutor for this weekday
+    const slotAgg = await ClassSlot.aggregate([
+      { $match: { dayOfWeek: dow, active: true } },
+      { $group: { _id: '$tutorId', count: { $sum: 1 } } },
+    ])
+    const slotCounts = {}
+    slotAgg.forEach(s => { slotCounts[String(s._id)] = s.count })
+    tutors.forEach(t => { t.slotCount = slotCounts[String(t._id)] || 0 })
+
+    res.json({ date: dateStr, dayOfWeek: dow, tutors, sessions })
+  } catch (err) {
+    console.error('Get board error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// Patch a session — reschedule (date/time), reassign tutor/student, set status, edit notes.
+export async function updateSession(req, res) {
+  try {
+    const session = await ClassSession.findById(req.params.id)
+    if (!session) return res.status(404).json({ error: 'Session not found' })
+
+    const fields = ['tutorId', 'studentId', 'scheduledStart', 'scheduledEnd', 'status', 'notes']
+    for (const f of fields) {
+      if (req.body[f] !== undefined) session[f] = req.body[f]
+    }
+    if (req.body.date !== undefined) session.date = new Date(req.body.date)
+
+    await session.save()
+
+    await logActivity({
+      level: 'info', category: 'schedule', action: 'session_updated',
+      message: `Session updated: ${session._id}`, req, meta: { sessionId: session._id },
+    })
+
+    const populated = await ClassSession.findById(session._id)
+      .populate('studentId', 'name rollNo')
+      .populate('tutorId', 'name tutorId')
+      .populate('slotId', 'track tracks meetLink durationMinutes')
+      .lean()
+    res.json(populated)
+  } catch (err) {
+    console.error('Update session error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// Hard-delete a single session (does not touch the recurring slot).
+export async function deleteSession(req, res) {
+  try {
+    const session = await ClassSession.findById(req.params.id)
+    if (!session) return res.status(404).json({ error: 'Session not found' })
+
+    await ClassSession.findByIdAndDelete(req.params.id)
+
+    await logActivity({
+      level: 'warning', category: 'schedule', action: 'session_deleted',
+      message: `Session deleted: ${session._id}`, req, meta: { sessionId: session._id },
+    })
+
+    res.json({ message: 'Session deleted' })
+  } catch (err) {
+    console.error('Delete session error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
