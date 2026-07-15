@@ -4,9 +4,11 @@ import mongoose from 'mongoose'
 const demoTrialSchema = new mongoose.Schema({
   date: { type: Date, default: Date.now },
   studentName: { type: String, required: true, trim: true },
-  demoTutor: { type: String, trim: true, default: '' }, // e.g. "HIDEMP 20"
+  demoTutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'TutorProfile', sparse: true },
+  demoTutor: { type: String, trim: true, default: '' }, // denormalized tutor label for display/search
   code: { type: String, trim: true, default: '' },
-  source: { type: String, enum: ['smm', 'reference', 'other'], default: 'smm' }, // "Refrence" column
+  source: { type: String, trim: true, default: '' }, // referral channel (Google Ads, Facebook, Instagram, …)
+  referredByStudent: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', sparse: true },
   comment: { type: String, trim: true, default: '' },
   status: {
     type: String,

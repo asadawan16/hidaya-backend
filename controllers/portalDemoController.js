@@ -1,8 +1,16 @@
 import DemoTrial from '../models/DemoTrial.js'
+import TutorProfile from '../models/TutorProfile.js'
 import { logActivity } from '../utils/activityLogger.js'
 
 const STATUSES = ['scheduled', 'sign_up', 'failed', 'no_show', 'start_later']
-const SOURCES = ['smm', 'reference', 'other']
+
+// Build a display label from a tutor id (denormalized onto the record)
+async function tutorLabel(id) {
+  if (!id) return ''
+  const t = await TutorProfile.findById(id).select('name tutorId').lean()
+  if (!t) return ''
+  return `${t.name}${t.tutorId ? ` (${t.tutorId})` : ''}`
+}
 
 // ─── List demo trials with stats ───
 export async function listDemos(req, res) {
@@ -28,6 +36,8 @@ export async function listDemos(req, res) {
     if (sort === 'status') sortObj = { status: 1, date: -1 }
 
     const records = await DemoTrial.find(filter)
+      .populate('demoTutorId', 'name tutorId')
+      .populate('referredByStudent', 'name rollNo')
       .sort(sortObj)
       .skip((safePage - 1) * lim)
       .limit(lim)
@@ -37,8 +47,8 @@ export async function listDemos(req, res) {
     const statusCounts = Object.fromEntries(STATUSES.map(s => [s, 0]))
     statusAgg.forEach(s => { if (s._id) statusCounts[s._id] = s.count })
 
-    const sourceAgg = await DemoTrial.aggregate([{ $group: { _id: '$source', count: { $sum: 1 } } }])
-    const sourceCounts = Object.fromEntries(SOURCES.map(s => [s, 0]))
+    const sourceAgg = await DemoTrial.aggregate([{ $match: { source: { $ne: '' } } }, { $group: { _id: '$source', count: { $sum: 1 } } }])
+    const sourceCounts = {}
     sourceAgg.forEach(s => { if (s._id) sourceCounts[s._id] = s.count })
 
     res.json({ records, total, page: safePage, pages, statusCounts, sourceCounts })
@@ -55,8 +65,8 @@ export async function getDemoStats(req, res) {
     const statusAgg = await DemoTrial.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }])
     const statusCounts = Object.fromEntries(STATUSES.map(s => [s, 0]))
     statusAgg.forEach(s => { if (s._id) statusCounts[s._id] = s.count })
-    const sourceAgg = await DemoTrial.aggregate([{ $group: { _id: '$source', count: { $sum: 1 } } }])
-    const sourceCounts = Object.fromEntries(SOURCES.map(s => [s, 0]))
+    const sourceAgg = await DemoTrial.aggregate([{ $match: { source: { $ne: '' } } }, { $group: { _id: '$source', count: { $sum: 1 } } }])
+    const sourceCounts = {}
     sourceAgg.forEach(s => { if (s._id) sourceCounts[s._id] = s.count })
     res.json({ total, statusCounts, sourceCounts })
   } catch (err) {
@@ -68,15 +78,17 @@ export async function getDemoStats(req, res) {
 // ─── Create ───
 export async function createDemo(req, res) {
   try {
-    const { date, studentName, demoTutor, code, source, comment, status } = req.body
+    const { date, studentName, demoTutorId, demoTutor, code, source, referredByStudent, comment, status } = req.body
     if (!studentName || !studentName.trim()) return res.status(400).json({ error: 'Student name is required' })
 
     const demo = await DemoTrial.create({
       date: date ? new Date(date) : new Date(),
       studentName: studentName.trim(),
-      demoTutor: (demoTutor || '').trim(),
+      demoTutorId: demoTutorId || undefined,
+      demoTutor: demoTutorId ? await tutorLabel(demoTutorId) : (demoTutor || '').trim(),
       code: (code || '').trim(),
-      source: SOURCES.includes(source) ? source : 'smm',
+      source: (source || '').trim(),
+      referredByStudent: referredByStudent || undefined,
       comment: (comment || '').trim(),
       status: STATUSES.includes(status) ? status : 'scheduled',
       createdBy: req.userId,
@@ -96,17 +108,25 @@ export async function createDemo(req, res) {
 // ─── Update (full edit) ───
 export async function updateDemo(req, res) {
   try {
-    const { date, studentName, demoTutor, code, source, comment, status } = req.body
+    const { date, studentName, demoTutorId, demoTutor, code, source, referredByStudent, comment, status } = req.body
     const update = {}
     if (date !== undefined) update.date = date ? new Date(date) : new Date()
     if (studentName !== undefined) update.studentName = studentName.trim()
-    if (demoTutor !== undefined) update.demoTutor = (demoTutor || '').trim()
+    if (demoTutorId !== undefined) {
+      update.demoTutorId = demoTutorId || null
+      update.demoTutor = demoTutorId ? await tutorLabel(demoTutorId) : ''
+    } else if (demoTutor !== undefined) {
+      update.demoTutor = (demoTutor || '').trim()
+    }
     if (code !== undefined) update.code = (code || '').trim()
-    if (source !== undefined && SOURCES.includes(source)) update.source = source
+    if (source !== undefined) update.source = (source || '').trim()
+    if (referredByStudent !== undefined) update.referredByStudent = referredByStudent || null
     if (comment !== undefined) update.comment = (comment || '').trim()
     if (status !== undefined && STATUSES.includes(status)) update.status = status
 
     const demo = await DemoTrial.findByIdAndUpdate(req.params.id, update, { new: true })
+      .populate('demoTutorId', 'name tutorId')
+      .populate('referredByStudent', 'name rollNo')
     if (!demo) return res.status(404).json({ error: 'Demo trial not found' })
     res.json(demo)
   } catch (err) {
