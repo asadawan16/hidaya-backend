@@ -104,6 +104,9 @@ export const PERMISSIONS = {
 
   // Manual fee management (yearly grid, mark months received/pending, link payments)
   fee: ['fee.read', 'fee.manage'],
+
+  // Demo trial classes (tracking + statuses)
+  demo: ['demo.read', 'demo.manage'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
@@ -131,6 +134,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'badge.read', 'badge.approve',
     'leave.read', 'leave.review',
     'student_progress.read',
+    'demo.read', 'demo.manage',
   ],
 
   coordinator: [
@@ -153,6 +157,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read',
     'leave.read', 'leave.review',
     'student_progress.read',
+    'demo.read', 'demo.manage',
   ],
 
   qci: [

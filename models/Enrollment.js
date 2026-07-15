@@ -15,6 +15,10 @@ const enrollmentSchema = new mongoose.Schema({
     enum: ['new', 'contacted', 'enrolled', 'closed'],
     default: 'new',
   },
+  // How this lead found us (social media platform / channel), free-form label
+  referralSource: { type: String, trim: true, default: '' },
+  // The existing student (if any) who referred this lead in
+  referredByStudent: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', sparse: true },
   demoTutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'TutorProfile' },
   trialDate: { type: Date },
   trialStatus: { type: String, enum: ['pending', 'scheduled', 'passed', 'failed', ''], default: '' },

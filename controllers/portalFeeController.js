@@ -22,14 +22,16 @@ const clampMonth = (m) => Math.min(12, Math.max(1, parseInt(m, 10)))
 export async function getFeeGrid(req, res) {
   try {
     const year = parseInt(req.query.year, 10) || new Date().getFullYear()
-    const { familyId, studentId, search, status } = req.query
+    const { familyId, studentId, search, studentStatus } = req.query
     const page = Math.max(1, parseInt(req.query.page, 10) || 1)
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25))
 
     const filter = {}
     if (studentId) filter._id = studentId
     if (familyId) filter.familyId = familyId
-    if (status) filter.status = status
+    // Enrollment status filter: active (incl. on-leave, excl. left) | left | all
+    if (studentStatus === 'left') filter.status = 'left'
+    else if (studentStatus !== 'all') filter.status = { $ne: 'left' } // default: active-ish
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
       filter.$or = [{ name: rx }, { rollNo: rx }]
@@ -37,7 +39,7 @@ export async function getFeeGrid(req, res) {
 
     const total = await Student.countDocuments(filter)
     const students = await Student.find(filter)
-      .select('name rollNo status familyId')
+      .select('name rollNo status familyId billing.fee billing.currency')
       .populate('familyId', 'familyCode primaryGuardian')
       .sort({ name: 1 })
       .skip((page - 1) * limit)
@@ -61,6 +63,8 @@ export async function getFeeGrid(req, res) {
       name: s.name,
       rollNo: s.rollNo,
       status: s.status,
+      baseFee: s.billing?.fee || 0,
+      currency: s.billing?.currency || 'PKR',
       familyId: s.familyId?._id || null,
       familyCode: s.familyId?.familyCode || '',
       months: byStudent[s._id.toString()] || {},
@@ -70,6 +74,9 @@ export async function getFeeGrid(req, res) {
     const received = cells.filter(c => c.status === 'received').length
     const partial = cells.filter(c => c.status === 'partial').length
     const totalCollected = cells.reduce((s, c) => s + (c.amountPaid || 0), 0)
+    // Receivables view: total expected vs still outstanding
+    const totalReceivable = cells.reduce((s, c) => s + (c.status === 'waived' ? 0 : c.amount || 0), 0)
+    const outstanding = cells.reduce((s, c) => s + (c.status === 'waived' ? 0 : Math.max(0, (c.amount || 0) - (c.amountPaid || 0))), 0)
 
     res.json({
       year,
@@ -77,7 +84,7 @@ export async function getFeeGrid(req, res) {
       total,
       page,
       pages: Math.max(1, Math.ceil(total / limit)),
-      summary: { received, partial, totalCollected },
+      summary: { received, partial, totalCollected, totalReceivable, outstanding },
     })
   } catch (err) {
     console.error('Fee grid error:', err)
@@ -114,6 +121,40 @@ export async function upsertFeeCell(req, res) {
     res.json(rec)
   } catch (err) {
     console.error('Fee cell upsert error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// PATCH /portal/fees/receivables — set the expected (receivable) amount for a
+// student across many months at once. Leaves amountPaid untouched; recomputing
+// status keeps it in sync with the Yearly Grid (amount>0 & unpaid → pending).
+export async function bulkUpsertReceivables(req, res) {
+  try {
+    const { studentId, year, months, amount, overwrite } = req.body
+    if (!studentId || !year || !Array.isArray(months) || months.length === 0) {
+      return res.status(400).json({ error: 'studentId, year and months[] are required' })
+    }
+    const amt = Math.max(0, Number(amount) || 0)
+    const student = await Student.findById(studentId).select('familyId billing.currency').lean()
+    if (!student) return res.status(404).json({ error: 'Student not found' })
+
+    for (const rawMonth of months) {
+      const month = clampMonth(rawMonth)
+      let rec = await StudentFeeRecord.findOne({ studentId, year, month })
+      if (!rec) {
+        rec = new StudentFeeRecord({ studentId, year, month, familyId: student.familyId, currency: student.billing?.currency || 'PKR' })
+      } else if (!overwrite && rec.amount > 0) {
+        continue // don't clobber an existing receivable unless explicitly told to
+      }
+      rec.amount = amt
+      if (rec.status !== 'waived') rec.status = computeStatus(rec)
+      if (!rec.familyId) rec.familyId = student.familyId
+      rec.recordedBy = req.userId
+      await rec.save()
+    }
+    res.json({ ok: true, months: months.length })
+  } catch (err) {
+    console.error('Bulk receivables error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

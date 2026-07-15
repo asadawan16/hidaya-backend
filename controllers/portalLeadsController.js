@@ -45,6 +45,7 @@ export async function listLeads(req, res) {
     if (sort === 'status') sortObj = { status: 1, createdAt: -1 }
 
     const records = await Enrollment.find(filter)
+      .populate('referredByStudent', 'name rollNo')
       .sort(sortObj)
       .skip((safePage - 1) * lim)
       .limit(lim)
@@ -71,7 +72,7 @@ export async function listLeads(req, res) {
 // ─── Create lead manually (portal) ───
 export async function createLead(req, res) {
   try {
-    const { name, email, phone, message, source, status } = req.body
+    const { name, email, phone, message, source, status, referralSource, referredByStudent } = req.body
     if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' })
     if (!email || !email.trim()) return res.status(400).json({ error: 'Email is required' })
 
@@ -82,6 +83,8 @@ export async function createLead(req, res) {
       message: message?.trim() || '',
       source: source || 'manual',
       status: status || 'new',
+      referralSource: referralSource?.trim() || '',
+      referredByStudent: referredByStudent || undefined,
     })
 
     await logActivity({
@@ -185,6 +188,8 @@ export async function convertToStudent(req, res) {
       notes: notes || lead.message || '',
       status: 'active',
       userId: user._id,
+      referredBy: lead.referralSource || '',
+      referredByStudent: lead.referredByStudent || undefined,
     }
 
     if (familyId) {

@@ -39,6 +39,7 @@ import portalFinanceRoutes from './routes/portalFinanceRoutes.js'
 import portalReportRoutes from './routes/portalReportRoutes.js'
 import portalFamilyRoutes from './routes/portalFamilyRoutes.js'
 import portalLeadsRoutes from './routes/portalLeadsRoutes.js'
+import portalDemoRoutes from './routes/portalDemoRoutes.js'
 import portalDashboardRoutes from './routes/portalDashboardRoutes.js'
 import portalCertificateRoutes from './routes/portalCertificateRoutes.js'
 import portalPaymentRoutes from './routes/portalPaymentRoutes.js'
@@ -136,6 +137,7 @@ app.use('/api/portal/finance', portalFinanceRoutes)
 app.use('/api/portal/reports', portalReportRoutes)
 app.use('/api/portal/families', portalFamilyRoutes)
 app.use('/api/portal/leads', portalLeadsRoutes)
+app.use('/api/portal/demos', portalDemoRoutes)
 app.use('/api/portal/dashboard', portalDashboardRoutes)
 app.use('/api/portal/certificates', portalCertificateRoutes)
 app.use('/api/portal/billing', portalPaymentRoutes)
