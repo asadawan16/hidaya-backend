@@ -4,6 +4,7 @@ import {
   listStudents, getStudent, createStudent, updateStudent,
   deleteStudent, changeStudentStatus, getStudentStats,
   getStudentDetailExtended, addAdminNote, addManualTutorLog,
+  addStudentFeedback, deleteStudentFeedback,
   pickerStudents, checkRollNo,
 } from '../controllers/portalStudentController.js'
 
@@ -19,6 +20,9 @@ router.get('/check-rollno', requirePermission('student.read'), checkRollNo)
 router.get('/:id', requirePermission('student.read'), getStudent)
 router.get('/:id/detail', requirePermission('student.read'), getStudentDetailExtended)
 router.post('/:id/notes', requirePermission('student.update'), addAdminNote)
+// Fine-grained feedback-type permission is enforced inside the controller
+router.post('/:id/feedback', requirePermission('student.read'), addStudentFeedback)
+router.delete('/:id/feedback/:feedbackId', requirePermission('student.read'), deleteStudentFeedback)
 router.post('/:id/tutor-log', requirePermission('assignment.manage'), addManualTutorLog)
 router.post('/', requirePermission('student.create'), createStudent)
 router.patch('/:id', requirePermission('student.update'), updateStudent)

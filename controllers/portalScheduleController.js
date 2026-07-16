@@ -91,7 +91,7 @@ export async function listSlots(req, res) {
     if (active !== undefined) filter.active = active === 'true'
 
     const query = () => ClassSlot.find(filter)
-      .populate('studentId', 'name rollNo')
+      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
       .populate('tutorId', 'name tutorId meetLink')
       .sort({ dayOfWeek: 1, startTime: 1 })
 
@@ -174,7 +174,7 @@ export async function createSlot(req, res) {
       }
 
       const populated = await ClassSlot.findById(slot._id)
-        .populate('studentId', 'name rollNo')
+        .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
         .populate('tutorId', 'name tutorId')
         .lean()
 
@@ -276,7 +276,7 @@ export async function listSessions(req, res) {
     if (sort === 'status') sortObj = { status: 1, date: -1 }
 
     const records = await ClassSession.find(filter)
-      .populate('studentId', 'name rollNo')
+      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
       .populate('tutorId', 'name tutorId')
       .populate('slotId', 'track meetLink')
       .sort(sortObj)
@@ -443,7 +443,7 @@ export async function getLiveBoard(req, res) {
     }
 
     const activeSessions = await ClassSession.find(filter)
-      .populate('studentId', 'name rollNo')
+      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
       .populate('tutorId', 'name tutorId roomNo meetLink')
       .populate('slotId', 'track durationMinutes')
       .sort({ tutorStartedAt: -1 })
@@ -463,7 +463,7 @@ export async function getMyLiveSessions(req, res) {
     if (!req.user.linkedTutorId) return res.json([])
 
     const sessions = await ClassSession.find({ status: 'started', tutorId: req.user.linkedTutorId })
-      .populate('studentId', 'name rollNo')
+      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
       .populate('tutorId', 'name tutorId roomNo meetLink')
       .populate('slotId', 'track durationMinutes')
       .sort({ tutorStartedAt: -1 })
@@ -504,19 +504,47 @@ export async function getBoard(req, res) {
 
     const { tutorId, status, track } = req.query
 
-    // Sessions — same scoping rules as listSessions
-    const sFilter = { date: { $gte: dateStart, $lt: dateEnd } }
-    if (req.user.linkedStudentId) sFilter.studentId = req.user.linkedStudentId
-    else if (req.user.linkedTutorId) sFilter.tutorId = req.user.linkedTutorId
-    else if (tutorId) sFilter.tutorId = tutorId
-    if (status) sFilter.status = status
+    // Night-shift support: when the board window wraps past midnight
+    // (startHour > endHour, e.g. 20:00 → 07:00), also pull the *next* calendar
+    // day's early-morning sessions so the continuous night grid is complete.
+    const startHour = req.query.startHour != null ? parseInt(req.query.startHour, 10) : null
+    const endHour = req.query.endHour != null ? parseInt(req.query.endHour, 10) : null
+    const wraps = startHour != null && endHour != null && startHour > endHour
 
+    // Sessions — same scoping rules as listSessions
+    const baseScope = {}
+    if (req.user.linkedStudentId) baseScope.studentId = req.user.linkedStudentId
+    else if (req.user.linkedTutorId) baseScope.tutorId = req.user.linkedTutorId
+    else if (tutorId) baseScope.tutorId = tutorId
+    if (status) baseScope.status = status
+
+    const sFilter = { date: { $gte: dateStart, $lt: dateEnd }, ...baseScope }
+
+    const studentSel = 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
     let sessions = await ClassSession.find(sFilter)
-      .populate('studentId', 'name rollNo')
+      .populate('studentId', studentSel)
       .populate('tutorId', 'name tutorId')
-      .populate('slotId', 'track tracks meetLink durationMinutes')
+      .populate('slotId', 'track tracks meetLink durationMinutes startTime dayOfWeek active')
       .sort({ scheduledStart: 1 })
       .lean()
+    sessions.forEach(s => { s.dayOffset = 0 })
+
+    // Pull next-day early-morning sessions (before endHour) for the wrap window
+    if (wraps) {
+      const nextStart = new Date(dateStr); nextStart.setDate(nextStart.getDate() + 1); nextStart.setHours(0, 0, 0, 0)
+      const nextEnd = new Date(nextStart); nextEnd.setHours(23, 59, 59, 999)
+      const cutoff = String(endHour).padStart(2, '0') + ':00'
+      let nextSessions = await ClassSession.find({ date: { $gte: nextStart, $lt: nextEnd }, ...baseScope })
+        .populate('studentId', studentSel)
+        .populate('tutorId', 'name tutorId')
+        .populate('slotId', 'track tracks meetLink durationMinutes startTime dayOfWeek active')
+        .sort({ scheduledStart: 1 })
+        .lean()
+      // Only starts strictly before endHour:00 fall inside the visible night grid.
+      nextSessions = nextSessions.filter(s => s.scheduledStart && s.scheduledStart < cutoff)
+      nextSessions.forEach(s => { s.dayOffset = 1 })
+      sessions = sessions.concat(nextSessions)
+    }
 
     // Track lives on the slot, not the session — filter in memory after populate
     if (track) {
@@ -568,9 +596,9 @@ export async function updateSession(req, res) {
     })
 
     const populated = await ClassSession.findById(session._id)
-      .populate('studentId', 'name rollNo')
+      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
       .populate('tutorId', 'name tutorId')
-      .populate('slotId', 'track tracks meetLink durationMinutes')
+      .populate('slotId', 'track tracks meetLink durationMinutes startTime dayOfWeek active')
       .lean()
     res.json(populated)
   } catch (err) {

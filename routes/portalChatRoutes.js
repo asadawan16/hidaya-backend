@@ -6,7 +6,7 @@ import {
   toggleStar, togglePin, searchMessages, getMentionableUsers,
   toggleReaction, forwardMessage, leaveChannel, archiveChannel, setMemberRole,
   markThreadRead, updateThreadPrefs, getMyMentions, getThreadLinks,
-  getTaggableStudents, getOnlineUsers,
+  getTaggableStudents, getOnlineUsers, getUnreadTotal,
 } from '../controllers/portalChatController.js'
 
 const router = Router()
@@ -14,6 +14,7 @@ router.use(portalAuth)
 
 // Threads / Channels
 router.get('/threads', listThreads)
+router.get('/unread-total', getUnreadTotal)
 router.post('/channels', createChannel)
 router.patch('/channels/:id', updateChannel)
 router.post('/channels/:id/leave', leaveChannel)

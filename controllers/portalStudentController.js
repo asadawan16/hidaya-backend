@@ -315,6 +315,8 @@ export async function updateStudent(req, res) {
       'guardians', 'whatsappNumber', 'courseLabels', 'placementLevel',
       'sect', 'specialNeeds', 'familyId', 'referredBy', 'referredByStudent', 'billing',
       'status', 'email', 'phone', 'notes', 'userId',
+      'performanceFlag', 'performanceTags', 'freshness',
+      'leaveStartDate', 'expectedResumeDate',
     ]
 
     for (const field of allowedFields) {
@@ -474,6 +476,7 @@ export async function getStudentDetailExtended(req, res) {
       .populate('userId', 'displayName email')
       .populate('referredByStudent', 'name rollNo status')
       .populate('adminNotes.createdBy', 'displayName')
+      .populate('feedbacks.createdBy', 'displayName')
       .lean()
 
     if (!student) return res.status(404).json({ error: 'Student not found' })
@@ -684,6 +687,79 @@ export async function addAdminNote(req, res) {
     res.status(201).json(updated.adminNotes)
   } catch (err) {
     console.error('Add admin note error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function addStudentFeedback(req, res) {
+  try {
+    const { type, text } = req.body
+    if (!['admin', 'quality'].includes(type)) {
+      return res.status(400).json({ error: 'Feedback type must be "admin" or "quality"' })
+    }
+    if (!text?.trim()) return res.status(400).json({ error: 'Feedback text is required' })
+
+    // Gate by feedback type: admin feedback for super-admins, quality feedback for QC roles
+    const needed = type === 'admin' ? 'student.feedback_admin' : 'student.feedback_quality'
+    if (!req.userPermissions.has(needed)) {
+      return res.status(403).json({ error: 'Insufficient permissions', missing: [needed] })
+    }
+
+    const student = await Student.findById(req.params.id)
+    if (!student) return res.status(404).json({ error: 'Student not found' })
+
+    student.feedbacks.push({
+      type,
+      text: text.trim(),
+      createdBy: req.userId,
+      createdByName: req.user?.displayName || '',
+    })
+    await student.save()
+
+    await logActivity({
+      level: 'info', category: 'student_management', action: 'student_feedback_added',
+      message: `${type} feedback added for student ${student.rollNo || student._id}`,
+      req, meta: { studentId: student._id, feedbackType: type },
+    })
+
+    const updated = await Student.findById(student._id)
+      .select('feedbacks')
+      .populate('feedbacks.createdBy', 'displayName')
+      .lean()
+
+    res.status(201).json(updated.feedbacks)
+  } catch (err) {
+    console.error('Add student feedback error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function deleteStudentFeedback(req, res) {
+  try {
+    const { id, feedbackId } = req.params
+    const student = await Student.findById(id)
+    if (!student) return res.status(404).json({ error: 'Student not found' })
+
+    const fb = student.feedbacks.id(feedbackId)
+    if (!fb) return res.status(404).json({ error: 'Feedback not found' })
+
+    // Same gate as creation — must hold the matching feedback permission
+    const needed = fb.type === 'admin' ? 'student.feedback_admin' : 'student.feedback_quality'
+    if (!req.userPermissions.has(needed)) {
+      return res.status(403).json({ error: 'Insufficient permissions', missing: [needed] })
+    }
+
+    fb.deleteOne()
+    await student.save()
+
+    const updated = await Student.findById(student._id)
+      .select('feedbacks')
+      .populate('feedbacks.createdBy', 'displayName')
+      .lean()
+
+    res.json(updated.feedbacks)
+  } catch (err) {
+    console.error('Delete student feedback error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

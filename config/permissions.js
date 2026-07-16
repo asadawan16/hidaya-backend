@@ -3,7 +3,7 @@
 
 export const PERMISSIONS = {
   // Student management
-  student: ['student.read', 'student.create', 'student.update', 'student.delete', 'student.approve'],
+  student: ['student.read', 'student.create', 'student.update', 'student.delete', 'student.approve', 'student.feedback_admin', 'student.feedback_quality'],
 
   // Enrollment / admissions
   enrollment: ['enrollment.read', 'enrollment.create', 'enrollment.update'],
@@ -173,6 +173,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'liveboard.view', 'chat.use',
     'leave.read', 'leave.review',
     'student_progress.read', 'fee.read', 'fee.manage',
+    'student.feedback_quality',
   ],
 
   qcm: [
@@ -186,6 +187,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'report.read',
     'liveboard.view', 'chat.use',
     'student_progress.read', 'fee.read', 'fee.manage',
+    'student.feedback_quality',
   ],
 
   tutor: [

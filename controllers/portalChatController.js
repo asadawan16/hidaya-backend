@@ -90,6 +90,24 @@ export async function listThreads(req, res) {
   }
 }
 
+// Lightweight total unread-message count across all of the user's threads.
+// Powers the unread badge on the Chat nav item.
+export async function getUnreadTotal(req, res) {
+  try {
+    const threadIds = await ChatThread.find({ participants: req.userId, archived: { $ne: true } }).distinct('_id')
+    if (!threadIds.length) return res.json({ total: 0 })
+
+    const agg = await Message.aggregate([
+      { $match: { threadId: { $in: threadIds }, senderId: { $ne: req.userId }, deleted: { $ne: true }, 'readBy.userId': { $ne: req.userId } } },
+      { $count: 'total' },
+    ])
+    res.json({ total: agg[0]?.total || 0 })
+  } catch (err) {
+    console.error('Unread total error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 export async function createChannel(req, res) {
   try {
     const { name, description, label, labelColor, participantIds } = req.body

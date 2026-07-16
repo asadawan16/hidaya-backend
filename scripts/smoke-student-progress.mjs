@@ -8,6 +8,7 @@ import Student from '../models/Student.js'
 import CurriculumItem from '../models/CurriculumItem.js'
 import PermanentLesson from '../models/PermanentLesson.js'
 import TutorProfile from '../models/TutorProfile.js'
+import '../models/User.js' // registered for feedbacks.createdBy populate
 import { listProgressStudents, getStudentProgressDetail } from '../controllers/portalStudentProgressController.js'
 
 let pass = 0, fail = 0

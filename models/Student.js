@@ -88,8 +88,27 @@ const studentSchema = new mongoose.Schema({
   },
 
   performanceFlag: { type: String, enum: ['normal', 'weak', 'strong', ''], default: '' },
+
+  // Multi-tag performance/risk markers surfaced with colors on the board
+  performanceTags: [{
+    type: String,
+    enum: ['risky', 'weak', 'strong', 'watch'],
+  }],
+
+  // Manual fresh/old marker for board identification
+  freshness: { type: String, enum: ['fresh', 'old', ''], default: '' },
+
   leaveStartDate: { type: Date },
   expectedResumeDate: { type: Date },
+
+  // Two-type staff feedback shown on the student progress page
+  feedbacks: [{
+    type: { type: String, enum: ['admin', 'quality'], required: true },
+    text: { type: String, required: true, trim: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    createdByName: { type: String, default: '' },
+    createdAt: { type: Date, default: Date.now },
+  }],
 
   status: {
     type: String,

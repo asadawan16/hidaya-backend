@@ -13,6 +13,35 @@ import Assessment from '../models/Assessment.js'
 import Badge from '../models/Badge.js'
 import Certificate from '../models/Certificate.js'
 import Complaint from '../models/Complaint.js'
+import LessonEntry from '../models/LessonEntry.js'
+
+// Build a short human summary of what was taught in a daily lesson entry.
+function summarizeLesson(lesson) {
+  if (!lesson) return ''
+  if (lesson.customText?.trim()) return lesson.customText.trim()
+  const parts = (lesson.items || []).map(it => {
+    const label = it.curriculumItemId?.label || ''
+    const range = []
+    if (it.fromPage || it.toPage) range.push(`p${it.fromPage || '?'}${it.toPage && it.toPage !== it.fromPage ? `–${it.toPage}` : ''}`)
+    if (it.ayah) range.push(`ayah ${it.ayah}`)
+    const tag = it.portion ? ` (${it.portion})` : ''
+    return `${label}${range.length ? ' ' + range.join(', ') : ''}${tag}`.trim()
+  }).filter(Boolean)
+  return parts.join(' · ')
+}
+
+// Fetch daily-lesson summaries for a set of sessions, keyed by sessionId string.
+async function lessonsBySession(studentId, sessionIds) {
+  if (!sessionIds.length) return {}
+  const lessons = await LessonEntry.find({ studentId, sessionId: { $in: sessionIds } })
+    .populate('items.curriculumItemId', 'label track')
+    .lean()
+  const map = {}
+  for (const l of lessons) {
+    if (l.sessionId) map[l.sessionId.toString()] = { _id: l._id, taught: summarizeLesson(l), notes: l.notes || '', kind: l.kind }
+  }
+  return map
+}
 
 // Family relations that mark a complaint as "parent-initiated" (mirrors the
 // classifier used in the student-detail ComplaintsTab).
@@ -115,7 +144,8 @@ export async function getStudentProgressDetail(req, res) {
     }
 
     const student = await Student.findById(studentId)
-      .select('name rollNo status courseLabels placementLevel performanceFlag sect specialNeeds guardians dob joiningDate country timezone whatsappNumber')
+      .select('name rollNo status courseLabels placementLevel performanceFlag performanceTags freshness leaveStartDate expectedResumeDate sect specialNeeds guardians dob joiningDate country timezone whatsappNumber feedbacks')
+      .populate('feedbacks.createdBy', 'displayName')
       .lean()
     if (!student) return res.status(404).json({ error: 'Student not found' })
 
@@ -271,6 +301,20 @@ export async function getStudentProgressDetail(req, res) {
     const totalCompleted = curriculum.reduce((s, t) => s + t.completed, 0)
     const totalOverdue = curriculum.reduce((s, t) => s + t.overdueCount, 0)
 
+    // Attach the daily-lesson "what was taught" to each recent class
+    const lessonMap = await lessonsBySession(studentId, recentSessions.map(s => s._id))
+
+    // Split feedbacks by type for the progress page (populated author)
+    const feedbacks = (student.feedbacks || [])
+      .map(f => ({
+        _id: f._id,
+        type: f.type,
+        text: f.text,
+        author: f.createdBy?.displayName || f.createdByName || '',
+        createdAt: f.createdAt,
+      }))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+
     res.json({
       student,
       currentTutors: assignments.map(a => ({
@@ -291,16 +335,23 @@ export async function getStudentProgressDetail(req, res) {
         lateCount: stats.late,
       },
       curriculum,
-      recentClasses: recentSessions.map(s => ({
-        _id: s._id,
-        date: s.date,
-        scheduledStart: s.scheduledStart,
-        status: s.status,
-        attendance: s.attendance,
-        computedDuration: s.computedDuration,
-        track: s.slotId?.track || '',
-        tutorName: s.tutorId?.name || '',
-      })),
+      recentClasses: recentSessions.map(s => {
+        const lesson = lessonMap[s._id.toString()]
+        return {
+          _id: s._id,
+          date: s.date,
+          scheduledStart: s.scheduledStart,
+          status: s.status,
+          attendance: s.attendance,
+          computedDuration: s.computedDuration,
+          track: s.slotId?.track || '',
+          tutorName: s.tutorId?.name || '',
+          taught: lesson?.taught || '',
+          lessonNotes: lesson?.notes || '',
+          lessonKind: lesson?.kind || '',
+        }
+      }),
+      feedbacks,
       assessments: assessments.map(a => ({
         _id: a._id,
         date: a.date,
@@ -317,6 +368,56 @@ export async function getStudentProgressDetail(req, res) {
     })
   } catch (err) {
     console.error('Student progress detail error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /portal/student-progress/:id/classes — paginated class history with daily
+// lessons attached. Powers the "View more" expansion on the recent-classes card.
+export async function getStudentClasses(req, res) {
+  try {
+    const scope = await resolveScope(req.user)
+    const studentId = req.params.id
+
+    if (Array.isArray(scope) && !scope.some(id => id.toString() === studentId)) {
+      return res.status(403).json({ error: 'You do not have access to this student' })
+    }
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20))
+
+    const filter = { studentId }
+    const total = await ClassSession.countDocuments(filter)
+    const sessions = await ClassSession.find(filter)
+      .sort({ date: -1, scheduledStart: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate('tutorId', 'name tutorId')
+      .populate('slotId', 'track')
+      .lean()
+
+    const lessonMap = await lessonsBySession(studentId, sessions.map(s => s._id))
+
+    const records = sessions.map(s => {
+      const lesson = lessonMap[s._id.toString()]
+      return {
+        _id: s._id,
+        date: s.date,
+        scheduledStart: s.scheduledStart,
+        status: s.status,
+        attendance: s.attendance,
+        computedDuration: s.computedDuration,
+        track: s.slotId?.track || '',
+        tutorName: s.tutorId?.name || '',
+        taught: lesson?.taught || '',
+        lessonNotes: lesson?.notes || '',
+        lessonKind: lesson?.kind || '',
+      }
+    })
+
+    res.json({ records, total, page, pages: Math.max(1, Math.ceil(total / limit)) })
+  } catch (err) {
+    console.error('Student classes error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
