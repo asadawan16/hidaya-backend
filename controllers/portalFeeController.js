@@ -41,7 +41,9 @@ export async function getFeeGrid(req, res) {
     const students = await Student.find(filter)
       .select('name rollNo status familyId billing.fee billing.currency')
       .populate('familyId', 'familyCode primaryGuardian')
-      .sort({ name: 1 })
+      // Group family members next to each other (incl. on-leave siblings), then
+      // alphabetical within the family. familyId null (solo students) sorts first.
+      .sort({ familyId: 1, name: 1 })
       .skip((page - 1) * limit)
       .limit(limit)
       .lean()
