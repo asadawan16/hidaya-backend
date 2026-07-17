@@ -23,6 +23,39 @@ function dayOfWeekOf(dateStr) {
   return d.getUTCDay()
 }
 
+// ── Overnight "shift-day" model ──
+// A teaching shift is labelled by the day it STARTS but physically runs
+// ~8 PM (PKT) → 7 AM the next calendar day (foreign-student hours). A class whose
+// start time is in the after-midnight tail (before SHIFT_WRAP_HOUR) therefore
+// occurs on the *next* calendar day even though it belongs to the starting day's
+// shift. This matches the board's night-window end so the two stay aligned.
+export const SHIFT_WRAP_HOUR = 7 // 00:00–06:59 is the previous day's overnight tail
+
+// Is this 'HH:MM' start time in the after-midnight tail of a shift?
+const isAfterMidnightTail = (startTime) => {
+  const [h] = String(startTime).split(':').map(Number)
+  return Number.isFinite(h) && h < SHIFT_WRAP_HOUR
+}
+
+// 'YYYY-MM-DD' + n days (UTC-anchored so it never drifts with server TZ).
+const addDaysStr = (iso, n) => {
+  const d = new Date(`${String(iso).slice(0, 10)}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+// Physical calendar date a slot's session falls on, given its shift-day date:
+// evening/daytime → same day; after-midnight tail → the next calendar day.
+const physicalDateForSlot = (shiftDateStr, startTime) =>
+  isAfterMidnightTail(startTime) ? addDaysStr(shiftDateStr, 1) : shiftDateStr
+
+// The shift-day currently in progress in Asia/Karachi: before 7 AM PKT we are
+// still inside the previous calendar day's overnight shift.
+export function currentShiftDate(base = new Date()) {
+  const { dateStr, minutes } = karachiNow(base)
+  return minutes < SHIFT_WRAP_HOUR * 60 ? addDaysStr(dateStr, -1) : dateStr
+}
+
 // Create any missing sessions for the given date from active slots on that weekday.
 // Idempotent (dedupes by slotId + date). Returns the number created.
 export async function generateSessionsForDay(dateStr) {
@@ -30,17 +63,22 @@ export async function generateSessionsForDay(dateStr) {
   const slots = await ClassSlot.find({ dayOfWeek, active: true }).lean()
   if (slots.length === 0) return 0
 
-  const dateStart = new Date(dateStr); dateStart.setHours(0, 0, 0, 0)
-  const dateEnd = new Date(dateStr); dateEnd.setHours(23, 59, 59, 999)
+  // After-midnight tail slots (00:00–06:59) physically land on the next calendar
+  // day, so a single shift-day can produce sessions on two dates. Dedupe by
+  // slotId + the session's *target* date across both candidate days.
+  const nextDateStr = addDaysStr(dateStr, 1)
+  const rangeStart = new Date(`${dateStr}T00:00:00.000Z`)
+  const rangeEnd = new Date(`${nextDateStr}T23:59:59.999Z`)
   const existing = await ClassSession.find({
     slotId: { $in: slots.map(s => s._id) },
-    date: { $gte: dateStart, $lt: dateEnd },
-  }).select('slotId').lean()
-  const existingSlotIds = new Set(existing.map(s => s.slotId.toString()))
+    date: { $gte: rangeStart, $lte: rangeEnd },
+  }).select('slotId date').lean()
+  const existingKeys = new Set(existing.map(s => `${s.slotId}|${tzDateInfo(s.date).dateStr}`))
 
   const toCreate = []
   for (const slot of slots) {
-    if (existingSlotIds.has(slot._id.toString())) continue
+    const targetDate = physicalDateForSlot(dateStr, slot.startTime)
+    if (existingKeys.has(`${slot._id}|${targetDate}`)) continue
     const [h, m] = slot.startTime.split(':').map(Number)
     const endMinutes = h * 60 + m + slot.durationMinutes
     const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`
@@ -48,7 +86,7 @@ export async function generateSessionsForDay(dateStr) {
       slotId: slot._id,
       studentId: slot.studentId,
       tutorId: slot.tutorId,
-      date: new Date(dateStr),
+      date: new Date(`${targetDate}T00:00:00.000Z`),
       scheduledStart: slot.startTime,
       scheduledEnd: endTime,
       status: 'scheduled',
@@ -63,9 +101,11 @@ export async function runAutoSessionGeneration() {
   try {
     const cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
     if (cfg && cfg.autoGenerateSessions === false) return
-    const { dateStr } = tzDateInfo()
+    // Generate the shift currently in progress (before 7 AM PKT that's yesterday's
+    // overnight shift), so a night shift's after-midnight tail is always ready.
+    const dateStr = currentShiftDate()
     const created = await generateSessionsForDay(dateStr)
-    if (created > 0) console.log(`[auto-sessions] generated ${created} session(s) for ${dateStr}`)
+    if (created > 0) console.log(`[auto-sessions] generated ${created} session(s) for ${dateStr} shift`)
   } catch (err) {
     console.error('[auto-sessions] error:', err.message)
   }
@@ -478,7 +518,6 @@ function karachiNow(base = new Date()) {
   return { dateStr, minutes: h * 60 + m }
 }
 const _toMin = (t) => { if (!t) return null; const [h, m] = String(t).split(':').map(Number); return h * 60 + m }
-const _addDaysStr = (iso, n) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10) }
 
 export async function getLiveBoard(req, res) {
   try {
@@ -506,7 +545,7 @@ export async function getLiveBoard(req, res) {
     //    aware: a night class dated yesterday whose after-midnight portion covers
     //    now still counts. Wall-clock comparison in Asia/Karachi.
     const { dateStr: today, minutes: nowMin } = karachiNow()
-    const yesterday = _addDaysStr(today, -1)
+    const yesterday = addDaysStr(today, -1)
     const dayStart = new Date(`${yesterday}T00:00:00Z`)
     const dayEnd = new Date(`${today}T23:59:59.999Z`)
     const scheduled = await ClassSession.find({ status: 'scheduled', date: { $gte: dayStart, $lt: dayEnd }, ...scope })
