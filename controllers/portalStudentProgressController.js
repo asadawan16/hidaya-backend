@@ -47,10 +47,6 @@ async function lessonsBySession(studentId, sessionIds) {
 // classifier used in the student-detail ComplaintsTab).
 const PARENT_RELATIONS = ['father', 'mother', 'grandfather', 'grandmother', 'uncle', 'aunty', 'brother', 'sister']
 
-// Management/staff roles that see every student. Anyone else who reaches these
-// endpoints (a tutor) is scoped to their currently-assigned students.
-const MANAGEMENT_ROLES = ['super_admin', 'admin', 'principal', 'coordinator', 'qci', 'qcm']
-
 // Loose map from a student's courseLabels to curriculum tracks, so overdue
 // flagging only applies to tracks the student is actually enrolled in.
 const COURSE_TRACK_MAP = {
@@ -64,20 +60,13 @@ const COURSE_TRACK_MAP = {
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
-function isManagement(user) {
-  const keys = (user.roles || []).map(r => r.key)
-  return keys.some(k => MANAGEMENT_ROLES.includes(k))
-}
-
 // Resolve the set of student ids the requester may view. Returns null for
-// "all students" (management), or an array of ObjectIds (tutor scope).
-async function resolveScope(user) {
-  if (isManagement(user)) return null
-  if (user.linkedTutorId) {
-    const ids = await Assignment.find({ tutorId: user.linkedTutorId, endDate: null }).distinct('studentId')
-    return ids
-  }
-  return [] // no scope → sees nothing
+// "all students". Progress is now visible to everyone who holds
+// `student_progress.read` (management AND tutors) — tutors are no longer
+// scoped to only their assigned students, so oversight and cross-cover work.
+// The route-level `student_progress.read` gate is the access boundary.
+async function resolveScope(user) { // eslint-disable-line no-unused-vars
+  return null
 }
 
 // GET /portal/student-progress  — paginated list of students (scoped for tutors)

@@ -3,7 +3,7 @@ import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
   listNotices, createNotice, updateNotice, deleteNotice,
   getActiveNoticesForUser, acknowledgeNotice, getNoticeAckStatus,
-  listComplaints, createComplaint, resolveComplaint,
+  listComplaints, createComplaint, resolveComplaint, updateComplaint, deleteComplaint,
   sendWhatsappReminder,
 } from '../controllers/portalNoticeController.js'
 
@@ -25,6 +25,8 @@ router.get('/notices/:id/ack-status', requirePermission('notice.manage'), getNot
 router.get('/complaints', requirePermission('complaint.read'), listComplaints)
 router.post('/complaints', requirePermission('complaint.create'), createComplaint)
 router.post('/complaints/:id/resolve', requirePermission('notice.manage'), resolveComplaint)
+router.patch('/complaints/:id', requirePermission('complaint.update'), updateComplaint)
+router.delete('/complaints/:id', requirePermission('complaint.delete'), deleteComplaint)
 
 // WhatsApp
 router.post('/whatsapp-reminder', requirePermission('whatsapp.send'), sendWhatsappReminder)

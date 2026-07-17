@@ -331,20 +331,23 @@ export async function resolveComplaint(req, res) {
     const complaint = await Complaint.findById(req.params.id)
     if (!complaint) return res.status(404).json({ error: 'Complaint not found' })
 
-    complaint.status = 'resolved'
+    // Honor the requested outcome so "Dismiss" actually dismisses (was hard-coded).
+    const status = req.body.status === 'dismissed' ? 'dismissed' : 'resolved'
+    complaint.status = status
     complaint.resolvedBy = req.userId
     complaint.resolvedAt = new Date()
     complaint.resolution = req.body.resolution || ''
     await complaint.save()
 
+    const verb = status === 'dismissed' ? 'dismissed' : 'resolved'
     // Notify the filer and the tutor the complaint was against
     const resolutionNote = complaint.resolution ? ` Resolution: ${complaint.resolution}` : ''
     if (complaint.createdBy && complaint.createdBy.toString() !== req.userId.toString()) {
       await createNotification({
         userId: complaint.createdBy,
         type: 'complaint',
-        title: 'Complaint Resolved',
-        body: `A complaint you filed has been resolved.${resolutionNote}`,
+        title: `Complaint ${verb === 'dismissed' ? 'Dismissed' : 'Resolved'}`,
+        body: `A complaint you filed has been ${verb}.${resolutionNote}`,
         payload: { complaintId: complaint._id },
       })
     }
@@ -354,8 +357,8 @@ export async function resolveComplaint(req, res) {
         await createNotification({
           userId: tutorUser._id,
           type: 'complaint',
-          title: 'Complaint Resolved',
-          body: `A complaint concerning you has been resolved.${resolutionNote}`,
+          title: `Complaint ${verb === 'dismissed' ? 'Dismissed' : 'Resolved'}`,
+          body: `A complaint concerning you has been ${verb}.${resolutionNote}`,
           payload: { complaintId: complaint._id },
         })
       }
@@ -364,6 +367,45 @@ export async function resolveComplaint(req, res) {
     res.json(complaint)
   } catch (err) {
     console.error('Resolve complaint error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// PATCH /portal/complaints/:id — edit message text, formatting, priority, category.
+export async function updateComplaint(req, res) {
+  try {
+    const complaint = await Complaint.findById(req.params.id)
+    if (!complaint) return res.status(404).json({ error: 'Complaint not found' })
+
+    const editable = ['text', 'fontSize', 'bold', 'priority', 'category', 'representative', 'complainant', 'actionRequired', 'visibility']
+    for (const key of editable) {
+      if (req.body[key] !== undefined) complaint[key] = req.body[key]
+    }
+    await complaint.save()
+
+    await logActivity({ category: 'complaint', action: 'complaint_updated', message: `Complaint ${complaint._id} edited`, req })
+
+    const populated = await Complaint.findById(complaint._id)
+      .populate('studentId', 'name rollNo')
+      .populate('againstTutorId', 'name tutorId')
+      .populate('createdBy', 'displayName')
+      .lean()
+    res.json(populated)
+  } catch (err) {
+    console.error('Update complaint error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// DELETE /portal/complaints/:id
+export async function deleteComplaint(req, res) {
+  try {
+    const complaint = await Complaint.findByIdAndDelete(req.params.id)
+    if (!complaint) return res.status(404).json({ error: 'Complaint not found' })
+    await logActivity({ level: 'warning', category: 'complaint', action: 'complaint_deleted', message: `Complaint ${req.params.id} deleted`, req })
+    res.json({ success: true })
+  } catch (err) {
+    console.error('Delete complaint error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

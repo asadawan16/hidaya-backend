@@ -3,6 +3,7 @@ import SalaryRecord from '../models/SalaryRecord.js'
 import SalaryIncrement from '../models/SalaryIncrement.js'
 import TutorAttendance from '../models/TutorAttendance.js'
 import TutorProfile from '../models/TutorProfile.js'
+import StaffProfile from '../models/StaffProfile.js'
 import Advance from '../models/Advance.js'
 import ShiftConfig from '../models/ShiftConfig.js'
 import Student from '../models/Student.js'
@@ -18,6 +19,23 @@ async function studentUser(studentId) {
 async function tutorUser(tutorId) {
   const u = await User.findOne({ linkedTutorId: tutorId, status: 'active' }).select('_id').lean()
   return u ? { userId: u._id } : null
+}
+
+// Active management/staff users on payroll: not linked to a tutor or student
+// profile, and holding at least one non-student role. These are the salary/
+// attendance subjects for the "Staff" scope (super_admin employs them too).
+async function getStaffSubjects() {
+  const users = await User.find({
+    status: 'active',
+    linkedTutorId: { $in: [null, undefined] },
+    linkedStudentId: { $in: [null, undefined] },
+  }).populate('roles', 'key').select('displayName email roles').lean()
+  // On payroll: has a non-student role, and is not a super_admin (the boss pays
+  // staff, they aren't a payroll subject themselves).
+  return users.filter(u => {
+    const keys = (u.roles || []).map(r => r.key)
+    return keys.some(k => k !== 'student') && !keys.includes('super_admin')
+  })
 }
 
 // Net payable for the user-managed salary sheet:
@@ -157,14 +175,16 @@ export async function updateInvoiceStatus(req, res) {
 
 export async function listSalaryRecords(req, res) {
   try {
-    const { tutorId, month, year } = req.query
+    const { tutorId, userId, month, year } = req.query
     const filter = {}
     if (tutorId) filter.tutorId = tutorId
+    if (userId) filter.userId = userId
     if (month) filter.month = Number(month)
     if (year) filter.year = Number(year)
 
     const query = () => SalaryRecord.find(filter)
       .populate('tutorId', 'name tutorId salary')
+      .populate('userId', 'displayName email')
       .sort({ year: -1, month: -1 })
 
     // Legacy callers (no ?page) get a flat array; paginated callers get an envelope
@@ -202,35 +222,52 @@ async function suggestAdvanceDeduction(tutorId) {
 
 export async function generateSalary(req, res) {
   try {
-    const { tutorId, month, year } = req.body
-    if (!tutorId || !month || !year) return res.status(400).json({ error: 'tutorId, month, and year are required' })
+    const { tutorId, userId, month, year } = req.body
+    if ((!tutorId && !userId) || !month || !year) return res.status(400).json({ error: 'tutorId or userId, month, and year are required' })
 
-    const existing = await SalaryRecord.findOne({ tutorId, month, year })
+    const isStaff = !!userId && !tutorId
+    const subjectFilter = isStaff ? { userId } : { tutorId }
+
+    const existing = await SalaryRecord.findOne({ ...subjectFilter, month, year })
     if (existing) return res.status(400).json({ error: 'Salary record already exists for this period' })
 
-    const tutor = await TutorProfile.findById(tutorId)
-    if (!tutor) return res.status(404).json({ error: 'Tutor not found' })
+    // Resolve the subject + its default base pay / currency / label.
+    let defaultBase = 0, defaultCurrency = 'PKR', subjectLabel = ''
+    if (isStaff) {
+      const user = await User.findById(userId).select('displayName email').lean()
+      if (!user) return res.status(404).json({ error: 'Staff user not found' })
+      const profile = await StaffProfile.findOne({ userId }).lean()
+      defaultBase = profile?.baseSalary || 0
+      defaultCurrency = profile?.salaryCurrency || 'PKR'
+      subjectLabel = user.displayName || user.email
+    } else {
+      const tutor = await TutorProfile.findById(tutorId).lean()
+      if (!tutor) return res.status(404).json({ error: 'Tutor not found' })
+      defaultBase = tutor.salary?.baseAmount || 0
+      defaultCurrency = tutor.salary?.currency || 'PKR'
+      subjectLabel = tutor.tutorId
+    }
 
     const startDate = new Date(year, month - 1, 1)
     const endDate = new Date(year, month, 0, 23, 59, 59)
 
     const attendance = await TutorAttendance.find({
-      tutorId, date: { $gte: startDate, $lte: endDate },
+      ...subjectFilter, date: { $gte: startDate, $lte: endDate },
     }).lean()
 
     const presentDays = attendance.filter(a => a.status === 'present').length
     const absentDays = attendance.filter(a => a.status === 'absent').length
     const totalHours = attendance.reduce((sum, a) => sum + (a.totalHours || 0), 0)
 
-    const currency = req.body.currency || tutor.salary?.currency || 'PKR'
+    const currency = req.body.currency || defaultCurrency
     const num = (v, fallback = 0) => (v === undefined || v === null || v === '' ? fallback : Number(v))
 
-    // User-managed values — the request body wins; otherwise sensible suggestions.
-    const baseAmount = num(req.body.baseAmount, tutor.salary?.baseAmount || 0)
-    const advanceDeductions = num(req.body.advanceDeductions, await suggestAdvanceDeduction(tutorId))
+    // Advance ledger is tutor-only; staff advanceDeductions is a plain manual number.
+    const advanceDeductions = num(req.body.advanceDeductions, isStaff ? 0 : await suggestAdvanceDeduction(tutorId))
     const draft = {
-      tutorId, month, year, currency,
-      baseAmount,
+      ...subjectFilter, subjectType: isStaff ? 'staff' : 'tutor',
+      month, year, currency,
+      baseAmount: num(req.body.baseAmount, defaultBase),
       absenteesDeduction: 0, // informational only — absentDays is shown; no deduction
       fine: num(req.body.fine),
       extraClassesAmount: num(req.body.extraClassesAmount),
@@ -248,12 +285,12 @@ export async function generateSalary(req, res) {
 
     const record = await SalaryRecord.create(draft)
 
-    await logActivity({ level: 'info', category: 'salary', action: 'salary_generated', message: `Salary generated for ${tutor.tutorId} (${month}/${year})`, req })
+    await logActivity({ level: 'info', category: 'salary', action: 'salary_generated', message: `Salary generated for ${subjectLabel} (${month}/${year})`, req })
 
-    const tu = await tutorUser(tutorId)
-    if (tu) {
+    const notifyUserId = isStaff ? userId : (await tutorUser(tutorId))?.userId
+    if (notifyUserId) {
       await createNotification({
-        userId: tu.userId,
+        userId: notifyUserId,
         type: 'salary_generated',
         title: 'Salary Generated',
         body: `Your salary for ${month}/${year} has been generated (${currency} ${record.netPayable?.toLocaleString?.() || record.netPayable}).`,
@@ -321,17 +358,18 @@ export async function updateSalaryStatus(req, res) {
         const count = await SalaryRecord.countDocuments({ receiptNo: { $ne: '' } })
         record.receiptNo = `SR-${String(count + 1).padStart(5, '0')}`
         // Post the advance deduction to the tutor's advance ledger on payment.
-        await applyAdvanceRepayment(record, req)
+        // Staff have no advance ledger — the deduction is just a plain number.
+        if (record.subjectType !== 'staff' && record.tutorId) await applyAdvanceRepayment(record, req)
       }
     }
 
     await record.save()
 
     if (nowPaid) {
-      const tu = await tutorUser(record.tutorId)
-      if (tu) {
+      const notifyUserId = record.subjectType === 'staff' ? record.userId : (await tutorUser(record.tutorId))?.userId
+      if (notifyUserId) {
         await createNotification({
-          userId: tu.userId,
+          userId: notifyUserId,
           type: 'salary_paid',
           title: 'Salary Paid',
           body: `Your salary for ${record.month}/${record.year} has been paid (receipt ${record.receiptNo || '—'}).`,
@@ -353,6 +391,7 @@ export async function getSalaryReceipt(req, res) {
   try {
     const record = await SalaryRecord.findById(req.params.id)
       .populate('tutorId', 'name tutorId salary')
+      .populate('userId', 'displayName email')
       .populate('generatedBy', 'displayName')
       .lean()
 
@@ -503,19 +542,78 @@ export async function getSalaryTimeline(req, res) {
 
 // Payroll roster: every active tutor merged with their salary record for a period,
 // plus their outstanding advance balance. Drives a payroll-run view.
+// PATCH /portal/finance/staff/:userId/base — set a staff member's monthly base
+// salary + currency (upserts their StaffProfile). Used as the default when
+// generating their salary; editable per-month on the sheet afterwards.
+export async function updateStaffBaseSalary(req, res) {
+  try {
+    const { userId } = req.params
+    const user = await User.findById(userId).select('_id displayName').lean()
+    if (!user) return res.status(404).json({ error: 'User not found' })
+
+    const set = {}
+    if (req.body.baseSalary !== undefined) set.baseSalary = Math.max(0, Number(req.body.baseSalary) || 0)
+    if (req.body.salaryCurrency && ['PKR', 'USD', 'EUR', 'GBP'].includes(req.body.salaryCurrency)) {
+      set.salaryCurrency = req.body.salaryCurrency
+    }
+
+    const profile = await StaffProfile.findOneAndUpdate(
+      { userId },
+      { $set: set, $setOnInsert: { userId } },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    ).lean()
+
+    await logActivity({ level: 'info', category: 'salary', action: 'staff_base_updated', message: `Staff base salary set for ${user.displayName}`, req })
+    res.json(profile)
+  } catch (err) {
+    console.error('Update staff base salary error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 export async function getSalaryRoster(req, res) {
   try {
     const month = Number(req.query.month)
     const year = Number(req.query.year)
     if (!month || !year) return res.status(400).json({ error: 'month and year are required' })
 
+    const scope = req.query.scope === 'staff' ? 'staff' : 'tutor'
+
+    // ── Staff scope: management/staff users on payroll ──
+    if (scope === 'staff') {
+      const [subjects, records] = await Promise.all([
+        getStaffSubjects(),
+        SalaryRecord.find({ month, year, subjectType: 'staff' }).populate('userId', 'displayName email').lean(),
+      ])
+      const profiles = await StaffProfile.find({ userId: { $in: subjects.map(s => s._id) } }).lean()
+      const profByUser = new Map(profiles.map(p => [String(p.userId), p]))
+      const recByUser = new Map(records.map(r => [String(r.userId?._id || r.userId), r]))
+
+      const roster = subjects
+        .sort((a, b) => String(a.displayName || a.email).localeCompare(String(b.displayName || b.email)))
+        .map(u => {
+          const prof = profByUser.get(String(u._id))
+          return {
+            subjectType: 'staff',
+            userId: { _id: u._id, displayName: u.displayName, email: u.email },
+            baseAmount: prof?.baseSalary || 0,
+            currency: prof?.salaryCurrency || 'PKR',
+            outstandingAdvance: 0, // staff have no advance ledger
+            record: recByUser.get(String(u._id)) || null,
+          }
+        })
+
+      return res.json({ roster, month, year, scope, total: subjects.length, generated: records.length, pending: subjects.length - records.length })
+    }
+
+    // ── Tutor scope (default) ──
     const [tutors, records, activeAdvances] = await Promise.all([
       TutorProfile.find({ status: 'active' }).select('name tutorId salary').sort({ name: 1 }).lean(),
-      SalaryRecord.find({ month, year }).lean(),
+      SalaryRecord.find({ month, year, subjectType: { $ne: 'staff' } }).populate('tutorId', 'name tutorId').lean(),
       Advance.find({ status: 'active' }).select('tutorId remainingBalance currency').lean(),
     ])
 
-    const recByTutor = new Map(records.map(r => [String(r.tutorId), r]))
+    const recByTutor = new Map(records.map(r => [String(r.tutorId?._id || r.tutorId), r]))
     const advByTutor = new Map()
     for (const a of activeAdvances) {
       const k = String(a.tutorId)
@@ -523,6 +621,7 @@ export async function getSalaryRoster(req, res) {
     }
 
     const roster = tutors.map(t => ({
+      subjectType: 'tutor',
       tutorId: { _id: t._id, name: t.name, tutorId: t.tutorId },
       baseAmount: t.salary?.baseAmount || 0,
       currency: t.salary?.currency || 'PKR',
@@ -534,6 +633,7 @@ export async function getSalaryRoster(req, res) {
       roster,
       month,
       year,
+      scope,
       total: tutors.length,
       generated: records.length,
       pending: tutors.length - records.length,

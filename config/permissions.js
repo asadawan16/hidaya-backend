@@ -49,7 +49,7 @@ export const PERMISSIONS = {
 
   // Notices & complaints
   notice: ['notice.read', 'notice.create', 'notice.manage'],
-  complaint: ['complaint.read', 'complaint.create'],
+  complaint: ['complaint.read', 'complaint.create', 'complaint.update', 'complaint.delete'],
 
   // Certificates
   certificate: ['certificate.read', 'certificate.submit', 'certificate.approve'],
@@ -122,7 +122,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'tutor.read', 'assignment.read',
     'lesson.read', 'assessment.read',
     'notice.read', 'notice.create', 'notice.manage',
-    'complaint.read', 'complaint.create',
+    'complaint.read', 'complaint.create', 'complaint.update', 'complaint.delete',
     'report.read', 'report.generate',
     'liveboard.view', 'chat.use',
     'schedule.read',

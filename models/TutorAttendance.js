@@ -1,10 +1,15 @@
 import mongoose from 'mongoose'
 
 const tutorAttendanceSchema = new mongoose.Schema({
+  // A record is scoped to a tutor (tutorId) OR a management/staff user (userId).
+  subjectType: { type: String, enum: ['tutor', 'staff'], default: 'tutor' },
   tutorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'TutorProfile',
-    required: true,
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
   },
   date: { type: Date, required: true },
   checkInAt: { type: Date },
@@ -21,6 +26,7 @@ const tutorAttendanceSchema = new mongoose.Schema({
 }, { timestamps: true })
 
 tutorAttendanceSchema.index({ tutorId: 1, date: -1 })
+tutorAttendanceSchema.index({ userId: 1, date: -1 })
 tutorAttendanceSchema.index({ date: 1 })
 
 export default mongoose.model('TutorAttendance', tutorAttendanceSchema)

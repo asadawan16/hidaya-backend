@@ -1,6 +1,10 @@
 import DemoTrial from '../models/DemoTrial.js'
 import TutorProfile from '../models/TutorProfile.js'
+import User from '../models/User.js'
+import Role from '../models/Role.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { createNotification, notifyRoles } from './portalNotificationController.js'
+import { emitToAll } from '../config/socket.js'
 
 const STATUSES = ['scheduled', 'sign_up', 'failed', 'no_show', 'start_later']
 
@@ -10,6 +14,41 @@ async function tutorLabel(id) {
   const t = await TutorProfile.findById(id).select('name tutorId').lean()
   if (!t) return ''
   return `${t.name}${t.tutorId ? ` (${t.tutorId})` : ''}`
+}
+
+// Sanitize an incoming managerIds array to a clean array of id strings.
+function cleanManagerIds(v) {
+  if (!Array.isArray(v)) return []
+  return [...new Set(v.map(x => String(x?._id || x)).filter(Boolean))]
+}
+
+// The user account for a demo's assigned tutor (if any).
+async function tutorUserId(demoTutorId) {
+  if (!demoTutorId) return null
+  const u = await User.findOne({ linkedTutorId: demoTutorId, status: 'active' }).select('_id').lean()
+  return u ? String(u._id) : null
+}
+
+function demoBody(demo) {
+  const when = demo.date ? new Date(demo.date).toLocaleDateString('en-GB') : ''
+  return `Demo for ${demo.studentName}` +
+    (demo.demoTutor ? ` — Tutor: ${demo.demoTutor}` : '') +
+    (demo.time ? ` at ${demo.time}` : '') +
+    (when ? ` on ${when}` : '')
+}
+
+// Notify a set of tagged users (+ optionally super-admins/admins) that a demo
+// was assigned. Never throws (createNotification swallows errors).
+async function notifyDemoAssigned(demo, recipientIds, { includeAdmins = false } = {}) {
+  const title = 'Demo Trial Assigned'
+  const body = demoBody(demo)
+  const payload = { demoId: demo._id, studentName: demo.studentName }
+  for (const uid of recipientIds) {
+    await createNotification({ userId: uid, type: 'demo_assigned', title, body, payload })
+  }
+  if (includeAdmins) {
+    await notifyRoles(['super_admin', 'admin'], { type: 'demo_assigned', title, body, payload })
+  }
 }
 
 // ─── List demo trials with stats ───
@@ -38,6 +77,7 @@ export async function listDemos(req, res) {
     const records = await DemoTrial.find(filter)
       .populate('demoTutorId', 'name tutorId')
       .populate('referredByStudent', 'name rollNo')
+      .populate('managerIds', 'displayName email')
       .sort(sortObj)
       .skip((safePage - 1) * lim)
       .limit(lim)
@@ -78,20 +118,34 @@ export async function getDemoStats(req, res) {
 // ─── Create ───
 export async function createDemo(req, res) {
   try {
-    const { date, studentName, demoTutorId, demoTutor, code, source, referredByStudent, comment, status } = req.body
+    const { date, time, studentName, demoTutorId, demoTutor, managerIds, code, source, referredByStudent, comment, status } = req.body
     if (!studentName || !studentName.trim()) return res.status(400).json({ error: 'Student name is required' })
 
+    const managers = cleanManagerIds(managerIds)
     const demo = await DemoTrial.create({
       date: date ? new Date(date) : new Date(),
+      time: (time || '').trim(),
       studentName: studentName.trim(),
       demoTutorId: demoTutorId || undefined,
       demoTutor: demoTutorId ? await tutorLabel(demoTutorId) : (demoTutor || '').trim(),
+      managerIds: managers,
       code: (code || '').trim(),
       source: (source || '').trim(),
       referredByStudent: referredByStudent || undefined,
       comment: (comment || '').trim(),
       status: STATUSES.includes(status) ? status : 'scheduled',
       createdBy: req.userId,
+    })
+
+    // Notify the assigned tutor + tagged managers + admins, then fire the
+    // portal-wide blocking announcement popup (all staff, ack tracked on the demo).
+    const recipients = new Set(managers)
+    const tUid = await tutorUserId(demo.demoTutorId)
+    if (tUid) recipients.add(tUid)
+    await notifyDemoAssigned(demo, [...recipients], { includeAdmins: true })
+    emitToAll('demo_announced', {
+      demoId: demo._id, studentName: demo.studentName,
+      tutorLabel: demo.demoTutor, date: demo.date, time: demo.time,
     })
 
     await logActivity({
@@ -108,9 +162,13 @@ export async function createDemo(req, res) {
 // ─── Update (full edit) ───
 export async function updateDemo(req, res) {
   try {
-    const { date, studentName, demoTutorId, demoTutor, code, source, referredByStudent, comment, status } = req.body
+    const existing = await DemoTrial.findById(req.params.id).lean()
+    if (!existing) return res.status(404).json({ error: 'Demo trial not found' })
+
+    const { date, time, studentName, demoTutorId, demoTutor, managerIds, code, source, referredByStudent, comment, status } = req.body
     const update = {}
     if (date !== undefined) update.date = date ? new Date(date) : new Date()
+    if (time !== undefined) update.time = (time || '').trim()
     if (studentName !== undefined) update.studentName = studentName.trim()
     if (demoTutorId !== undefined) {
       update.demoTutorId = demoTutorId || null
@@ -118,6 +176,7 @@ export async function updateDemo(req, res) {
     } else if (demoTutor !== undefined) {
       update.demoTutor = (demoTutor || '').trim()
     }
+    if (managerIds !== undefined) update.managerIds = cleanManagerIds(managerIds)
     if (code !== undefined) update.code = (code || '').trim()
     if (source !== undefined) update.source = (source || '').trim()
     if (referredByStudent !== undefined) update.referredByStudent = referredByStudent || null
@@ -127,10 +186,53 @@ export async function updateDemo(req, res) {
     const demo = await DemoTrial.findByIdAndUpdate(req.params.id, update, { new: true })
       .populate('demoTutorId', 'name tutorId')
       .populate('referredByStudent', 'name rollNo')
-    if (!demo) return res.status(404).json({ error: 'Demo trial not found' })
+
+    // Notify anyone newly tagged (added managers or a newly-assigned tutor) —
+    // no broadcast popup on edits, only on create.
+    const oldManagers = new Set((existing.managerIds || []).map(String))
+    const added = new Set((demo.managerIds || []).map(String).filter(id => !oldManagers.has(id)))
+    if (update.demoTutorId !== undefined && String(update.demoTutorId) !== String(existing.demoTutorId || '')) {
+      const tUid = await tutorUserId(demo.demoTutorId)
+      if (tUid) added.add(tUid)
+    }
+    if (added.size) await notifyDemoAssigned(demo, [...added])
+
     res.json(demo)
   } catch (err) {
     console.error('Update demo error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Announcement popup (blocking, all staff) ───
+
+// GET /portal/demos/pending-announcement — recent demos the caller hasn't acked.
+export async function pendingAnnouncement(req, res) {
+  try {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
+    const demos = await DemoTrial.find({
+      status: 'scheduled',
+      createdAt: { $gte: since },
+      announceAckBy: { $ne: req.userId },
+    })
+      .select('studentName demoTutor date time createdAt')
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean()
+    res.json(demos)
+  } catch (err) {
+    console.error('Demo pending announcement error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// POST /portal/demos/:id/ack — mark the announcement acknowledged for this user.
+export async function ackAnnouncement(req, res) {
+  try {
+    await DemoTrial.findByIdAndUpdate(req.params.id, { $addToSet: { announceAckBy: req.userId } })
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('Demo ack error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
@@ -145,6 +247,37 @@ export async function updateDemoStatus(req, res) {
     res.json(demo)
   } catch (err) {
     console.error('Update demo status error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /portal/demos/managers — management users to tag as demo overseers.
+// Gated by demo.manage (not user.read) so principals/coordinators can assign.
+export async function pickerDemoManagers(req, res) {
+  try {
+    const lim = Math.max(1, Math.min(30, parseInt(req.query.limit, 10) || 20))
+    const { q, ids } = req.query
+
+    const filter = { status: 'active' }
+    if (ids) {
+      filter._id = { $in: String(ids).split(',').map(s => s.trim()).filter(Boolean).slice(0, 50) }
+    } else {
+      const mgmtRoles = await Role.find({ key: { $nin: ['tutor', 'super_admin', 'student'] } }).select('_id').lean()
+      filter.roles = { $in: mgmtRoles.map(r => r._id) }
+      if (q) {
+        const regex = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+        filter.$or = [{ displayName: regex }, { email: regex }]
+      }
+    }
+
+    const records = await User.find(filter)
+      .select('displayName email status')
+      .sort({ displayName: 1 })
+      .limit(ids ? 50 : lim)
+      .lean()
+    res.json(records)
+  } catch (err) {
+    console.error('Demo managers picker error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

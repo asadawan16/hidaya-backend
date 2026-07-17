@@ -267,16 +267,54 @@ export async function listSessions(req, res) {
       if (dateTo) filter.date.$lte = new Date(dateTo)
     }
 
-    const total = await ClassSession.countDocuments(filter)
-    const pages = Math.ceil(total / lim) || 1
-    const safePage = Math.min(pg, pages)
+    // Night-shift support: when a wrapping window is requested (startHour > endHour,
+    // e.g. 20:00 → 07:00) alongside a single `date`, also pull the *next* calendar
+    // day's early-morning sessions (before endHour) and tag them dayOffset=1, so an
+    // overnight class's post-midnight tail shows on the night it belongs to. Mirrors
+    // getBoard. Only active with `date` + wrap params, so other callers are unaffected.
+    const startHour = req.query.startHour != null ? parseInt(req.query.startHour, 10) : null
+    const endHour = req.query.endHour != null ? parseInt(req.query.endHour, 10) : null
+    const wraps = date && startHour != null && endHour != null && startHour > endHour
 
     let sortObj = { date: -1, scheduledStart: -1 }
     if (sort === 'date') sortObj = { date: 1, scheduledStart: 1 }
     if (sort === 'status') sortObj = { status: 1, date: -1 }
 
+    const studentSel = 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
+
+    if (wraps) {
+      // Unpaginated night view: the day's sessions + next-day early tail.
+      const records = await ClassSession.find(filter)
+        .populate('studentId', studentSel)
+        .populate('tutorId', 'name tutorId')
+        .populate('slotId', 'track meetLink')
+        .sort(sortObj)
+        .lean()
+      records.forEach(s => { s.dayOffset = 0 })
+
+      const nextStart = new Date(date); nextStart.setDate(nextStart.getDate() + 1); nextStart.setHours(0, 0, 0, 0)
+      const nextEnd = new Date(nextStart); nextEnd.setHours(23, 59, 59, 999)
+      const cutoff = String(endHour).padStart(2, '0') + ':00'
+      const nextFilter = { ...filter, date: { $gte: nextStart, $lt: nextEnd } }
+      let nextSessions = await ClassSession.find(nextFilter)
+        .populate('studentId', studentSel)
+        .populate('tutorId', 'name tutorId')
+        .populate('slotId', 'track meetLink')
+        .sort(sortObj)
+        .lean()
+      nextSessions = nextSessions.filter(s => s.scheduledStart && s.scheduledStart < cutoff)
+      nextSessions.forEach(s => { s.dayOffset = 1 })
+
+      const combined = records.concat(nextSessions)
+      return res.json({ records: combined, total: combined.length, page: 1, pages: 1 })
+    }
+
+    const total = await ClassSession.countDocuments(filter)
+    const pages = Math.ceil(total / lim) || 1
+    const safePage = Math.min(pg, pages)
+
     const records = await ClassSession.find(filter)
-      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
+      .populate('studentId', studentSel)
       .populate('tutorId', 'name tutorId')
       .populate('slotId', 'track meetLink')
       .sort(sortObj)
@@ -432,24 +470,71 @@ export async function markSessionMissed(req, res) {
 
 // ─── Live board: currently active sessions ───
 
+// Karachi wall-clock now: { dateStr: 'YYYY-MM-DD', minutes: number-of-day }.
+function karachiNow(base = new Date()) {
+  const { dateStr } = tzDateInfo(base)
+  const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hour12: false }).format(base)
+  const [h, m] = hm.split(':').map(Number)
+  return { dateStr, minutes: h * 60 + m }
+}
+const _toMin = (t) => { if (!t) return null; const [h, m] = String(t).split(':').map(Number); return h * 60 + m }
+const _addDaysStr = (iso, n) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10) }
+
 export async function getLiveBoard(req, res) {
   try {
-    const filter = { status: 'started' }
+    const scope = {}
     // Scope: students see only their own, tutors see only their students
     if (req.user.linkedStudentId) {
-      filter.studentId = req.user.linkedStudentId
+      scope.studentId = req.user.linkedStudentId
     } else if (req.user.linkedTutorId) {
-      filter.tutorId = req.user.linkedTutorId
+      scope.tutorId = req.user.linkedTutorId
     }
 
-    const activeSessions = await ClassSession.find(filter)
-      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
+    const studentSel = 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
+
+    // 1) Currently-live sessions (started) — green on the board.
+    const activeSessions = await ClassSession.find({ status: 'started', ...scope })
+      .populate('studentId', studentSel)
       .populate('tutorId', 'name tutorId roomNo meetLink')
       .populate('slotId', 'track durationMinutes')
       .sort({ tutorStartedAt: -1 })
       .lean()
+    activeSessions.forEach(s => { s.boardState = 'live' })
 
-    res.json(activeSessions)
+    // 2) Due-now sessions still 'scheduled' (should be happening but the tutor
+    //    hasn't started) — red on the board so oversight can nudge. Overnight
+    //    aware: a night class dated yesterday whose after-midnight portion covers
+    //    now still counts. Wall-clock comparison in Asia/Karachi.
+    const { dateStr: today, minutes: nowMin } = karachiNow()
+    const yesterday = _addDaysStr(today, -1)
+    const dayStart = new Date(`${yesterday}T00:00:00Z`)
+    const dayEnd = new Date(`${today}T23:59:59.999Z`)
+    const scheduled = await ClassSession.find({ status: 'scheduled', date: { $gte: dayStart, $lt: dayEnd }, ...scope })
+      .populate('studentId', studentSel)
+      .populate('tutorId', 'name tutorId roomNo meetLink')
+      .populate('slotId', 'track durationMinutes')
+      .lean()
+
+    const due = scheduled.filter(s => {
+      const st = _toMin(s.scheduledStart)
+      const en = _toMin(s.scheduledEnd)
+      if (st == null || en == null) return false
+      const sDate = tzDateInfo(s.date).dateStr
+      const crosses = en <= st
+      if (sDate === today) {
+        const endToday = crosses ? 1440 : en
+        return nowMin >= st && nowMin < endToday
+      }
+      if (sDate === yesterday && crosses) {
+        // after-midnight tail belongs to today
+        return nowMin < en
+      }
+      return false
+    })
+    due.forEach(s => { s.boardState = 'due' })
+    due.sort((a, b) => String(a.scheduledStart).localeCompare(String(b.scheduledStart)))
+
+    res.json([...activeSessions, ...due])
   } catch (err) {
     console.error('Live board error:', err)
     res.status(500).json({ error: 'Server error' })

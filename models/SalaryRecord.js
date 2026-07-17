@@ -6,10 +6,15 @@ const deductionSchema = new mongoose.Schema({
 }, { _id: true })
 
 const salaryRecordSchema = new mongoose.Schema({
+  // A record is for a tutor (tutorId) OR a management/staff user (userId).
+  subjectType: { type: String, enum: ['tutor', 'staff'], default: 'tutor' },
   tutorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'TutorProfile',
-    required: true,
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
   },
   month: { type: Number, required: true, min: 1, max: 12 },
   year: { type: Number, required: true },
@@ -53,6 +58,9 @@ const salaryRecordSchema = new mongoose.Schema({
   },
 }, { timestamps: true })
 
-salaryRecordSchema.index({ tutorId: 1, year: 1, month: 1 }, { unique: true })
+// One record per subject per period. Partial indexes so tutor/staff don't collide
+// on null ids (a staff record has no tutorId and vice-versa).
+salaryRecordSchema.index({ tutorId: 1, year: 1, month: 1 }, { unique: true, partialFilterExpression: { tutorId: { $exists: true } } })
+salaryRecordSchema.index({ userId: 1, year: 1, month: 1 }, { unique: true, partialFilterExpression: { userId: { $exists: true } } })
 
 export default mongoose.model('SalaryRecord', salaryRecordSchema)

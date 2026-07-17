@@ -22,6 +22,14 @@ const complaintSchema = new mongoose.Schema({
     required: true,
   },
   text: { type: String, required: true, trim: true },
+  // Display formatting for the message — an admin can bump the size / bold it so
+  // less-literate staff can read it easily (applied to the whole message).
+  fontSize: {
+    type: String,
+    enum: ['sm', 'base', 'lg', 'xl'],
+    default: 'base',
+  },
+  bold: { type: Boolean, default: false },
   visibility: {
     type: String,
     enum: ['teacher_only', 'all_staff'],

@@ -46,10 +46,17 @@ export async function listUsers(req, res) {
 export async function pickerUsers(req, res) {
   try {
     const lim = Math.max(1, Math.min(30, parseInt(req.query.limit, 10) || 20))
-    const { q, status, ids } = req.query
+    const { q, status, ids, management } = req.query
 
     const filter = {}
     if (status) filter.status = status
+
+    // Management picker: users who oversee/manage (any role other than tutor,
+    // super_admin or student). Used e.g. to tag demo-trial overseers.
+    if (management && !ids) {
+      const mgmtRoles = await Role.find({ key: { $nin: ['tutor', 'super_admin', 'student'] } }).select('_id').lean()
+      filter.roles = { $in: mgmtRoles.map(r => r._id) }
+    }
 
     if (ids) {
       const idList = String(ids).split(',').map(s => s.trim()).filter(Boolean).slice(0, 50)

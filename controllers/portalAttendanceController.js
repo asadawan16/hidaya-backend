@@ -1,18 +1,38 @@
 import TutorAttendance from '../models/TutorAttendance.js'
 import { logActivity } from '../utils/activityLogger.js'
 
-// The requesting tutor's own attendance record for today. Self-scoped (no
-// tutor.read needed) and uses the same server-side "midnight today" basis as
-// checkIn/checkOut so the record always matches regardless of timezone.
+// ── Subject helpers ──────────────────────────────────────────────────────────
+// An attendance record belongs to a tutor (tutorId) or a management/staff user
+// (userId). These helpers resolve the subject from a request or the caller.
+
+function subjectFromSrc(src = {}) {
+  if (src.userId) return { subjectType: 'staff', userId: src.userId }
+  if (src.tutorId) return { subjectType: 'tutor', tutorId: src.tutorId }
+  return null
+}
+
+// The caller's own subject — tutors have a linked profile; everyone else (staff /
+// management) is scoped by their own userId.
+function selfSubject(req) {
+  if (req.user.linkedTutorId) return { subjectType: 'tutor', tutorId: req.user.linkedTutorId }
+  return { subjectType: 'staff', userId: req.userId }
+}
+
+// Mongo filter for a subject (the id field only).
+function subjectFilter(subject) {
+  return subject.subjectType === 'staff' ? { userId: subject.userId } : { tutorId: subject.tutorId }
+}
+
+const subjectLabel = (subject) => (subject.subjectType === 'staff' ? `Staff ${subject.userId}` : `Tutor ${subject.tutorId}`)
+
+// The caller's own attendance record for today. Self-scoped (no permission).
 export async function getMyTodayAttendance(req, res) {
   try {
-    const tutorId = req.user.linkedTutorId
-    if (!tutorId) return res.json(null)
-
+    const subject = selfSubject(req)
     const today = new Date()
     today.setHours(0, 0, 0, 0)
 
-    const record = await TutorAttendance.findOne({ tutorId, date: today }).lean()
+    const record = await TutorAttendance.findOne({ ...subjectFilter(subject), date: today }).lean()
     res.json(record || null)
   } catch (err) {
     console.error('My today attendance error:', err)
@@ -24,10 +44,12 @@ export async function listAttendance(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 30))
-    const { tutorId, dateFrom, dateTo, status, sort } = req.query
+    const { tutorId, userId, subjectType, dateFrom, dateTo, status, sort } = req.query
 
     const filter = {}
     if (tutorId) filter.tutorId = tutorId
+    if (userId) filter.userId = userId
+    if (subjectType) filter.subjectType = subjectType
     if (status) filter.status = status
     if (dateFrom || dateTo) {
       filter.date = {}
@@ -41,6 +63,7 @@ export async function listAttendance(req, res) {
 
     const records = await TutorAttendance.find(filter)
       .populate('tutorId', 'name tutorId')
+      .populate('userId', 'displayName email')
       .sort(sort === 'date' ? { date: 1 } : { date: -1 })
       .skip((safePage - 1) * lim)
       .limit(lim)
@@ -55,21 +78,22 @@ export async function listAttendance(req, res) {
 
 export async function checkIn(req, res) {
   try {
-    const { tutorId } = req.body
-    if (!tutorId) return res.status(400).json({ error: 'tutorId is required' })
+    // Explicit subject (admin checking someone in) or the caller's own.
+    const subject = subjectFromSrc(req.body) || selfSubject(req)
 
     const today = new Date()
     today.setHours(0, 0, 0, 0)
+    const filter = { ...subjectFilter(subject), date: today }
 
-    let record = await TutorAttendance.findOne({ tutorId, date: today })
+    let record = await TutorAttendance.findOne(filter)
     if (record && record.checkInAt) {
       return res.status(400).json({ error: 'Already checked in today' })
     }
 
     if (!record) {
       record = await TutorAttendance.create({
-        tutorId,
-        date: today,
+        ...filter,
+        subjectType: subject.subjectType,
         checkInAt: new Date(),
         status: 'present',
       })
@@ -80,12 +104,9 @@ export async function checkIn(req, res) {
     }
 
     await logActivity({
-      level: 'info',
-      category: 'attendance',
-      action: 'tutor_checkin',
-      message: `Tutor ${tutorId} checked in`,
-      req,
-      meta: { tutorId, attendanceId: record._id },
+      level: 'info', category: 'attendance', action: 'checkin',
+      message: `${subjectLabel(subject)} checked in`, req,
+      meta: { ...subjectFilter(subject), attendanceId: record._id },
     })
 
     res.json(record)
@@ -97,13 +118,12 @@ export async function checkIn(req, res) {
 
 export async function checkOut(req, res) {
   try {
-    const { tutorId } = req.body
-    if (!tutorId) return res.status(400).json({ error: 'tutorId is required' })
+    const subject = subjectFromSrc(req.body) || selfSubject(req)
 
     const today = new Date()
     today.setHours(0, 0, 0, 0)
 
-    const record = await TutorAttendance.findOne({ tutorId, date: today })
+    const record = await TutorAttendance.findOne({ ...subjectFilter(subject), date: today })
     if (!record || !record.checkInAt) {
       return res.status(400).json({ error: 'Not checked in today' })
     }
@@ -119,12 +139,9 @@ export async function checkOut(req, res) {
     await record.save()
 
     await logActivity({
-      level: 'info',
-      category: 'attendance',
-      action: 'tutor_checkout',
-      message: `Tutor ${tutorId} checked out (${record.totalHours}h)`,
-      req,
-      meta: { tutorId, attendanceId: record._id },
+      level: 'info', category: 'attendance', action: 'checkout',
+      message: `${subjectLabel(subject)} checked out (${record.totalHours}h)`, req,
+      meta: { ...subjectFilter(subject), attendanceId: record._id },
     })
 
     res.json(record)
@@ -136,20 +153,22 @@ export async function checkOut(req, res) {
 
 export async function markAbsent(req, res) {
   try {
-    const { tutorId, date, notes } = req.body
-    if (!tutorId || !date) return res.status(400).json({ error: 'tutorId and date are required' })
+    const subject = subjectFromSrc(req.body)
+    const { date, notes } = req.body
+    if (!subject || !date) return res.status(400).json({ error: 'tutorId or userId, and date are required' })
 
     const d = new Date(date)
     d.setHours(0, 0, 0, 0)
+    const filter = { ...subjectFilter(subject), date: d }
 
-    let record = await TutorAttendance.findOne({ tutorId, date: d })
+    let record = await TutorAttendance.findOne(filter)
     if (record && record.status === 'present') {
-      return res.status(400).json({ error: 'Tutor is already marked present for this date' })
+      return res.status(400).json({ error: 'Already marked present for this date' })
     }
 
     if (!record) {
       record = await TutorAttendance.create({
-        tutorId, date: d, status: 'absent',
+        ...filter, subjectType: subject.subjectType, status: 'absent',
         notes: notes || 'Marked absent by admin',
       })
     } else {
@@ -159,10 +178,9 @@ export async function markAbsent(req, res) {
     }
 
     await logActivity({
-      level: 'info', category: 'attendance', action: 'tutor_marked_absent',
-      message: `Tutor ${tutorId} marked absent for ${d.toDateString()}`,
-      req,
-      meta: { tutorId, date: d },
+      level: 'info', category: 'attendance', action: 'marked_absent',
+      message: `${subjectLabel(subject)} marked absent for ${d.toDateString()}`, req,
+      meta: { ...subjectFilter(subject), date: d },
     })
 
     res.json(record)
@@ -174,16 +192,17 @@ export async function markAbsent(req, res) {
 
 export async function getAttendanceSummary(req, res) {
   try {
-    const { tutorId, month, year } = req.query
-    if (!tutorId || !month || !year) {
-      return res.status(400).json({ error: 'tutorId, month, and year are required' })
+    const subject = subjectFromSrc(req.query)
+    const { month, year } = req.query
+    if (!subject || !month || !year) {
+      return res.status(400).json({ error: 'tutorId or userId, month, and year are required' })
     }
 
     const startDate = new Date(year, month - 1, 1)
     const endDate = new Date(year, month, 0, 23, 59, 59)
 
     const records = await TutorAttendance.find({
-      tutorId,
+      ...subjectFilter(subject),
       date: { $gte: startDate, $lte: endDate },
     }).sort({ date: 1 }).lean()
 
