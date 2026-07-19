@@ -111,6 +111,53 @@ export async function runAutoSessionGeneration() {
   }
 }
 
+// ── Capacity & double-booking ──
+const DEFAULT_SKILL_CAPACITY = { beginner: 14, medium: 15, professional: 16, expert: 16 }
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+// Merge stored config over defaults so a missing/partial skillCapacity still resolves.
+function resolveSkillCapacity(cfg) {
+  const sc = (cfg && cfg.skillCapacity) || {}
+  return {
+    beginner: sc.beginner ?? DEFAULT_SKILL_CAPACITY.beginner,
+    medium: sc.medium ?? DEFAULT_SKILL_CAPACITY.medium,
+    professional: sc.professional ?? DEFAULT_SKILL_CAPACITY.professional,
+    expert: sc.expert ?? DEFAULT_SKILL_CAPACITY.expert,
+  }
+}
+
+// A tutor's max classes per shift-day: explicit per-tutor override, else the skill cap.
+function effectiveCapacity(tutor, skillCap) {
+  if (tutor && tutor.capacityOverride != null) return tutor.capacityOverride
+  return skillCap[tutor?.skillLevel] ?? DEFAULT_SKILL_CAPACITY.beginner
+}
+
+// 'HH:MM' → minutes since midnight.
+const toMinutes = (hhmm) => {
+  const [h, m] = String(hhmm).split(':').map(Number)
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0)
+}
+
+// Active-slot time clashes for the tutor and/or student on a weekday. Two slots
+// clash when their [start, start+duration) minute ranges overlap.
+async function findSlotConflicts({ dayOfWeek, startTime, durationMinutes, tutorId, studentId, excludeId }) {
+  const newStart = toMinutes(startTime)
+  const newEnd = newStart + (Number(durationMinutes) || 30)
+  const filter = { active: true, dayOfWeek: Number(dayOfWeek), $or: [{ tutorId }, { studentId }] }
+  if (excludeId) filter._id = { $ne: excludeId }
+  const existing = await ClassSlot.find(filter).select('tutorId studentId startTime durationMinutes').lean()
+  const conflicts = []
+  for (const s of existing) {
+    const sStart = toMinutes(s.startTime)
+    const sEnd = sStart + (s.durationMinutes || 30)
+    if (sStart < newEnd && newStart < sEnd) {
+      if (String(s.tutorId) === String(tutorId)) conflicts.push({ type: 'tutor', slot: s })
+      if (String(s.studentId) === String(studentId)) conflicts.push({ type: 'student', slot: s })
+    }
+  }
+  return conflicts
+}
+
 // ─── ClassSlot CRUD ───
 
 export async function listSlots(req, res) {
@@ -174,6 +221,23 @@ export async function createSlot(req, res) {
 
     if (daysToCreate.length === 0) {
       return res.status(400).json({ error: 'dayOfWeek or days array is required' })
+    }
+
+    // ── Validate all days first (create nothing on any conflict/capacity failure) ──
+    const cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
+    const skillCap = resolveSkillCapacity(cfg)
+    const tutorDoc = await TutorProfile.findById(tutorId).select('skillLevel capacityOverride').lean()
+    if (!tutorDoc) return res.status(400).json({ error: 'Tutor not found' })
+    const cap = effectiveCapacity(tutorDoc, skillCap)
+    const dur = durationMinutes || 30
+    for (const dow of daysToCreate) {
+      const conflicts = await findSlotConflicts({ dayOfWeek: dow, startTime, durationMinutes: dur, tutorId, studentId })
+      const tutorClash = conflicts.find(c => c.type === 'tutor')
+      const studentClash = conflicts.find(c => c.type === 'student')
+      if (tutorClash) return res.status(409).json({ error: `Tutor already has a class at ${tutorClash.slot.startTime} on ${DAY_NAMES[dow]}` })
+      if (studentClash) return res.status(409).json({ error: `Student already has a class at ${studentClash.slot.startTime} on ${DAY_NAMES[dow]}` })
+      const used = await ClassSlot.countDocuments({ tutorId, dayOfWeek: dow, active: true })
+      if (used >= cap) return res.status(409).json({ error: `Tutor at capacity (${used}/${cap} classes) for ${DAY_NAMES[dow]}` })
     }
 
     const createdSlots = []
@@ -243,6 +307,28 @@ export async function updateSlot(req, res) {
     const slot = await ClassSlot.findById(req.params.id)
     if (!slot) return res.status(404).json({ error: 'Slot not found' })
 
+    // Re-validate booking only when the schedule (day/time) changes or the slot is
+    // being reactivated — pure meta edits (track, meetLink) skip the check.
+    const schedulingChanged = ['dayOfWeek', 'startTime', 'durationMinutes'].some(f => req.body[f] !== undefined)
+    const reactivating = req.body.active === true && slot.active === false
+    if (schedulingChanged || reactivating) {
+      const newDow = req.body.dayOfWeek !== undefined ? Number(req.body.dayOfWeek) : slot.dayOfWeek
+      const newStart = req.body.startTime !== undefined ? req.body.startTime : slot.startTime
+      const newDur = req.body.durationMinutes !== undefined ? req.body.durationMinutes : slot.durationMinutes
+      const conflicts = await findSlotConflicts({ dayOfWeek: newDow, startTime: newStart, durationMinutes: newDur, tutorId: slot.tutorId, studentId: slot.studentId, excludeId: slot._id })
+      const tutorClash = conflicts.find(c => c.type === 'tutor')
+      const studentClash = conflicts.find(c => c.type === 'student')
+      if (tutorClash) return res.status(409).json({ error: `Tutor already has a class at ${tutorClash.slot.startTime} on ${DAY_NAMES[newDow]}` })
+      if (studentClash) return res.status(409).json({ error: `Student already has a class at ${studentClash.slot.startTime} on ${DAY_NAMES[newDow]}` })
+      if (newDow !== slot.dayOfWeek) {
+        const cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
+        const tutorDoc = await TutorProfile.findById(slot.tutorId).select('skillLevel capacityOverride').lean()
+        const cap = effectiveCapacity(tutorDoc, resolveSkillCapacity(cfg))
+        const used = await ClassSlot.countDocuments({ tutorId: slot.tutorId, dayOfWeek: newDow, active: true, _id: { $ne: slot._id } })
+        if (used >= cap) return res.status(409).json({ error: `Tutor at capacity (${used}/${cap} classes) for ${DAY_NAMES[newDow]}` })
+      }
+    }
+
     const fields = ['dayOfWeek', 'startTime', 'durationMinutes', 'timezone', 'meetLink', 'active', 'track']
     for (const f of fields) {
       if (req.body[f] !== undefined) slot[f] = req.body[f]
@@ -273,6 +359,63 @@ export async function deleteSlot(req, res) {
     res.json({ message: 'Slot deactivated' })
   } catch (err) {
     console.error('Delete slot error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /portal/schedule/slot-board?dayOfWeek= — tutor × time slot board for one
+// weekday, with per-tutor capacity and an overall "spaces available" summary.
+export async function getSlotBoard(req, res) {
+  try {
+    const dow = req.query?.dayOfWeek != null ? Number(req.query.dayOfWeek) : dayOfWeekOf(currentShiftDate())
+    const cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
+    const skillCap = resolveSkillCapacity(cfg)
+
+    // Tutor columns — same scoping as listSlots/getBoard.
+    const tFilter = { status: 'active' }
+    if (req.user.linkedTutorId) tFilter._id = req.user.linkedTutorId
+    else if (req.query.tutorId) tFilter._id = req.query.tutorId
+    const tutors = await TutorProfile.find(tFilter)
+      .select('name tutorId skillLevel capacityOverride meetLink roomNo status')
+      .lean()
+
+    // Active slots for this weekday, scoped to the viewer.
+    const slotFilter = { dayOfWeek: dow, active: true }
+    if (req.user.linkedStudentId) slotFilter.studentId = req.user.linkedStudentId
+    else if (req.user.linkedTutorId) slotFilter.tutorId = req.user.linkedTutorId
+    const slots = await ClassSlot.find(slotFilter)
+      .populate('studentId', 'name rollNo status')
+      .sort({ startTime: 1 })
+      .lean()
+    const byTutor = {}
+    for (const s of slots) {
+      const k = String(s.tutorId)
+      ;(byTutor[k] = byTutor[k] || []).push(s)
+    }
+
+    // Sort columns by numeric tutorId (T01, T02…).
+    const num = (t) => parseInt(String(t.tutorId).replace(/\D/g, ''), 10) || 0
+    tutors.sort((a, b) => num(a) - num(b))
+
+    let totalCapacity = 0
+    let totalUsed = 0
+    const cols = tutors.map(t => {
+      const mySlots = byTutor[String(t._id)] || []
+      const capacity = effectiveCapacity(t, skillCap)
+      const used = mySlots.length
+      totalCapacity += capacity
+      totalUsed += used
+      return { ...t, capacity, used, available: Math.max(0, capacity - used), slots: mySlots }
+    })
+
+    res.json({
+      dayOfWeek: dow,
+      tutors: cols,
+      summary: { totalCapacity, totalUsed, totalAvailable: Math.max(0, totalCapacity - totalUsed) },
+      skillCapacity: skillCap,
+    })
+  } catch (err) {
+    console.error('Get slot board error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
@@ -756,7 +899,7 @@ export async function getScheduleConfig(req, res) {
   try {
     let cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
     if (!cfg) cfg = (await ScheduleConfig.create({ key: 'default' })).toObject()
-    res.json({ autoGenerateSessions: cfg.autoGenerateSessions !== false })
+    res.json({ autoGenerateSessions: cfg.autoGenerateSessions !== false, skillCapacity: resolveSkillCapacity(cfg) })
   } catch (err) {
     console.error('Get schedule config error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -767,6 +910,13 @@ export async function updateScheduleConfig(req, res) {
   try {
     const update = {}
     if (req.body.autoGenerateSessions !== undefined) update.autoGenerateSessions = !!req.body.autoGenerateSessions
+    if (req.body.skillCapacity && typeof req.body.skillCapacity === 'object') {
+      for (const key of ['beginner', 'medium', 'professional', 'expert']) {
+        if (req.body.skillCapacity[key] !== undefined) {
+          update[`skillCapacity.${key}`] = Math.max(0, parseInt(req.body.skillCapacity[key], 10) || 0)
+        }
+      }
+    }
     const cfg = await ScheduleConfig.findOneAndUpdate(
       { key: 'default' }, { $set: update }, { new: true, upsert: true, setDefaultsOnInsert: true },
     ).lean()
@@ -776,7 +926,7 @@ export async function updateScheduleConfig(req, res) {
       await generateSessionsForDay(dateStr)
     }
     await logActivity({ level: 'info', category: 'schedule', action: 'schedule_config_updated', message: `Auto-generate sessions: ${cfg.autoGenerateSessions}`, req })
-    res.json({ autoGenerateSessions: cfg.autoGenerateSessions !== false })
+    res.json({ autoGenerateSessions: cfg.autoGenerateSessions !== false, skillCapacity: resolveSkillCapacity(cfg) })
   } catch (err) {
     console.error('Update schedule config error:', err)
     res.status(500).json({ error: 'Server error' })

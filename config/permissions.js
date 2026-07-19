@@ -215,5 +215,6 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'certificate.read',
     'badge.read',
     'assignment.request',
+    'notice.read',
   ],
 }

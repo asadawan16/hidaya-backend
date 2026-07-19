@@ -60,17 +60,46 @@ export async function getFeeGrid(req, res) {
       }
     }
 
-    const records = students.map(s => ({
-      _id: s._id,
-      name: s.name,
-      rollNo: s.rollNo,
-      status: s.status,
-      baseFee: s.billing?.fee || 0,
-      currency: s.billing?.currency || 'PKR',
-      familyId: s.familyId?._id || null,
-      familyCode: s.familyId?.familyCode || '',
-      months: byStudent[s._id.toString()] || {},
-    }))
+    // Current Asia/Karachi year/month — the "till date" boundary. For the current
+    // year we only count months up to this month; past years count all 12; future
+    // years count none.
+    const kNow = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+    const nowYear = Number(kNow.slice(0, 4))
+    const nowMonth = Number(kNow.slice(5, 7))
+    const monthLimit = year < nowYear ? 12 : (year === nowYear ? nowMonth : 0)
+
+    const records = students.map(s => {
+      const studentCells = byStudent[s._id.toString()] || {}
+      const baseFee = s.billing?.fee || 0
+      const isActive = s.status !== 'left'
+      // Amount still owed up to the current month, auto-filling months that have no
+      // manual receivable from the student's base fee. Waived months contribute 0.
+      let dueTillDate = 0
+      const autoMonths = []
+      for (let m = 1; m <= monthLimit; m++) {
+        const cell = studentCells[m]
+        if (cell) {
+          if (cell.status === 'waived') continue
+          dueTillDate += Math.max(0, (cell.amount || 0) - (cell.amountPaid || 0))
+        } else if (isActive && baseFee > 0) {
+          dueTillDate += baseFee
+          autoMonths.push(m)
+        }
+      }
+      return {
+        _id: s._id,
+        name: s.name,
+        rollNo: s.rollNo,
+        status: s.status,
+        baseFee,
+        currency: s.billing?.currency || 'PKR',
+        familyId: s.familyId?._id || null,
+        familyCode: s.familyId?.familyCode || '',
+        months: studentCells,
+        autoMonths,
+        dueTillDate,
+      }
+    })
 
     // Per-year totals across the returned page
     const received = cells.filter(c => c.status === 'received').length
@@ -79,6 +108,7 @@ export async function getFeeGrid(req, res) {
     // Receivables view: total expected vs still outstanding
     const totalReceivable = cells.reduce((s, c) => s + (c.status === 'waived' ? 0 : c.amount || 0), 0)
     const outstanding = cells.reduce((s, c) => s + (c.status === 'waived' ? 0 : Math.max(0, (c.amount || 0) - (c.amountPaid || 0))), 0)
+    const totalDueTillDate = records.reduce((s, r) => s + r.dueTillDate, 0)
 
     res.json({
       year,
@@ -86,7 +116,7 @@ export async function getFeeGrid(req, res) {
       total,
       page,
       pages: Math.max(1, Math.ceil(total / limit)),
-      summary: { received, partial, totalCollected, totalReceivable, outstanding },
+      summary: { received, partial, totalCollected, totalReceivable, outstanding, totalDueTillDate, currentMonth: nowMonth, currentYear: nowYear },
     })
   } catch (err) {
     console.error('Fee grid error:', err)

@@ -50,6 +50,9 @@ const tutorProfileSchema = new mongoose.Schema({
     enum: ['nazra', 'hifz', 'tafseer', 'tajweed', 'translation', 'qaida'],
   }],
   maxStudents: { type: Number, default: 15 },
+  // Per-tutor override of the skill-level class capacity (null → use the
+  // ScheduleConfig.skillCapacity value for this tutor's skillLevel).
+  capacityOverride: { type: Number, default: null },
   notes: { type: String, trim: true, default: '' },
 }, { timestamps: true })
 

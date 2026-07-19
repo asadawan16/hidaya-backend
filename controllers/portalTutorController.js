@@ -109,7 +109,7 @@ export async function getTutor(req, res) {
 
 export async function createTutor(req, res) {
   try {
-    const { name, email, password, phone, skillLevel, roomNo, meetLink, subjects, notes, salary, shiftWindows } = req.body
+    const { name, email, password, phone, skillLevel, roomNo, meetLink, subjects, notes, salary, shiftWindows, capacityOverride } = req.body
 
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Name, email, and password are required' })
@@ -167,6 +167,7 @@ export async function createTutor(req, res) {
       notes: notes?.trim() || '',
       salary: salary || { baseAmount: 0, currency: 'PKR' },
       shiftWindows: shiftWindows || [],
+      capacityOverride: (capacityOverride === '' || capacityOverride == null) ? null : Number(capacityOverride),
     })
 
     // Link user to tutor profile
@@ -222,6 +223,10 @@ export async function updateTutor(req, res) {
       if (req.body[field] !== undefined) {
         tutor[field] = req.body[field]
       }
+    }
+    // Capacity override: blank/null clears it (→ use skill-level default).
+    if (req.body.capacityOverride !== undefined) {
+      tutor.capacityOverride = (req.body.capacityOverride === '' || req.body.capacityOverride == null) ? null : Number(req.body.capacityOverride)
     }
 
     await tutor.save()

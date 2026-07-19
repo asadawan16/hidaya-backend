@@ -4,7 +4,7 @@ import {
   listSlots, createSlot, updateSlot, deleteSlot,
   listSessions, createSession, updateSession, deleteSession,
   startSession, completeSession, markSessionMissed,
-  getLiveBoard, getMyLiveSessions, generateSessionsForDate, getBoard,
+  getLiveBoard, getMyLiveSessions, generateSessionsForDate, getBoard, getSlotBoard,
   getScheduleConfig, updateScheduleConfig,
 } from '../controllers/portalScheduleController.js'
 
@@ -23,6 +23,8 @@ router.delete('/slots/:id', requirePermission('schedule.manage'), deleteSlot)
 
 // Board view (tutor × time-block grid for a day)
 router.get('/board', requirePermission('schedule.read'), getBoard)
+// Slot board (tutor × time recurring-slot grid + capacity/spaces for a weekday)
+router.get('/slot-board', requirePermission('schedule.read'), getSlotBoard)
 
 // Class Sessions
 router.get('/sessions', requirePermission('schedule.read'), listSessions)
