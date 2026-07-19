@@ -78,3 +78,19 @@ export function requirePermission(...permissions) {
     next()
   }
 }
+
+/**
+ * Passes if the user holds ANY ONE of the given permissions (OR semantics).
+ * Usage: requireAnyPermission('student.read', 'student.pick')
+ */
+export function requireAnyPermission(...permissions) {
+  return (req, res, next) => {
+    if (!req.userPermissions) {
+      return res.status(401).json({ error: 'Authentication required' })
+    }
+    if (permissions.some(p => req.userPermissions.has(p))) {
+      return next()
+    }
+    return res.status(403).json({ error: 'Insufficient permissions', missing: permissions })
+  }
+}

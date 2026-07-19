@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
+import { portalAuth, requirePermission, requireAnyPermission } from '../middleware/portalAuth.js'
 import {
   listStudents, getStudent, createStudent, updateStudent,
   deleteStudent, changeStudentStatus, getStudentStats,
@@ -14,7 +14,9 @@ router.use(portalAuth)
 
 router.get('/', requirePermission('student.read'), listStudents)
 router.get('/stats', requirePermission('student.read'), getStudentStats)
-router.get('/picker', requirePermission('student.read'), pickerStudents)
+// Typeahead picker: full student.read OR the narrow student.pick (lesson/assessment
+// logging) — lets tutors select a student without the directory or counts.
+router.get('/picker', requireAnyPermission('student.read', 'student.pick'), pickerStudents)
 // Literal route must precede '/:id' so it isn't captured as an id
 router.get('/check-rollno', requirePermission('student.read'), checkRollNo)
 router.get('/:id', requirePermission('student.read'), getStudent)

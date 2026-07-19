@@ -3,7 +3,9 @@
 
 export const PERMISSIONS = {
   // Student management
-  student: ['student.read', 'student.create', 'student.update', 'student.delete', 'student.approve', 'student.feedback_admin', 'student.feedback_quality'],
+  // student.pick — search/select students in pickers (logging lessons, assessments,
+  // etc.) WITHOUT the full student directory, detail views, or org-wide counts.
+  student: ['student.read', 'student.pick', 'student.create', 'student.update', 'student.delete', 'student.approve', 'student.feedback_admin', 'student.feedback_quality'],
 
   // Enrollment / admissions
   enrollment: ['enrollment.read', 'enrollment.create', 'enrollment.update'],
@@ -191,7 +193,9 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   ],
 
   tutor: [
-    'student.read',
+    // Tutors select students to log lessons/assessments via `student.pick`, which
+    // grants the picker WITHOUT the student directory or counts (`student.read`).
+    'student.pick',
     'lesson.read', 'lesson.log',
     'assessment.read', 'assessment.create',
     'schedule.read',
