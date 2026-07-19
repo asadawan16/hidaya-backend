@@ -11,7 +11,9 @@ export const PERMISSIONS = {
   enrollment: ['enrollment.read', 'enrollment.create', 'enrollment.update'],
 
   // Tutor management
-  tutor: ['tutor.read', 'tutor.create', 'tutor.update', 'tutor.delete'],
+  // tutor.pick — search/select a tutor in pickers (logging lessons) WITHOUT the
+  // Tutors directory tab or org-wide tutor counts.
+  tutor: ['tutor.read', 'tutor.pick', 'tutor.create', 'tutor.update', 'tutor.delete'],
 
   // Assignments (tutor ↔ student)
   assignment: ['assignment.read', 'assignment.manage', 'assignment.request', 'assignment.approve'],
@@ -197,9 +199,9 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   ],
 
   tutor: [
-    // Tutors select students to log lessons/assessments via `student.pick`, which
-    // grants the picker WITHOUT the student directory or counts (`student.read`).
-    'student.pick',
+    // Tutors select students/tutors to log lessons via `student.pick`/`tutor.pick`,
+    // which grant the pickers WITHOUT the directories or counts (`*.read`).
+    'student.pick', 'tutor.pick',
     'lesson.read', 'lesson.log',
     'assessment.read', 'assessment.create',
     'schedule.read',
