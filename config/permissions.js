@@ -105,7 +105,9 @@ export const PERMISSIONS = {
   studentProgress: ['student_progress.read'],
 
   // Manual fee management (yearly grid, mark months received/pending, link payments)
-  fee: ['fee.read', 'fee.manage'],
+  // fee.receivables — gates the Receivables tab + the summary KPI cards on the Fee
+  // Management page (super-admin only by default).
+  fee: ['fee.read', 'fee.manage', 'fee.receivables'],
 
   // Demo trial classes (tracking + statuses)
   demo: ['demo.read', 'demo.manage'],
@@ -117,7 +119,9 @@ export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
 export const DEFAULT_ROLE_PERMISSIONS = {
   super_admin: ALL_PERMISSIONS,
 
-  admin: ALL_PERMISSIONS.filter(p => !['role.delete'].includes(p)),
+  // Admin gets everything except role deletion and the super-admin-only Fee
+  // receivables view/KPIs.
+  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables'].includes(p)),
 
   principal: [
     'student.read', 'student.approve', 'enrollment.read', 'enrollment.update',
