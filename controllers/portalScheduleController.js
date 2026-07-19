@@ -182,9 +182,12 @@ export async function listSlots(req, res) {
       .populate('tutorId', 'name tutorId meetLink')
       .sort({ dayOfWeek: 1, startTime: 1 })
 
-    // Legacy callers (no ?page) get a flat array; paginated callers get an envelope
+    // Legacy callers (no ?page) get a flat array; paginated callers get an envelope.
+    // Flat callers may request a larger cap — the week calendar needs every active
+    // slot across all 7 days, which can exceed the 500 default. Clamp to 5000.
     if (!req.query.page) {
-      const records = await query().limit(500).lean()
+      const flatLimit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 500))
+      const records = await query().limit(flatLimit).lean()
       return res.json(records)
     }
 
