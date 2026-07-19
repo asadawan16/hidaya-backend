@@ -23,8 +23,11 @@ export async function getFeeGrid(req, res) {
   try {
     const year = parseInt(req.query.year, 10) || new Date().getFullYear()
     const { familyId, studentId, search, studentStatus } = req.query
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1)
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25))
+    // limit=all → no pagination (fetch every matching student). Numeric limits are
+    // clamped to 500 per page. Mongoose treats .limit(0) as "no limit".
+    const showAll = req.query.limit === 'all'
+    const limit = showAll ? 0 : Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25))
+    const page = showAll ? 1 : Math.max(1, parseInt(req.query.page, 10) || 1)
 
     const filter = {}
     if (studentId) filter._id = studentId
@@ -44,7 +47,7 @@ export async function getFeeGrid(req, res) {
       // Group family members next to each other (incl. on-leave siblings), then
       // alphabetical within the family. familyId null (solo students) sorts first.
       .sort({ familyId: 1, name: 1 })
-      .skip((page - 1) * limit)
+      .skip(showAll ? 0 : (page - 1) * limit)
       .limit(limit)
       .lean()
 
@@ -115,7 +118,7 @@ export async function getFeeGrid(req, res) {
       records,
       total,
       page,
-      pages: Math.max(1, Math.ceil(total / limit)),
+      pages: showAll ? 1 : Math.max(1, Math.ceil(total / limit)),
       summary: { received, partial, totalCollected, totalReceivable, outstanding, totalDueTillDate, currentMonth: nowMonth, currentYear: nowYear },
     })
   } catch (err) {
