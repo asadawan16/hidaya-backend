@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
+import { portalAuth, requirePermission, requireAnyPermission } from '../middleware/portalAuth.js'
 import {
   listNotices, createNotice, updateNotice, deleteNotice,
   getActiveNoticesForUser, acknowledgeNotice, getNoticeAckStatus,
@@ -24,7 +24,10 @@ router.get('/notices/:id/ack-status', requirePermission('notice.manage'), getNot
 // Complaints
 router.get('/complaints', requirePermission('complaint.read'), listComplaints)
 router.post('/complaints', requirePermission('complaint.create'), createComplaint)
-router.post('/complaints/:id/resolve', requirePermission('notice.manage'), resolveComplaint)
+// Resolving a complaint is a complaint action — allow it for complaint managers
+// (complaint.update) as well as the legacy notice.manage, so complaint.* is
+// self-sufficient and independent of the notice domain.
+router.post('/complaints/:id/resolve', requireAnyPermission('complaint.update', 'notice.manage'), resolveComplaint)
 router.patch('/complaints/:id', requirePermission('complaint.update'), updateComplaint)
 router.delete('/complaints/:id', requirePermission('complaint.delete'), deleteComplaint)
 

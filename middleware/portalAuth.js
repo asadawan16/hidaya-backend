@@ -80,6 +80,19 @@ export function requirePermission(...permissions) {
 }
 
 /**
+ * Role-checking middleware factory (by role key).
+ * Usage: requireRole('super_admin')
+ * Passes if the user holds ANY ONE of the given role keys.
+ */
+export function requireRole(...roleKeys) {
+  return (req, res, next) => {
+    const keys = (req.user?.roles || []).map(r => r.key)
+    if (roleKeys.some(k => keys.includes(k))) return next()
+    return res.status(403).json({ error: 'Insufficient permissions' })
+  }
+}
+
+/**
  * Passes if the user holds ANY ONE of the given permissions (OR semantics).
  * Usage: requireAnyPermission('student.read', 'student.pick')
  */

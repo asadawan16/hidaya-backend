@@ -1,9 +1,9 @@
 import { Router } from 'express'
-import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
+import { portalAuth, requirePermission, requireRole } from '../middleware/portalAuth.js'
 import {
   listSlots, createSlot, updateSlot, deleteSlot,
   listSessions, createSession, updateSession, deleteSession,
-  startSession, completeSession, markSessionMissed,
+  startSession, completeSession, markSessionMissed, resetSession,
   getLiveBoard, getMyLiveSessions, generateSessionsForDate, getBoard, getSlotBoard,
   getScheduleConfig, updateScheduleConfig,
 } from '../controllers/portalScheduleController.js'
@@ -33,6 +33,8 @@ router.post('/sessions/generate', requirePermission('schedule.manage'), generate
 router.post('/sessions/:id/start', requirePermission('lesson.log'), startSession)
 router.post('/sessions/:id/complete', requirePermission('lesson.log'), completeSession)
 router.post('/sessions/:id/missed', requirePermission('lesson.log'), markSessionMissed)
+// Super-admin corrective reset: reverse an accidental complete/missed back to scheduled.
+router.post('/sessions/:id/reset', requireRole('super_admin'), resetSession)
 router.patch('/sessions/:id', requirePermission('schedule.manage'), updateSession)
 router.delete('/sessions/:id', requirePermission('schedule.manage'), deleteSession)
 

@@ -56,6 +56,27 @@ export function currentShiftDate(base = new Date()) {
   return minutes < SHIFT_WRAP_HOUR * 60 ? addDaysStr(dateStr, -1) : dateStr
 }
 
+// Absolute instant (ms) a session's class actually starts. `session.date` is the
+// midnight-UTC of the PKT calendar day the class physically falls on (after-midnight
+// tail slots are already stored on the next day), and `scheduledStart` is an
+// 'HH:MM' Asia/Karachi wall-clock time. PKT is a fixed UTC+5 (no DST), so the real
+// start = PKT-day-midnight − 5h + scheduledStart.
+function sessionStartMs(session) {
+  const dateStr = tzDateInfo(session.date).dateStr
+  const [h, m] = String(session.scheduledStart || '').split(':').map(Number)
+  if (!Number.isFinite(h)) return null
+  return Date.parse(`${dateStr}T00:00:00Z`) + ((h - 5) * 60 + (m || 0)) * 60000
+}
+
+// True when the class has not begun yet (with a small grace for clock skew).
+// Used to stop tutors completing / missing / starting a *future* class — e.g. at
+// 10:26 PM they must not action a class that starts at 1:00 AM on the same shift.
+function sessionStartsInFuture(session, graceMin = 5) {
+  const startMs = sessionStartMs(session)
+  if (startMs == null) return false
+  return startMs - graceMin * 60000 > Date.now()
+}
+
 // Create any missing sessions for the given date from active slots on that weekday.
 // Idempotent (dedupes by slotId + date). Returns the number created.
 export async function generateSessionsForDay(dateStr) {
@@ -244,10 +265,6 @@ export async function createSlot(req, res) {
     }
 
     const createdSlots = []
-    const today = new Date()
-    const todayStart = new Date(today); todayStart.setHours(0, 0, 0, 0)
-    const todayEnd = new Date(today); todayEnd.setHours(23, 59, 59, 999)
-    const todayDow = today.getDay()
 
     for (const dow of daysToCreate) {
       const slot = await ClassSlot.create({
@@ -262,30 +279,27 @@ export async function createSlot(req, res) {
         active: true,
       })
 
-      // Auto-create session for today if matching
-      if (todayDow === dow) {
-        const existing = await ClassSession.findOne({ slotId: slot._id, date: { $gte: todayStart, $lt: todayEnd } })
-        if (!existing) {
-          const [h, m] = startTime.split(':').map(Number)
-          const endMins = h * 60 + m + (durationMinutes || 30)
-          const endTime = `${String(Math.floor(endMins / 60) % 24).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`
-          await ClassSession.create({
-            slotId: slot._id,
-            studentId, tutorId,
-            date: todayStart,
-            scheduledStart: startTime,
-            scheduledEnd: endTime,
-            status: 'scheduled',
-          })
-        }
-      }
-
       const populated = await ClassSlot.findById(slot._id)
         .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
         .populate('tutorId', 'name tutorId')
         .lean()
 
       createdSlots.push(populated)
+    }
+
+    // Materialise sessions for the shift currently in progress using the SAME
+    // shift-aware, idempotent generator as the background job / "Generate Sessions"
+    // button. This avoids the old per-slot auto-create which anchored the session to
+    // the SERVER-LOCAL calendar day and could produce a duplicate document (dated
+    // differently) for the same class — the source of "shown as live and due both".
+    // generateSessionsForDay dedupes by slotId + target date, so re-running is safe.
+    try {
+      const cfgAuto = await ScheduleConfig.findOne({ key: 'default' }).lean()
+      if (!cfgAuto || cfgAuto.autoGenerateSessions !== false) {
+        await generateSessionsForDay(currentShiftDate())
+      }
+    } catch (genErr) {
+      console.error('Auto-generate after slot create failed:', genErr.message)
     }
 
     await logActivity({
@@ -542,6 +556,13 @@ export async function startSession(req, res) {
     if (!session) return res.status(404).json({ error: 'Session not found' })
     if (session.status !== 'scheduled') return res.status(400).json({ error: 'Session cannot be started' })
 
+    // Tutors may only act on a class once its scheduled time has arrived. Managers
+    // (schedule.manage) can override for corrections.
+    const canOverrideTime = req.userPermissions?.has('schedule.manage')
+    if (!canOverrideTime && sessionStartsInFuture(session)) {
+      return res.status(400).json({ error: 'This class has not started yet — you can only start it once its scheduled time begins.' })
+    }
+
     session.status = 'started'
     session.tutorStartedAt = new Date()
     await session.save()
@@ -559,6 +580,12 @@ export async function completeSession(req, res) {
   try {
     const session = await ClassSession.findById(req.params.id)
     if (!session) return res.status(404).json({ error: 'Session not found' })
+
+    // Block completing a class that has not started yet (managers can override).
+    const canOverrideTime = req.userPermissions?.has('schedule.manage')
+    if (!canOverrideTime && sessionStartsInFuture(session)) {
+      return res.status(400).json({ error: 'This class has not started yet — you cannot complete a future class.' })
+    }
 
     const { attendance, actualStudentJoinTime, notes, lesson } = req.body
 
@@ -619,6 +646,12 @@ export async function markSessionMissed(req, res) {
     const session = await ClassSession.findById(req.params.id)
     if (!session) return res.status(404).json({ error: 'Session not found' })
 
+    // Block marking a not-yet-started class as missed (managers can override).
+    const canOverrideTime = req.userPermissions?.has('schedule.manage')
+    if (!canOverrideTime && sessionStartsInFuture(session)) {
+      return res.status(400).json({ error: 'This class has not started yet — you cannot mark a future class as missed.' })
+    }
+
     session.status = 'missed'
     session.attendance = 'no_show'
     session.notes = req.body.notes || ''
@@ -650,6 +683,53 @@ export async function markSessionMissed(req, res) {
     res.json(session)
   } catch (err) {
     console.error('Mark missed error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Reset a session back to 'scheduled' (super-admin corrective action) ───
+// Tutors sometimes mark future/wrong classes complete or missed. This reverses a
+// completed/missed/started session to a clean 'scheduled' state, clearing the
+// completion metadata and removing any lesson entry that was created on completion.
+export async function resetSession(req, res) {
+  try {
+    const session = await ClassSession.findById(req.params.id)
+    if (!session) return res.status(404).json({ error: 'Session not found' })
+
+    const prevStatus = session.status
+    if (prevStatus === 'scheduled') {
+      return res.status(400).json({ error: 'Session is already scheduled' })
+    }
+
+    // Drop the lesson entry created at completion so the reset leaves no orphan.
+    if (session.lessonEntryId) {
+      const LessonEntry = (await import('../models/LessonEntry.js')).default
+      await LessonEntry.deleteOne({ _id: session.lessonEntryId })
+      session.lessonEntryId = undefined
+    }
+
+    session.status = 'scheduled'
+    session.attendance = ''
+    session.tutorStartedAt = undefined
+    session.actualStudentJoinTime = undefined
+    session.computedDuration = undefined
+    session.autoEndedAt = undefined
+    await session.save()
+
+    emitToLiveBoard('live_board_changed', { action: 'reset', sessionId: session._id })
+
+    await logActivity({
+      level: 'warning',
+      category: 'schedule',
+      action: 'session_reset',
+      message: `Session ${session._id} reset from '${prevStatus}' to 'scheduled'`,
+      req,
+      meta: { sessionId: session._id, previousStatus: prevStatus },
+    })
+
+    res.json(session)
+  } catch (err) {
+    console.error('Reset session error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
@@ -719,7 +799,26 @@ export async function getLiveBoard(req, res) {
     due.forEach(s => { s.boardState = 'due' })
     due.sort((a, b) => String(a.scheduledStart).localeCompare(String(b.scheduledStart)))
 
-    res.json([...activeSessions, ...due])
+    // De-duplicate by class identity so a single class can NEVER show as both
+    // live and due at the same time. If duplicate session documents exist for the
+    // same class (slot + date + start), the 'started' (live) record wins over the
+    // 'scheduled' (due) one.
+    const classKey = (s) => {
+      const slot = s.slotId?._id || s.slotId
+      const stud = s.studentId?._id || s.studentId
+      const tut = s.tutorId?._id || s.tutorId
+      return `${slot || `${stud}:${tut}`}|${tzDateInfo(s.date).dateStr}|${s.scheduledStart}`
+    }
+    const byKey = new Map()
+    for (const s of [...activeSessions, ...due]) {
+      const key = classKey(s)
+      const existing = byKey.get(key)
+      if (!existing) { byKey.set(key, s); continue }
+      // live wins over due
+      if (existing.boardState === 'due' && s.boardState === 'live') byKey.set(key, s)
+    }
+
+    res.json([...byKey.values()])
   } catch (err) {
     console.error('Live board error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -795,6 +894,7 @@ export async function getBoard(req, res) {
       .populate('studentId', studentSel)
       .populate('tutorId', 'name tutorId')
       .populate('slotId', 'track tracks meetLink durationMinutes startTime dayOfWeek active')
+      .populate({ path: 'lessonEntryId', select: 'kind items customText notes classStart classEnd', populate: { path: 'items.curriculumItemId', select: 'label track type' } })
       .sort({ scheduledStart: 1 })
       .lean()
     sessions.forEach(s => { s.dayOffset = 0 })
@@ -808,6 +908,7 @@ export async function getBoard(req, res) {
         .populate('studentId', studentSel)
         .populate('tutorId', 'name tutorId')
         .populate('slotId', 'track tracks meetLink durationMinutes startTime dayOfWeek active')
+        .populate({ path: 'lessonEntryId', select: 'kind items customText notes classStart classEnd', populate: { path: 'items.curriculumItemId', select: 'label track type' } })
         .sort({ scheduledStart: 1 })
         .lean()
       // Only starts strictly before endHour:00 fall inside the visible night grid.
