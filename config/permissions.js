@@ -173,6 +173,9 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'assignment.read', 'assignment.request',
     'lesson.read', 'lesson.approve',
     'assessment.read', 'assessment.create', 'assessment.template_manage',
+    // QCI oversees the teaching schedule (manages tutors), so gets the full
+    // session board + slot management, same surfaces as management roles.
+    'schedule.read', 'schedule.manage',
     'notice.read', 'notice.create',
     'complaint.read', 'complaint.create',
     'report.read',

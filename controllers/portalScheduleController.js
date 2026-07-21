@@ -190,10 +190,12 @@ export async function listSlots(req, res) {
   try {
     const { tutorId, studentId, dayOfWeek, active } = req.query
     const filter = {}
-    // Scope: students see only their own, tutors see only their students
+    // Scope: students see only their own; a *plain* tutor sees only their own slots,
+    // but a schedule.manage holder (oversight, incl. QCI) sees the whole schedule.
+    const seesAll = req.userPermissions?.has('schedule.manage')
     if (req.user.linkedStudentId) {
       filter.studentId = req.user.linkedStudentId
-    } else if (req.user.linkedTutorId) {
+    } else if (req.user.linkedTutorId && !seesAll) {
       filter.tutorId = req.user.linkedTutorId
       if (studentId) filter.studentId = studentId
     } else {
@@ -393,9 +395,11 @@ export async function getSlotBoard(req, res) {
     const cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
     const skillCap = resolveSkillCapacity(cfg)
 
-    // Tutor columns — same scoping as listSlots/getBoard.
+    // Tutor columns — same scoping as listSlots/getBoard. Oversight (schedule.manage)
+    // sees every tutor; a plain linked tutor sees only their own column.
+    const seesAll = req.userPermissions?.has('schedule.manage')
     const tFilter = { status: 'active' }
-    if (req.user.linkedTutorId) tFilter._id = req.user.linkedTutorId
+    if (req.user.linkedTutorId && !seesAll) tFilter._id = req.user.linkedTutorId
     else if (req.query.tutorId) tFilter._id = req.query.tutorId
     const tutors = await TutorProfile.find(tFilter)
       .select('name tutorId skillLevel capacityOverride meetLink roomNo status')
@@ -404,7 +408,7 @@ export async function getSlotBoard(req, res) {
     // Active slots for this weekday, scoped to the viewer.
     const slotFilter = { dayOfWeek: dow, active: true }
     if (req.user.linkedStudentId) slotFilter.studentId = req.user.linkedStudentId
-    else if (req.user.linkedTutorId) slotFilter.tutorId = req.user.linkedTutorId
+    else if (req.user.linkedTutorId && !seesAll) slotFilter.tutorId = req.user.linkedTutorId
     const slots = await ClassSlot.find(slotFilter)
       .populate('studentId', 'name rollNo status')
       .sort({ startTime: 1 })
@@ -451,10 +455,12 @@ export async function listSessions(req, res) {
     const { tutorId, studentId, date, dateFrom, dateTo, status, sort } = req.query
 
     const filter = {}
-    // Scope: students see only their own, tutors see only their students
+    // Scope: students see only their own; a *plain* tutor sees only their own
+    // sessions, but a schedule.manage holder (oversight, incl. QCI) sees all.
+    const seesAll = req.userPermissions?.has('schedule.manage')
     if (req.user.linkedStudentId) {
       filter.studentId = req.user.linkedStudentId
-    } else if (req.user.linkedTutorId) {
+    } else if (req.user.linkedTutorId && !seesAll) {
       filter.tutorId = req.user.linkedTutorId
       if (studentId) filter.studentId = studentId
     } else {
@@ -1019,10 +1025,12 @@ export async function getBoard(req, res) {
     const endHour = req.query.endHour != null ? parseInt(req.query.endHour, 10) : null
     const wraps = startHour != null && endHour != null && startHour > endHour
 
-    // Sessions — same scoping rules as listSessions
+    // Sessions — same scoping rules as listSessions. Oversight (schedule.manage)
+    // sees the whole board; a plain linked tutor sees only their own lane.
+    const seesAll = req.userPermissions?.has('schedule.manage')
     const baseScope = {}
     if (req.user.linkedStudentId) baseScope.studentId = req.user.linkedStudentId
-    else if (req.user.linkedTutorId) baseScope.tutorId = req.user.linkedTutorId
+    else if (req.user.linkedTutorId && !seesAll) baseScope.tutorId = req.user.linkedTutorId
     else if (tutorId) baseScope.tutorId = tutorId
     if (status) baseScope.status = status
 
@@ -1066,7 +1074,7 @@ export async function getBoard(req, res) {
 
     // Tutors — columns of the board
     const tFilter = { status: 'active' }
-    if (req.user.linkedTutorId) tFilter._id = req.user.linkedTutorId
+    if (req.user.linkedTutorId && !seesAll) tFilter._id = req.user.linkedTutorId
     else if (tutorId) tFilter._id = tutorId
     const tutors = await TutorProfile.find(tFilter).select('name tutorId status').sort({ name: 1 }).lean()
 

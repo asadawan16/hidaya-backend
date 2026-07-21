@@ -55,7 +55,7 @@ import { initSocket } from './config/socket.js'
 import requestLogger from './middleware/requestLogger.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
 import { runAutoSessionGeneration, autoCompleteOverrunSessions } from './controllers/portalScheduleController.js'
-import { ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from './config/permissions.js'
+import { ALL_PERMISSIONS } from './config/permissions.js'
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -66,16 +66,20 @@ app.set('trust proxy', 1)
 // Database
 await connectDB()
 
-// Auto-sync system role permissions on startup
+// Keep ONLY the super_admin role complete on startup. super_admin is the god-role
+// and must gain any newly-added catalog permission so new features never lock it out.
+// This is strictly ADDITIVE ($addToSet) and touches NO other role — permissions
+// configured in the UI for admin, qci, coordinator, custom roles, etc. are NEVER
+// reset on deploy. (Previously this block overwrote every system role with the code
+// defaults, wiping client role customizations on each restart.)
 try {
   const Role = (await import('./models/Role.js')).default
-  for (const key of Object.keys(DEFAULT_ROLE_PERMISSIONS)) {
-    const perms = DEFAULT_ROLE_PERMISSIONS[key]
-    const role = await Role.findOne({ key })
-    if (role && role.permissions.length !== perms.length) {
-      role.permissions = perms
-      await role.save()
-      console.log(`[sync] Updated ${key} role: ${perms.length} permissions`)
+  const sa = await Role.findOne({ key: 'super_admin' }).select('permissions').lean()
+  if (sa) {
+    const missing = ALL_PERMISSIONS.filter(p => !sa.permissions.includes(p))
+    if (missing.length > 0) {
+      await Role.updateOne({ key: 'super_admin' }, { $addToSet: { permissions: { $each: ALL_PERMISSIONS } } })
+      console.log(`[sync] super_admin: added ${missing.length} new permission(s)`)
     }
   }
 } catch (err) {
