@@ -32,6 +32,11 @@ const classSessionSchema = new mongoose.Schema({
     default: '',
   },
   autoEndedAt: { type: Date },
+  // Ended by the auto-complete job (ran >50 min) rather than by the tutor.
+  autoCompleted: { type: Boolean, default: false },
+  // Completed without lesson details (auto-completed or force-completed by oversight)
+  // — the tutor is prompted to log the lesson afterwards. Cleared once a lesson is logged.
+  needsLessonLog: { type: Boolean, default: false },
   lessonEntryId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'LessonEntry',

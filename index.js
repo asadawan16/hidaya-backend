@@ -54,7 +54,7 @@ import portalFeeRoutes from './routes/portalFeeRoutes.js'
 import { initSocket } from './config/socket.js'
 import requestLogger from './middleware/requestLogger.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
-import { runAutoSessionGeneration } from './controllers/portalScheduleController.js'
+import { runAutoSessionGeneration, autoCompleteOverrunSessions } from './controllers/portalScheduleController.js'
 import { ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from './config/permissions.js'
 
 const app = express()
@@ -197,4 +197,9 @@ server.listen(PORT, () => {
   // Runs on startup and hourly; idempotent so re-runs never duplicate.
   runAutoSessionGeneration()
   setInterval(runAutoSessionGeneration, 60 * 60 * 1000)
+
+  // Auto-complete classes left running past AUTO_COMPLETE_AFTER_MIN (50 min).
+  // Runs on startup and every 5 min; notifies oversight + prompts tutors to log.
+  autoCompleteOverrunSessions()
+  setInterval(autoCompleteOverrunSessions, 5 * 60 * 1000)
 })

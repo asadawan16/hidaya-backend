@@ -5,8 +5,13 @@ import Student from '../models/Student.js'
 import TutorProfile from '../models/TutorProfile.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
-import { createNotification } from './portalNotificationController.js'
+import { createNotification, notifyRoles } from './portalNotificationController.js'
 import { emitToLiveBoard } from '../config/socket.js'
+
+// A started class is auto-completed once it has run this many minutes past its
+// scheduled start (classes are ~30 min, so 50 min means it's clearly over-running
+// and was likely left open). Oversight + the tutor are notified.
+export const AUTO_COMPLETE_AFTER_MIN = 50
 
 const DOW_MAP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
 
@@ -619,6 +624,8 @@ export async function completeSession(req, res) {
         notes: lesson.notes || '',
       })
       session.lessonEntryId = entry._id
+      // A lesson was logged — clear the "needs lesson" flag set by auto/force complete.
+      session.needsLessonLog = false
     }
 
     await session.save()
@@ -747,13 +754,12 @@ const _toMin = (t) => { if (!t) return null; const [h, m] = String(t).split(':')
 
 export async function getLiveBoard(req, res) {
   try {
+    // This endpoint is gated by liveboard.view (oversight), so it always shows the
+    // FULL board — including for oversight users who are themselves linked tutors
+    // (e.g. a QCI who also teaches). Only a linked student (who should never reach
+    // this permission) is ever scoped to their own row.
     const scope = {}
-    // Scope: students see only their own, tutors see only their students
-    if (req.user.linkedStudentId) {
-      scope.studentId = req.user.linkedStudentId
-    } else if (req.user.linkedTutorId) {
-      scope.tutorId = req.user.linkedTutorId
-    }
+    if (req.user.linkedStudentId) scope.studentId = req.user.linkedStudentId
 
     const studentSel = 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
 
@@ -842,6 +848,139 @@ export async function getMyLiveSessions(req, res) {
   } catch (err) {
     console.error('My live sessions error:', err)
     res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Overdue / over-running class handling ───
+
+// Planned length of a session in minutes: slot duration → start/end diff → 30 fallback.
+function plannedMinutesOf(session) {
+  const dur = session.slotId?.durationMinutes
+  if (dur) return dur
+  const st = _toMin(session.scheduledStart)
+  const en = _toMin(session.scheduledEnd)
+  if (st != null && en != null) {
+    const diff = en > st ? en - st : 1440 - st + en // handle midnight cross
+    if (diff > 0) return diff
+  }
+  return 30
+}
+
+// Notify the tutor of a session that they must log its lesson (after an auto/force
+// complete that carried no lesson details).
+async function notifyTutorToLog(session, { count = 1 } = {}) {
+  const tutorU = await User.findOne({ linkedTutorId: session.tutorId, status: 'active' }).select('_id').lean()
+  if (!tutorU) return
+  await createNotification({
+    userId: tutorU._id,
+    type: 'lesson_log_required',
+    title: count > 1 ? 'Log your lessons' : 'Log your lesson',
+    body: count > 1
+      ? `${count} of your classes were completed automatically after running over. Please log the lessons.`
+      : `Your class was completed. Please add the lesson details when you get a chance.`,
+    payload: { sessionId: session._id },
+  })
+}
+
+// POST /sessions/:id/force-complete — oversight (liveboard.view) closes an overdue
+// live class WITHOUT lesson details. Flags it so the tutor is prompted to log the
+// lesson later. Idempotent for already-completed sessions.
+export async function forceCompleteSession(req, res) {
+  try {
+    const session = await ClassSession.findById(req.params.id)
+    if (!session) return res.status(404).json({ error: 'Session not found' })
+    if (session.status === 'completed') return res.json(session)
+
+    session.status = 'completed'
+    session.autoEndedAt = new Date()
+    session.needsLessonLog = true
+    await session.save()
+
+    emitToLiveBoard('live_board_changed', { action: 'force_completed', sessionId: session._id })
+    await notifyTutorToLog(session)
+
+    await logActivity({
+      level: 'info', category: 'schedule', action: 'session_force_completed',
+      message: `Session force-completed by oversight: ${session._id}`, req, meta: { sessionId: session._id },
+    })
+
+    res.json(session)
+  } catch (err) {
+    console.error('Force complete session error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /my-unlogged — a tutor's completed sessions still awaiting a lesson log
+// (auto/force completed). Powers the "log your lesson" prompt.
+export async function getMyUnloggedSessions(req, res) {
+  try {
+    if (!req.user.linkedTutorId) return res.json([])
+    const sessions = await ClassSession.find({
+      tutorId: req.user.linkedTutorId,
+      status: 'completed',
+      needsLessonLog: true,
+      lessonEntryId: { $in: [null, undefined] },
+    })
+      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
+      .populate('tutorId', 'name tutorId roomNo meetLink')
+      .populate('slotId', 'track durationMinutes')
+      .sort({ date: -1, scheduledStart: -1 })
+      .limit(50)
+      .lean()
+    res.json(sessions)
+  } catch (err) {
+    console.error('My unlogged sessions error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// Background job: auto-complete any started class that has been live longer than
+// AUTO_COMPLETE_AFTER_MIN. Notifies oversight (super_admin + qci) and prompts each
+// tutor to log the lesson. Idempotent — completed sessions are excluded by the filter.
+export async function autoCompleteOverrunSessions() {
+  try {
+    const cutoff = new Date(Date.now() - AUTO_COMPLETE_AFTER_MIN * 60000)
+    // Use tutorStartedAt when present; otherwise fall back to updatedAt so legacy
+    // stuck-live sessions (no start timestamp) are still closed out.
+    const stuck = await ClassSession.find({
+      status: 'started',
+      $or: [
+        { tutorStartedAt: { $lte: cutoff } },
+        { tutorStartedAt: { $in: [null, undefined] }, updatedAt: { $lte: cutoff } },
+      ],
+    })
+      .populate('slotId', 'durationMinutes')
+      .lean()
+    if (!stuck.length) return 0
+
+    const ids = stuck.map(s => s._id)
+    await ClassSession.updateMany(
+      { _id: { $in: ids } },
+      { $set: { status: 'completed', autoEndedAt: new Date(), autoCompleted: true, needsLessonLog: true } },
+    )
+
+    // Notify oversight once for the batch.
+    await notifyRoles(['super_admin', 'qci'], {
+      type: 'class_auto_completed',
+      title: 'Classes auto-completed',
+      body: `${ids.length} class${ids.length > 1 ? 'es' : ''} ran over ${AUTO_COMPLETE_AFTER_MIN} min and ${ids.length > 1 ? 'were' : 'was'} auto-completed.`,
+      payload: { count: ids.length },
+    })
+
+    // Prompt each affected tutor to log their lesson(s).
+    const byTutor = new Map()
+    for (const s of stuck) byTutor.set(String(s.tutorId), (byTutor.get(String(s.tutorId)) || 0) + 1)
+    for (const [tutorId, count] of byTutor) {
+      await notifyTutorToLog({ tutorId, _id: stuck.find(s => String(s.tutorId) === tutorId)._id }, { count })
+    }
+
+    emitToLiveBoard('live_board_changed', { action: 'auto_completed', count: ids.length })
+    console.log(`[auto-complete] closed ${ids.length} over-running session(s)`)
+    return ids.length
+  } catch (err) {
+    console.error('[auto-complete] error:', err.message)
+    return 0
   }
 }
 
