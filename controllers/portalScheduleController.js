@@ -747,6 +747,58 @@ export async function resetSession(req, res) {
   }
 }
 
+// ─── Edit a session's status / attendance (QCI & super-admin corrective action) ───
+// Broader than resetSession: lets oversight set any valid status (scheduled/started/
+// completed/missed) and/or attendance (on_time/late/no_show/none) to fix a mislabelled
+// class. This is a pure state-label correction — unlike reset it does NOT create or
+// delete lesson entries or touch timing metadata. Gated by schedule.session_status.
+const SESSION_STATUS_VALUES = ['scheduled', 'started', 'completed', 'missed']
+const SESSION_ATTENDANCE_VALUES = ['on_time', 'late', 'no_show', '']
+
+export async function updateSessionStatus(req, res) {
+  try {
+    const { status, attendance } = req.body
+    if (status === undefined && attendance === undefined) {
+      return res.status(400).json({ error: 'Provide a status and/or attendance to set' })
+    }
+    if (status !== undefined && !SESSION_STATUS_VALUES.includes(status)) {
+      return res.status(400).json({ error: `Invalid status. Allowed: ${SESSION_STATUS_VALUES.join(', ')}` })
+    }
+    if (attendance !== undefined && !SESSION_ATTENDANCE_VALUES.includes(attendance)) {
+      return res.status(400).json({ error: `Invalid attendance. Allowed: ${SESSION_ATTENDANCE_VALUES.filter(Boolean).join(', ')} or none` })
+    }
+
+    const session = await ClassSession.findById(req.params.id)
+    if (!session) return res.status(404).json({ error: 'Session not found' })
+
+    const prevStatus = session.status
+    const prevAttendance = session.attendance
+    if (status !== undefined) session.status = status
+    if (attendance !== undefined) session.attendance = attendance
+    await session.save()
+
+    emitToLiveBoard('live_board_changed', { action: 'status_edit', sessionId: session._id })
+
+    await logActivity({
+      level: 'warning',
+      category: 'schedule',
+      action: 'session_status_edit',
+      message: `Session ${session._id} edited — status '${prevStatus}'→'${session.status}', attendance '${prevAttendance || 'none'}'→'${session.attendance || 'none'}'`,
+      req,
+      meta: {
+        sessionId: session._id,
+        previousStatus: prevStatus, previousAttendance: prevAttendance,
+        status: session.status, attendance: session.attendance,
+      },
+    })
+
+    res.json(session)
+  } catch (err) {
+    console.error('Update session status error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // ─── Live board: currently active sessions ───
 
 // Karachi wall-clock now: { dateStr: 'YYYY-MM-DD', minutes: number-of-day }.

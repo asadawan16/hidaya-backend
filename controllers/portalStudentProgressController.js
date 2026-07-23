@@ -410,3 +410,48 @@ export async function getStudentClasses(req, res) {
     res.status(500).json({ error: 'Server error' })
   }
 }
+
+// GET /portal/student-progress/:id/lessons — paginated daily-lesson history for a
+// student. Powers the "Recent Lessons" section so tutors can review lessons from the
+// progress page instead of the (optionally hidden) lessons list. Gated by
+// student_progress.read — independent of the lesson.* permissions.
+export async function getStudentLessons(req, res) {
+  try {
+    const scope = await resolveScope(req.user)
+    const studentId = req.params.id
+
+    if (Array.isArray(scope) && !scope.some(id => id.toString() === studentId)) {
+      return res.status(403).json({ error: 'You do not have access to this student' })
+    }
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10))
+
+    const filter = { studentId }
+    const total = await LessonEntry.countDocuments(filter)
+    const lessons = await LessonEntry.find(filter)
+      .sort({ date: -1, createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate('tutorId', 'name tutorId')
+      .populate('items.curriculumItemId', 'label track')
+      .lean()
+
+    const records = lessons.map(l => ({
+      _id: l._id,
+      date: l.date,
+      kind: l.kind,
+      classStart: l.classStart || '',
+      classEnd: l.classEnd || '',
+      taught: summarizeLesson(l),
+      notes: l.notes || '',
+      tutorName: l.tutorId?.name || '',
+      track: l.items?.[0]?.curriculumItemId?.track || '',
+    }))
+
+    res.json({ records, total, page, pages: Math.max(1, Math.ceil(total / limit)) })
+  } catch (err) {
+    console.error('Student lessons error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}

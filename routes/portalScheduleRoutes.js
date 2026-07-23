@@ -3,7 +3,7 @@ import { portalAuth, requirePermission, requireRole } from '../middleware/portal
 import {
   listSlots, createSlot, updateSlot, deleteSlot,
   listSessions, createSession, updateSession, deleteSession,
-  startSession, completeSession, markSessionMissed, resetSession, forceCompleteSession,
+  startSession, completeSession, markSessionMissed, resetSession, updateSessionStatus, forceCompleteSession,
   getLiveBoard, getMyLiveSessions, getMyUnloggedSessions, generateSessionsForDate, getBoard, getSlotBoard,
   getScheduleConfig, updateScheduleConfig,
 } from '../controllers/portalScheduleController.js'
@@ -37,6 +37,8 @@ router.post('/sessions/:id/missed', requirePermission('lesson.log'), markSession
 router.post('/sessions/:id/force-complete', requirePermission('liveboard.view'), forceCompleteSession)
 // Super-admin corrective reset: reverse an accidental complete/missed back to scheduled.
 router.post('/sessions/:id/reset', requireRole('super_admin'), resetSession)
+// QCI/super-admin: set any status/attendance value to correct a mislabelled class.
+router.patch('/sessions/:id/status', requirePermission('schedule.session_status'), updateSessionStatus)
 router.patch('/sessions/:id', requirePermission('schedule.manage'), updateSession)
 router.delete('/sessions/:id', requirePermission('schedule.manage'), deleteSession)
 

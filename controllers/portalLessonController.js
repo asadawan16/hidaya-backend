@@ -9,6 +9,12 @@ import { createNotification, notifyRoles } from './portalNotificationController.
 
 export async function listLessons(req, res) {
   try {
+    // Log-only restriction: these users may log lessons but must not browse the
+    // daily lessons list on the Lessons page — they review lessons from a student's
+    // Progress page instead. Short-circuit to an empty page (frontend hides the list).
+    if (req.userPermissions?.has('lesson.log_only')) {
+      return res.json({ records: [], total: 0, page: 1, pages: 1, logOnly: true })
+    }
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 30))
     const { studentId, tutorId, dateFrom, dateTo, kind, search, sort } = req.query

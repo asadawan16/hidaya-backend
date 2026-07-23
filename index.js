@@ -55,7 +55,7 @@ import { initSocket } from './config/socket.js'
 import requestLogger from './middleware/requestLogger.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
 import { runAutoSessionGeneration, autoCompleteOverrunSessions } from './controllers/portalScheduleController.js'
-import { ALL_PERMISSIONS } from './config/permissions.js'
+import { ALL_PERMISSIONS, RESTRICTION_PERMISSIONS } from './config/permissions.js'
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -72,14 +72,25 @@ await connectDB()
 // configured in the UI for admin, qci, coordinator, custom roles, etc. are NEVER
 // reset on deploy. (Previously this block overwrote every system role with the code
 // defaults, wiping client role customizations on each restart.)
+//
+// EXCEPTION: RESTRICTION permissions (e.g. lesson.log_only) invert the grant model —
+// their presence removes access — so super_admin must NEVER hold them. We grant only
+// the non-restriction catalog and actively pull any restriction perm back out (in case
+// an older build synced the full catalog before this carve-out existed).
 try {
   const Role = (await import('./models/Role.js')).default
+  const GRANTABLE = ALL_PERMISSIONS.filter(p => !RESTRICTION_PERMISSIONS.includes(p))
   const sa = await Role.findOne({ key: 'super_admin' }).select('permissions').lean()
   if (sa) {
-    const missing = ALL_PERMISSIONS.filter(p => !sa.permissions.includes(p))
+    const missing = GRANTABLE.filter(p => !sa.permissions.includes(p))
     if (missing.length > 0) {
-      await Role.updateOne({ key: 'super_admin' }, { $addToSet: { permissions: { $each: ALL_PERMISSIONS } } })
+      await Role.updateOne({ key: 'super_admin' }, { $addToSet: { permissions: { $each: GRANTABLE } } })
       console.log(`[sync] super_admin: added ${missing.length} new permission(s)`)
+    }
+    const restricted = RESTRICTION_PERMISSIONS.filter(p => sa.permissions.includes(p))
+    if (restricted.length > 0) {
+      await Role.updateOne({ key: 'super_admin' }, { $pull: { permissions: { $in: RESTRICTION_PERMISSIONS } } })
+      console.log(`[sync] super_admin: removed ${restricted.length} restriction permission(s)`)
     }
   }
 } catch (err) {

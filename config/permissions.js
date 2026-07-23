@@ -19,13 +19,20 @@ export const PERMISSIONS = {
   assignment: ['assignment.read', 'assignment.manage', 'assignment.request', 'assignment.approve'],
 
   // Lessons (daily + permanent)
-  lesson: ['lesson.read', 'lesson.log', 'lesson.approve'],
+  // lesson.log_only — RESTRICTION permission: holders may log lessons but the daily
+  // lessons list on the Lessons page is hidden from them (a just-logged entry shows
+  // briefly then blurs). Keeps tutors from browsing lessons there; they review
+  // lessons via a student's Progress page instead. Opt-in per role — see
+  // RESTRICTION_PERMISSIONS below.
+  lesson: ['lesson.read', 'lesson.log', 'lesson.approve', 'lesson.log_only'],
 
   // Assessments / exams
   assessment: ['assessment.read', 'assessment.create', 'assessment.template_manage'],
 
   // Scheduling / classes
-  schedule: ['schedule.read', 'schedule.manage'],
+  // schedule.session_status — edit a session's status/attendance to any valid enum
+  // value (late, missed, on-time…). Broader than the super-admin reset-to-scheduled.
+  schedule: ['schedule.read', 'schedule.manage', 'schedule.session_status'],
 
   // Payments
   payment: ['payment.read', 'payment.create', 'payment.update'],
@@ -117,13 +124,19 @@ export const PERMISSIONS = {
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
 
+// "Restriction" permissions invert the usual grant model: their PRESENCE removes
+// access rather than granting it (e.g. lesson.log_only hides the lessons list).
+// They must be OPT-IN per role, so they are excluded from the all-powerful
+// super_admin/admin defaults — otherwise a fresh seed would restrict them.
+export const RESTRICTION_PERMISSIONS = ['lesson.log_only']
+
 // Default role → permission mappings
 export const DEFAULT_ROLE_PERMISSIONS = {
-  super_admin: ALL_PERMISSIONS,
+  super_admin: ALL_PERMISSIONS.filter(p => !RESTRICTION_PERMISSIONS.includes(p)),
 
   // Admin gets everything except role deletion and the super-admin-only Fee
-  // receivables view/KPIs.
-  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables'].includes(p)),
+  // receivables view/KPIs (and never the opt-in restriction permissions).
+  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', ...RESTRICTION_PERMISSIONS].includes(p)),
 
   principal: [
     'student.read', 'student.approve', 'enrollment.read', 'enrollment.update',
@@ -175,7 +188,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'assessment.read', 'assessment.create', 'assessment.template_manage',
     // QCI oversees the teaching schedule (manages tutors), so gets the full
     // session board + slot management, same surfaces as management roles.
-    'schedule.read', 'schedule.manage',
+    'schedule.read', 'schedule.manage', 'schedule.session_status',
     'notice.read', 'notice.create',
     'complaint.read', 'complaint.create',
     'report.read',
