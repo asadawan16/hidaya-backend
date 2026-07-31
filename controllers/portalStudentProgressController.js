@@ -23,6 +23,7 @@ function summarizeLesson(lesson) {
     const label = it.curriculumItemId?.label || ''
     const range = []
     if (it.fromPage || it.toPage) range.push(`p${it.fromPage || '?'}${it.toPage && it.toPage !== it.fromPage ? `–${it.toPage}` : ''}`)
+    if (it.fromLine || it.toLine) range.push(`L${it.fromLine || '?'}${it.toLine && it.toLine !== it.fromLine ? `–${it.toLine}` : ''}`)
     if (it.ayah) range.push(`ayah ${it.ayah}`)
     const tag = it.portion ? ` (${it.portion})` : ''
     return `${label}${range.length ? ' ' + range.join(', ') : ''}${tag}`.trim()
