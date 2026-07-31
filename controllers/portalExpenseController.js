@@ -36,14 +36,13 @@ export async function listExpenses(req, res) {
 
 export async function createExpense(req, res) {
   try {
-    const { title, category, amount, currency, date, description, receiptUrl, recurring, type } = req.body
+    const { title, category, amount, currency, date, description, receiptUrl, recurring } = req.body
     if (!title || !category || !amount || !date) {
       return res.status(400).json({ error: 'title, category, amount, and date are required' })
     }
 
     const expense = await Expense.create({
       title, category, amount,
-      type: type || 'expense',
       currency: currency || 'PKR',
       date: new Date(date),
       description: description || '',
@@ -67,7 +66,7 @@ export async function updateExpense(req, res) {
     const expense = await Expense.findById(req.params.id)
     if (!expense) return res.status(404).json({ error: 'Expense not found' })
 
-    const fields = ['title', 'category', 'amount', 'currency', 'date', 'description', 'receiptUrl', 'recurring', 'type']
+    const fields = ['title', 'category', 'amount', 'currency', 'date', 'description', 'receiptUrl', 'recurring']
     for (const f of fields) {
       if (req.body[f] !== undefined) {
         expense[f] = f === 'date' ? new Date(req.body[f]) : req.body[f]
@@ -118,25 +117,20 @@ export async function getExpenseStats(req, res) {
     }
     const expenseMatch = { ...matchStage, type: 'expense' }
 
-    const [byCategoryArr, trendArr, byType, totalsArr] = await Promise.all([
-      // Category breakdown — expenses only
+    const [byCategoryArr, trendArr, totalsArr] = await Promise.all([
+      // Category breakdown
       Expense.aggregate([
         { $match: expenseMatch },
         { $group: { _id: '$category', total: { $sum: '$amount' } } },
         { $sort: { total: -1 } },
       ]),
-      // Trend — expenses only, bucketed by week or month
+      // Trend — bucketed by week or month
       Expense.aggregate([
         { $match: expenseMatch },
         { $group: { _id: { $dateTrunc: { date: '$date', unit, startOfWeek: 'monday' } }, total: { $sum: '$amount' } } },
         { $sort: { _id: 1 } },
       ]),
-      // Income vs expense
-      Expense.aggregate([
-        { $match: matchStage },
-        { $group: { _id: '$type', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-      ]),
-      // Expense totals for averaging
+      // Totals for averaging
       Expense.aggregate([
         { $match: expenseMatch },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
@@ -154,7 +148,6 @@ export async function getExpenseStats(req, res) {
     })
 
     const totalExpenses = totalsArr[0]?.total || 0
-    const totalIncome = byType.find(t => t._id === 'income')?.total || 0
 
     // Average per month across the selected span
     let monthsSpan = 1
@@ -168,10 +161,7 @@ export async function getExpenseStats(req, res) {
     res.json({
       byCategory,
       trend,
-      byType,
       totalExpenses,
-      totalIncome,
-      net: totalIncome - totalExpenses,
       avgMonthly,
       groupBy: unit,
       count: totalsArr[0]?.count || 0,
