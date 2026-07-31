@@ -117,8 +117,15 @@ export async function createAssessment(req, res) {
       return res.status(400).json({ error: 'studentId, templateId, and date are required' })
     }
 
+    // Frontend sends responses as an object keyed by "sectionKey.fieldKey";
+    // normalize to the array-of-{ key, value } shape the schema/report card expect.
+    const responses = Array.isArray(data.responses)
+      ? data.responses
+      : Object.entries(data.responses || {}).map(([key, value]) => ({ key, value }))
+
     const assessment = await Assessment.create({
       ...data,
+      responses,
       conductedBy: req.userId,
     })
 

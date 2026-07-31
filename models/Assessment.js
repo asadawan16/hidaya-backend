@@ -27,12 +27,13 @@ const assessmentSchema = new mongoose.Schema({
   },
   scope: {
     type: String,
-    enum: ['qaida', 'quran', 'qaida_and_quran', 'hifz', 'general'],
-    default: 'general',
+    enum: ['monthly', 'weekly', 'quarterly', 'annual'],
+    default: 'monthly',
   },
   responses: [{
-    fieldKey: { type: String, required: true },
+    key: { type: String, required: true },
     value: { type: mongoose.Schema.Types.Mixed },
+    score: { type: Number },
   }],
   overallScore: { type: Number },
   examinerNotes: { type: String, trim: true, default: '' },
