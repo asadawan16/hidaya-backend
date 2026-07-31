@@ -12,7 +12,7 @@ const salaryIncrementSchema = new mongoose.Schema({
   incrementPercentage: { type: Number, required: true },
   currency: {
     type: String,
-    enum: ['PKR', 'USD', 'EUR', 'GBP'],
+    enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'],
     default: 'PKR',
   },
   effectiveDate: { type: Date, required: true },

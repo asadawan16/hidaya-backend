@@ -49,6 +49,11 @@ export const PERMISSIONS = {
   // Finances & invoices
   finance: ['finance.read', 'finance.manage'],
 
+  // Revenue analytics dashboard (org-wide income/expense overview — the
+  // /portal/revenue page). Separate from finance.* so a role can hold the
+  // invoices/salary Finance page without the org-wide revenue breakdown.
+  revenue: ['revenue.read'],
+
   // Salary
   salary: ['salary.read', 'salary.manage'],
 
@@ -147,7 +152,12 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'report.read', 'report.generate',
     'liveboard.view', 'chat.use',
     'schedule.read',
-    'finance.read', 'finance.manage',
+    'finance.read', 'finance.manage', 'revenue.read',
+    // Full billing surface (matches the pre-split finance.read+manage access)
+    'payment.read', 'payment.create', 'payment.update',
+    'payment_link.read', 'payment_link.create', 'payment_link.send', 'payment_link.delete',
+    'plan.read', 'plan.update',
+    'discount_code.read', 'discount_code.create', 'discount_code.update', 'discount_code.delete',
     'family.read',
     'expense.read',
     'award.read',
@@ -170,7 +180,9 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'report.read', 'report.generate',
     'liveboard.view', 'chat.use',
     'whatsapp.send',
-    'finance.read',
+    'finance.read', 'revenue.read',
+    // Read-only billing surface (matches the pre-split finance.read access)
+    'payment.read', 'payment_link.read', 'plan.read', 'discount_code.read',
     'family.read', 'family.create', 'family.update',
     'expense.read',
     'award.read',

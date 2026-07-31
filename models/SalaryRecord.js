@@ -21,7 +21,7 @@ const salaryRecordSchema = new mongoose.Schema({
   baseAmount: { type: Number, required: true },
   currency: {
     type: String,
-    enum: ['PKR', 'USD', 'EUR', 'GBP'],
+    enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'],
     default: 'PKR',
   },
   deductions: [deductionSchema],

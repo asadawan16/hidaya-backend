@@ -193,6 +193,9 @@ export async function createStudent(req, res) {
     // Empty referrer must be unset — '' is not a castable ObjectId
     if (!data.referredByStudent) delete data.referredByStudent
 
+    // Blank joining date → let the model default (today) apply
+    if (!data.joiningDate) delete data.joiningDate
+
     // Validate portal-account inputs up-front so we never create an orphan student
     let studentRole = null
     let portalEmail = ''
@@ -309,9 +312,12 @@ export async function updateStudent(req, res) {
     // An empty referrer clears the link — '' is not a castable ObjectId
     if (data.referredByStudent === '') data.referredByStudent = null
 
+    // Never let a blank joining date wipe an existing one
+    if (data.joiningDate === '') delete data.joiningDate
+
     // Update fields
     const allowedFields = [
-      'name', 'parentsName', 'dob', 'country', 'timezone',
+      'name', 'parentsName', 'dob', 'joiningDate', 'country', 'timezone',
       'guardians', 'whatsappNumber', 'courseLabels', 'placementLevel',
       'sect', 'specialNeeds', 'familyId', 'referredBy', 'referredByStudent', 'billing',
       'status', 'email', 'phone', 'notes', 'userId',

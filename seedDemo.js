@@ -248,13 +248,10 @@ async function seed() {
     if (i % 3 === 0) subjects.push(TRACKS[(i + 2) % TRACKS.length])
 
     const shiftWindows = []
-    // Mon-Fri shifts
-    for (let d = 1; d <= 5; d++) {
-      shiftWindows.push({ dayOfWeek: d, startTime: '09:00', endTime: '13:00', timezone: 'Asia/Karachi' })
-      if (i < 5) shiftWindows.push({ dayOfWeek: d, startTime: '15:00', endTime: '19:00', timezone: 'Asia/Karachi' })
+    // Mon-Sat night shift (academy runs 8 PM onwards for overseas students)
+    for (let d = 1; d <= 6; d++) {
+      shiftWindows.push({ dayOfWeek: d, startTime: '20:00', endTime: '23:30', timezone: 'Asia/Karachi' })
     }
-    // Some work Saturdays
-    if (i % 3 === 0) shiftWindows.push({ dayOfWeek: 6, startTime: '10:00', endTime: '14:00', timezone: 'Asia/Karachi' })
 
     const tutor = await TutorProfile.findOneAndUpdate(
       { userId: user._id },
@@ -268,7 +265,7 @@ async function seed() {
         roomNo: `R-${i + 1}`,
         meetLink: `https://meet.google.com/abc-defg-${String(i + 1).padStart(3, '0')}`,
         shiftWindows,
-        status: i < 9 ? 'active' : 'inactive',
+        status: 'active',
         salary: { baseAmount: randomBetween(15, 35) * 1000, currency: 'PKR' },
         subjects,
       },
@@ -408,7 +405,9 @@ async function seed() {
     const track = st.courseLabels[0]
     const day1 = (i % 5) + 1
     const day2 = ((i + 2) % 5) + 1
-    const startTime = randomTime(9, 17)
+    // Night-shift evening slots (8:00–10:45 PM) so they land inside the Session
+    // Board's default night window and show immediately in the demo.
+    const startTime = randomTime(20, 22)
 
     for (const day of [day1, day2]) {
       const slot = await ClassSlot.create({

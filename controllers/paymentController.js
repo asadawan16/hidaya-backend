@@ -10,7 +10,7 @@ export async function initiate(req, res) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
-    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
+    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
     const cur = validCurrencies.includes(currency) ? currency : 'PKR'
 
     // Multi-student: quantity defaults to 1, studentNames is optional array
@@ -98,7 +98,7 @@ export async function initiatePayPal(req, res) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
-    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
+    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
     const cur = validCurrencies.includes(currency) ? currency : 'PKR'
 
     if (cur === 'PKR') {

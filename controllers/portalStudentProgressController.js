@@ -30,6 +30,24 @@ function summarizeLesson(lesson) {
   return parts.join(' · ')
 }
 
+// Structured per-item detail for the progress page — exposes EVERYTHING entered
+// while logging (page + line numbers, ayah reference, hifz portion) so the client
+// can render the full lesson, not just the one-line summary.
+function detailLessonItems(lesson) {
+  return (lesson.items || []).map(it => ({
+    label: it.curriculumItemId?.label || it.fromUnit || '',
+    track: it.curriculumItemId?.track || '',
+    portion: it.portion || '',
+    ayah: it.ayah || '',
+    fromPage: it.fromPage ?? null,
+    toPage: it.toPage ?? null,
+    fromLine: it.fromLine ?? null,
+    toLine: it.toLine ?? null,
+    fromUnit: it.fromUnit || '',
+    toUnit: it.toUnit || '',
+  }))
+}
+
 // Fetch daily-lesson summaries for a set of sessions, keyed by sessionId string.
 async function lessonsBySession(studentId, sessionIds) {
   if (!sessionIds.length) return {}
@@ -38,7 +56,14 @@ async function lessonsBySession(studentId, sessionIds) {
     .lean()
   const map = {}
   for (const l of lessons) {
-    if (l.sessionId) map[l.sessionId.toString()] = { _id: l._id, taught: summarizeLesson(l), notes: l.notes || '', kind: l.kind }
+    if (l.sessionId) map[l.sessionId.toString()] = {
+      _id: l._id,
+      taught: summarizeLesson(l),
+      notes: l.notes || '',
+      kind: l.kind,
+      items: detailLessonItems(l),
+      customText: l.customText || '',
+    }
   }
   return map
 }
@@ -338,6 +363,8 @@ export async function getStudentProgressDetail(req, res) {
           taught: lesson?.taught || '',
           lessonNotes: lesson?.notes || '',
           lessonKind: lesson?.kind || '',
+          lessonItems: lesson?.items || [],
+          lessonCustomText: lesson?.customText || '',
         }
       }),
       feedbacks,
@@ -401,6 +428,8 @@ export async function getStudentClasses(req, res) {
         taught: lesson?.taught || '',
         lessonNotes: lesson?.notes || '',
         lessonKind: lesson?.kind || '',
+        lessonItems: lesson?.items || [],
+        lessonCustomText: lesson?.customText || '',
       }
     })
 
@@ -447,6 +476,8 @@ export async function getStudentLessons(req, res) {
       notes: l.notes || '',
       tutorName: l.tutorId?.name || '',
       track: l.items?.[0]?.curriculumItemId?.track || '',
+      items: detailLessonItems(l),
+      customText: l.customText || '',
     }))
 
     res.json({ records, total, page, pages: Math.max(1, Math.ceil(total / limit)) })

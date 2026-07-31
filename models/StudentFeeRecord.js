@@ -11,7 +11,7 @@ const studentFeeRecordSchema = new mongoose.Schema({
 
   amount: { type: Number, default: 0 },      // agreed/expected fee for the month
   amountPaid: { type: Number, default: 0 },  // total received against this month
-  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
+  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], default: 'PKR' },
 
   status: {
     type: String,

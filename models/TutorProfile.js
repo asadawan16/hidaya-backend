@@ -43,7 +43,7 @@ const tutorProfileSchema = new mongoose.Schema({
   },
   salary: {
     baseAmount: { type: Number, default: 0 },
-    currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
+    currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], default: 'PKR' },
   },
   subjects: [{
     type: String,

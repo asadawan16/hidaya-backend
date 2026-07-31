@@ -9,7 +9,7 @@ const expenseSchema = new mongoose.Schema({
     required: true,
   },
   amount: { type: Number, required: true },
-  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
+  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], default: 'PKR' },
   date: { type: Date, required: true },
   description: { type: String, trim: true, default: '' },
   receiptUrl: { type: String, trim: true, default: '' },

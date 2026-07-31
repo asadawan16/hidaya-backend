@@ -9,7 +9,7 @@ const paymentSchema = new mongoose.Schema({
   // Plan info
   plan: { type: String, required: true },
   amount: { type: Number, required: true },
-  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
+  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], default: 'PKR' },
 
   // Payment method used
   paymentMethod: { type: String, enum: ['CARD', 'PAYPAL'], default: 'CARD' },

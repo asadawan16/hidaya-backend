@@ -11,7 +11,7 @@ export async function create(req, res) {
     if (discountAmount <= 0) {
       return res.status(400).json({ error: 'discountAmount must be positive' })
     }
-    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
+    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
     if (!validCurrencies.includes(currency)) {
       return res.status(400).json({ error: 'Invalid currency' })
     }
@@ -101,7 +101,7 @@ export async function validate(req, res) {
       paymentCurrency = link.currency
       paymentAmount = link.amount
     } else if (directCurrency && directAmount) {
-      const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
+      const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
       if (!validCurrencies.includes(directCurrency)) {
         return res.status(400).json({ valid: false, message: 'Invalid currency' })
       }
@@ -124,7 +124,7 @@ export async function validate(req, res) {
       return res.status(400).json({ valid: false, message: 'Discount cannot exceed the payment amount' })
     }
 
-    const sym = { PKR: 'Rs.', USD: '$', EUR: '€', GBP: '£' }[dc.currency] || dc.currency
+    const sym = { PKR: 'Rs.', USD: '$', EUR: '€', GBP: '£', CAD: 'C$' }[dc.currency] || dc.currency
     res.json({
       valid: true,
       discountAmount: dc.discountAmount,

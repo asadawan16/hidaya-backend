@@ -1068,7 +1068,7 @@ export async function getBoard(req, res) {
     const dateStart = new Date(dateStr); dateStart.setHours(0, 0, 0, 0)
     const dateEnd = new Date(dateStr); dateEnd.setHours(23, 59, 59, 999)
 
-    const { tutorId, status, track } = req.query
+    const { tutorId, studentId, status, track } = req.query
 
     // Night-shift support: when the board window wraps past midnight
     // (startHour > endHour, e.g. 20:00 → 07:00), also pull the *next* calendar
@@ -1081,9 +1081,15 @@ export async function getBoard(req, res) {
     // sees the whole board; a plain linked tutor sees only their own lane.
     const seesAll = req.userPermissions?.has('schedule.manage')
     const baseScope = {}
-    if (req.user.linkedStudentId) baseScope.studentId = req.user.linkedStudentId
-    else if (req.user.linkedTutorId && !seesAll) baseScope.tutorId = req.user.linkedTutorId
-    else if (tutorId) baseScope.tutorId = tutorId
+    if (req.user.linkedStudentId) {
+      baseScope.studentId = req.user.linkedStudentId
+    } else if (req.user.linkedTutorId && !seesAll) {
+      baseScope.tutorId = req.user.linkedTutorId
+      if (studentId) baseScope.studentId = studentId
+    } else {
+      if (tutorId) baseScope.tutorId = tutorId
+      if (studentId) baseScope.studentId = studentId
+    }
     if (status) baseScope.status = status
 
     const sFilter = { date: { $gte: dateStart, $lt: dateEnd }, ...baseScope }

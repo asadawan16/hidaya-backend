@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import LessonEntry from '../models/LessonEntry.js'
 import PermanentLesson from '../models/PermanentLesson.js'
 import CurriculumItem from '../models/CurriculumItem.js'
+import Student from '../models/Student.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification, notifyRoles } from './portalNotificationController.js'
 
@@ -320,12 +321,15 @@ export async function getStudentProgress(req, res) {
     if (dateTo) dateFilter.$lte = new Date(dateTo)
     const hasDateFilter = Object.keys(dateFilter).length > 0
 
-    const approved = await PermanentLesson.find({ studentId, status: 'approved', ...(hasDateFilter ? { completedDate: dateFilter } : {}) })
-      .populate('curriculumItemId', 'label track type order meta')
-      .populate('tutorId', 'name tutorId')
-      .sort({ completedDate: 1 })
-      .limit(500)
-      .lean()
+    const [approved, student] = await Promise.all([
+      PermanentLesson.find({ studentId, status: 'approved', ...(hasDateFilter ? { completedDate: dateFilter } : {}) })
+        .populate('curriculumItemId', 'label track type order meta')
+        .populate('tutorId', 'name tutorId')
+        .sort({ completedDate: 1 })
+        .limit(500)
+        .lean(),
+      Student.findById(studentId).select('joiningDate createdAt').lean(),
+    ])
 
     // Group by track
     const byTrack = {}
@@ -335,7 +339,9 @@ export async function getStudentProgress(req, res) {
       byTrack[track].push(lesson)
     }
 
-    res.json({ total: approved.length, byTrack, lessons: approved })
+    const joiningDate = student?.joiningDate || student?.createdAt || null
+
+    res.json({ total: approved.length, byTrack, lessons: approved, joiningDate })
   } catch (err) {
     console.error('Get student progress error:', err)
     res.status(500).json({ error: 'Server error' })

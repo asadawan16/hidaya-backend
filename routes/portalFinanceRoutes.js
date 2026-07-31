@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
-  listInvoices, createInvoice, updateInvoiceStatus,
+  listInvoices, createInvoice, updateInvoiceStatus, deleteInvoice,
   listSalaryRecords, generateSalary, updateSalaryStatus, getSalaryReceipt,
   listSalaryIncrements, createSalaryIncrement, getSalaryTimeline, getSalaryRoster,
   updateStaffBaseSalary,
@@ -14,6 +14,7 @@ router.use(portalAuth)
 router.get('/invoices', requirePermission('finance.read'), listInvoices)
 router.post('/invoices', requirePermission('finance.manage'), createInvoice)
 router.patch('/invoices/:id', requirePermission('finance.manage'), updateInvoiceStatus)
+router.delete('/invoices/:id', requirePermission('finance.manage'), deleteInvoice)
 
 // Salary
 router.get('/salary', requirePermission('salary.read'), listSalaryRecords)

@@ -7,6 +7,6 @@ const router = Router()
 router.use(portalAuth)
 
 router.get('/charts', getDashboardCharts)
-router.get('/revenue', requirePermission('finance.read'), getRevenueStats)
+router.get('/revenue', requirePermission('revenue.read'), getRevenueStats)
 
 export default router

@@ -4,23 +4,24 @@ import { emitToUser } from '../config/socket.js'
 export async function listNotifications(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
-    const lim = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 20))
-    const { unreadOnly } = req.query
+    // `limit=all` returns every matching record (used by the "Show All" page size).
+    const unlimited = req.query.limit === 'all'
+    const lim = unlimited ? 0 : Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
+    const { unreadOnly, type } = req.query
 
     const filter = { userId: req.userId }
     if (unreadOnly === 'true') filter.readAt = null
+    if (type) filter.type = type // server-side category (tab) filter
 
     const total = await Notification.countDocuments(filter)
     const unreadCount = await Notification.countDocuments({ userId: req.userId, readAt: null })
-    const pages = Math.ceil(total / lim) || 1
+    const pages = unlimited ? 1 : (Math.ceil(total / lim) || 1)
 
-    const records = await Notification.find(filter)
-      .sort({ createdAt: -1 })
-      .skip((pg - 1) * lim)
-      .limit(lim)
-      .lean()
+    let query = Notification.find(filter).sort({ createdAt: -1 })
+    if (!unlimited) query = query.skip((pg - 1) * lim).limit(lim)
+    const records = await query.lean()
 
-    res.json({ records, total, page: pg, pages, unreadCount })
+    res.json({ records, total, page: unlimited ? 1 : pg, pages, unreadCount })
   } catch (err) {
     console.error('List notifications error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -51,11 +52,22 @@ export async function markRead(req, res) {
 
 export async function deleteNotifications(req, res) {
   try {
-    const { ids } = req.body
+    const { ids, all, type } = req.body
+    // Explicit id list → delete just those.
     if (ids && Array.isArray(ids) && ids.length > 0) {
-      await Notification.deleteMany({ _id: { $in: ids }, userId: req.userId })
+      const { deletedCount } = await Notification.deleteMany({ _id: { $in: ids }, userId: req.userId })
+      return res.json({ message: 'Deleted', deleted: deletedCount })
     }
-    res.json({ message: 'Deleted' })
+    // Category-wide delete (ignores pagination). Requires an explicit `all: true`
+    // opt-in so a stray empty body can never wipe the whole inbox. Scoped to the
+    // logged-in user; optional `type` narrows it to one tab/category.
+    if (all === true) {
+      const filter = { userId: req.userId }
+      if (type) filter.type = type
+      const { deletedCount } = await Notification.deleteMany(filter)
+      return res.json({ message: 'Deleted', deleted: deletedCount })
+    }
+    res.json({ message: 'Deleted', deleted: 0 })
   } catch (err) {
     console.error('Delete notifications error:', err)
     res.status(500).json({ error: 'Server error' })

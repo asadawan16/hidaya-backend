@@ -76,14 +76,16 @@ const studentSchema = new mongoose.Schema({
   billing: {
     fee: { type: Number, default: 0 },
     amount: { type: Number, default: 0 },
-    currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', ''], default: 'PKR' },
+    currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD', ''], default: 'PKR' },
     paymentMethod: { type: String, trim: true, default: '' },
     whoPays: {
       type: String,
       enum: ['father', 'mother', 'sponsor', 'self', 'other', ''],
       default: '',
     },
-    cycle: { type: String, enum: ['monthly', 'quarterly', 'yearly', ''], default: 'monthly' },
+    // Billing frequency. 'yearly' is kept (labelled "Annually" in the UI) for
+    // backward-compat with existing records.
+    cycle: { type: String, enum: ['monthly', 'bimonthly', 'quarterly', 'four_monthly', 'semiannual', 'yearly', ''], default: 'monthly' },
     status: { type: String, enum: ['pending', 'paid', 'overdue', ''], default: 'pending' },
   },
 

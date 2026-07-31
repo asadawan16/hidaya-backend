@@ -171,6 +171,22 @@ export async function updateInvoiceStatus(req, res) {
   }
 }
 
+export async function deleteInvoice(req, res) {
+  try {
+    const invoice = await Invoice.findById(req.params.id)
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
+
+    await invoice.deleteOne()
+
+    await logActivity({ level: 'warn', category: 'finance', action: 'invoice_deleted', message: `Invoice ${invoice.invoiceNo} deleted`, req })
+
+    res.json({ success: true, id: invoice._id })
+  } catch (err) {
+    console.error('Delete invoice error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // ─── Salary Records ───
 
 export async function listSalaryRecords(req, res) {
@@ -553,7 +569,7 @@ export async function updateStaffBaseSalary(req, res) {
 
     const set = {}
     if (req.body.baseSalary !== undefined) set.baseSalary = Math.max(0, Number(req.body.baseSalary) || 0)
-    if (req.body.salaryCurrency && ['PKR', 'USD', 'EUR', 'GBP'].includes(req.body.salaryCurrency)) {
+    if (req.body.salaryCurrency && ['PKR', 'USD', 'EUR', 'GBP', 'CAD'].includes(req.body.salaryCurrency)) {
       set.salaryCurrency = req.body.salaryCurrency
     }
 

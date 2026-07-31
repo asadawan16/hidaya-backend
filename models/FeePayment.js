@@ -13,7 +13,7 @@ const allocationSchema = new mongoose.Schema({
 
 const feePaymentSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
-  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
+  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], default: 'PKR' },
   method: {
     type: String,
     enum: ['bank_transfer', 'cash', 'card', 'jazzcash', 'easypaisa', 'cheque', 'other'],

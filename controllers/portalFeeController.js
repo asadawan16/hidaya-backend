@@ -18,13 +18,16 @@ function computeStatus(rec) {
 
 const clampMonth = (m) => Math.min(12, Math.max(1, parseInt(m, 10)))
 
-// GET /portal/fees/grid — yearly grid of students × 12 months
+// GET /portal/fees/grid — per-student fee grid scoped to a time period
+// (a single month, a calendar quarter, or a whole year within `year`).
 export async function getFeeGrid(req, res) {
   try {
     const year = parseInt(req.query.year, 10) || new Date().getFullYear()
     const { familyId, studentId, search, studentStatus } = req.query
-    // limit=all → no pagination (fetch every matching student). Numeric limits are
-    // clamped to 500 per page. Mongoose treats .limit(0) as "no limit".
+    // Period window inside the year (fromMonth..toMonth). Defaults to the whole year.
+    const fromMonth = Math.min(12, Math.max(1, parseInt(req.query.fromMonth, 10) || 1))
+    const toMonth = Math.max(fromMonth, Math.min(12, Math.max(1, parseInt(req.query.toMonth, 10) || 12)))
+    // limit=all → no pagination (every matching student). Numeric limits clamp to 500.
     const showAll = req.query.limit === 'all'
     const limit = showAll ? 0 : Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25))
     const page = showAll ? 1 : Math.max(1, parseInt(req.query.page, 10) || 1)
@@ -32,27 +35,45 @@ export async function getFeeGrid(req, res) {
     const filter = {}
     if (studentId) filter._id = studentId
     if (familyId) filter.familyId = familyId
-    // Enrollment status filter: active (incl. on-leave, excl. left) | left | all
+    // Enrollment status filter. 'active' = present students (active + pending),
+    // 'leave' = on-leave only, 'all' = everyone except left, 'left' = left only.
     if (studentStatus === 'left') filter.status = 'left'
-    else if (studentStatus !== 'all') filter.status = { $ne: 'left' } // default: active-ish
+    else if (studentStatus === 'leave') filter.status = 'leave'
+    else if (studentStatus === 'active') filter.status = { $in: ['active', 'pending'] }
+    else filter.status = { $ne: 'left' } // 'all' (and any fallback)
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
       filter.$or = [{ name: rx }, { rollNo: rx }]
     }
 
-    const total = await Student.countDocuments(filter)
-    const students = await Student.find(filter)
-      .select('name rollNo status familyId billing.fee billing.currency')
+    // Per-billing-cycle counts across the current filter (before the cycle selection is
+    // applied) so the cycle picker can show a stable breakdown. Unset/empty → 'monthly'
+    // (the schema default).
+    const cycleAgg = await Student.aggregate([{ $match: filter }, { $group: { _id: '$billing.cycle', n: { $sum: 1 } } }])
+    const cycleCounts = {}
+    for (const g of cycleAgg) { const key = g._id || 'monthly'; cycleCounts[key] = (cycleCounts[key] || 0) + g.n }
+
+    // Scope to a specific billing cycle if requested (monthly also matches unset records).
+    const cycle = req.query.cycle
+    if (cycle === 'monthly') filter['billing.cycle'] = { $in: ['monthly', '', null] }
+    else if (cycle) filter['billing.cycle'] = cycle
+
+    // Fetch every matching student once (light projection). Summary KPIs are computed
+    // across the whole filtered set so they stay accurate regardless of pagination;
+    // the visible page is a slice of this list.
+    const allStudents = await Student.find(filter)
+      .select('name rollNo status familyId billing.fee billing.currency billing.cycle joiningDate createdAt')
       .populate('familyId', 'familyCode primaryGuardian')
       // Group family members next to each other (incl. on-leave siblings), then
       // alphabetical within the family. familyId null (solo students) sorts first.
       .sort({ familyId: 1, name: 1 })
-      .skip(showAll ? 0 : (page - 1) * limit)
-      .limit(limit)
       .lean()
+    const total = allStudents.length
+    const pageStudents = showAll ? allStudents : allStudents.slice((page - 1) * limit, (page - 1) * limit + limit)
 
-    const ids = students.map(s => s._id)
-    const cells = await StudentFeeRecord.find({ studentId: { $in: ids }, year }).lean()
+    // Fee cells for the selected period only, across ALL matching students.
+    const ids = allStudents.map(s => s._id)
+    const cells = await StudentFeeRecord.find({ studentId: { $in: ids }, year, month: { $gte: fromMonth, $lte: toMonth } }).lean()
     const byStudent = {}
     for (const c of cells) {
       const k = c.studentId.toString()
@@ -63,55 +84,83 @@ export async function getFeeGrid(req, res) {
       }
     }
 
-    // Current Asia/Karachi year/month — the "till date" boundary. For the current
-    // year we only count months up to this month; past years count all 12; future
-    // years count none.
+    // Asia/Karachi "today" — the due boundary. Months after the current month don't
+    // count towards due/receivable (nothing is owed yet for the future); past years
+    // count all 12, future years count none.
     const kNow = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
     const nowYear = Number(kNow.slice(0, 4))
     const nowMonth = Number(kNow.slice(5, 7))
     const monthLimit = year < nowYear ? 12 : (year === nowYear ? nowMonth : 0)
 
-    const records = students.map(s => {
+    // First month (within `year`) a student can be auto-billed: nothing is owed before
+    // they joined. joiningDate is stored as a date-only value (UTC midnight), so read it
+    // in UTC to avoid a timezone shifting the month. Older records without joiningDate
+    // fall back to createdAt; if both are missing, don't restrict (month 1).
+    // Returns 13 for a student who joins in a later year (nothing billable this year).
+    function firstBillableMonth(s) {
+      const jd = s.joiningDate || s.createdAt
+      if (!jd) return 1
+      const d = new Date(jd)
+      if (isNaN(d.getTime())) return 1
+      const jy = d.getUTCFullYear()
+      if (jy < year) return 1
+      if (jy > year) return 13
+      return d.getUTCMonth() + 1
+    }
+
+    // Per-student figures for the selected period. Auto-fills months without a manual
+    // record from the student's base fee (active students, months from joining up to today).
+    function computeStudent(s) {
       const studentCells = byStudent[s._id.toString()] || {}
       const baseFee = s.billing?.fee || 0
       const isActive = s.status !== 'left'
-      // Amount still owed up to the current month, auto-filling months that have no
-      // manual receivable from the student's base fee. Waived months contribute 0.
-      let dueTillDate = 0
+      const joinMonth = firstBillableMonth(s)
+      let periodDue = 0, periodCollected = 0, periodReceivable = 0
       const autoMonths = []
-      for (let m = 1; m <= monthLimit; m++) {
+      for (let m = fromMonth; m <= toMonth; m++) {
         const cell = studentCells[m]
+        const withinDue = m <= monthLimit
         if (cell) {
+          periodCollected += cell.amountPaid || 0 // money in counts even for advance months
           if (cell.status === 'waived') continue
-          dueTillDate += Math.max(0, (cell.amount || 0) - (cell.amountPaid || 0))
-        } else if (isActive && baseFee > 0) {
-          dueTillDate += baseFee
+          if (withinDue) {
+            periodReceivable += cell.amount || 0
+            periodDue += Math.max(0, (cell.amount || 0) - (cell.amountPaid || 0))
+          }
+        } else if (withinDue && isActive && baseFee > 0 && m >= joinMonth) {
+          // No manual record and the month is on/after the joining month → auto-bill.
+          periodReceivable += baseFee
+          periodDue += baseFee
           autoMonths.push(m)
         }
       }
+      return { baseFee, studentCells, periodDue, periodCollected, periodReceivable, autoMonths }
+    }
+
+    // Summary across the entire filtered set (not just the page).
+    let sumDue = 0, sumCollected = 0, sumReceivable = 0
+    for (const s of allStudents) {
+      const c = computeStudent(s)
+      sumDue += c.periodDue; sumCollected += c.periodCollected; sumReceivable += c.periodReceivable
+    }
+
+    const records = pageStudents.map(s => {
+      const c = computeStudent(s)
       return {
         _id: s._id,
         name: s.name,
         rollNo: s.rollNo,
         status: s.status,
-        baseFee,
+        baseFee: c.baseFee,
         currency: s.billing?.currency || 'PKR',
+        cycle: s.billing?.cycle || 'monthly', // unset → monthly (schema default)
         familyId: s.familyId?._id || null,
         familyCode: s.familyId?.familyCode || '',
-        months: studentCells,
-        autoMonths,
-        dueTillDate,
+        months: c.studentCells,
+        autoMonths: c.autoMonths,
+        dueTillDate: c.periodDue, // outstanding within the selected period
       }
     })
-
-    // Per-year totals across the returned page
-    const received = cells.filter(c => c.status === 'received').length
-    const partial = cells.filter(c => c.status === 'partial').length
-    const totalCollected = cells.reduce((s, c) => s + (c.amountPaid || 0), 0)
-    // Receivables view: total expected vs still outstanding
-    const totalReceivable = cells.reduce((s, c) => s + (c.status === 'waived' ? 0 : c.amount || 0), 0)
-    const outstanding = cells.reduce((s, c) => s + (c.status === 'waived' ? 0 : Math.max(0, (c.amount || 0) - (c.amountPaid || 0))), 0)
-    const totalDueTillDate = records.reduce((s, r) => s + r.dueTillDate, 0)
 
     res.json({
       year,
@@ -119,7 +168,14 @@ export async function getFeeGrid(req, res) {
       total,
       page,
       pages: showAll ? 1 : Math.max(1, Math.ceil(total / limit)),
-      summary: { received, partial, totalCollected, totalReceivable, outstanding, totalDueTillDate, currentMonth: nowMonth, currentYear: nowYear },
+      summary: {
+        students: total,
+        collected: sumCollected,
+        due: sumDue,
+        receivable: sumReceivable,
+        cycleCounts,
+        fromMonth, toMonth, currentMonth: nowMonth, currentYear: nowYear,
+      },
     })
   } catch (err) {
     console.error('Fee grid error:', err)
@@ -270,14 +326,23 @@ export async function createFeePayment(req, res) {
 // GET /portal/fees/payments — list recorded fee payments
 export async function listFeePayments(req, res) {
   try {
-    const { studentId, familyId, year } = req.query
+    const { studentId, familyId, year, fromMonth, toMonth } = req.query
     const page = Math.max(1, parseInt(req.query.page, 10) || 1)
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25))
 
     const filter = {}
-    if (studentId) filter['allocations.studentId'] = studentId
     if (familyId) filter.familyId = familyId
-    if (year) filter['allocations.year'] = parseInt(year, 10)
+    // Scope to the selected period: a payment matches when it has an allocation in
+    // this year (and month range, if given) — for the same student when filtered.
+    const elem = {}
+    if (year) {
+      elem.year = parseInt(year, 10)
+      const fm = Math.min(12, Math.max(1, parseInt(fromMonth, 10) || 1))
+      const tm = Math.max(fm, Math.min(12, Math.max(1, parseInt(toMonth, 10) || 12)))
+      elem.month = { $gte: fm, $lte: tm }
+    }
+    if (studentId) elem.studentId = studentId
+    if (Object.keys(elem).length) filter.allocations = { $elemMatch: elem }
 
     const total = await FeePayment.countDocuments(filter)
     const records = await FeePayment.find(filter)

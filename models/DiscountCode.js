@@ -11,7 +11,7 @@ const discountCodeSchema = new mongoose.Schema({
     default: () => crypto.randomBytes(4).toString('hex').toUpperCase(),
   },
   discountAmount: { type: Number, required: true },
-  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], required: true },
+  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], required: true },
   // one_time: expires after a single successful use
   // recurring: can be used unlimited times
   usageType: { type: String, enum: ['one_time', 'recurring'], default: 'one_time' },

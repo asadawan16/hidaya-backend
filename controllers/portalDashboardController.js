@@ -4,8 +4,9 @@ import ClassSession from '../models/ClassSession.js'
 import AdmissionApplication from '../models/AdmissionApplication.js'
 import LessonEntry from '../models/LessonEntry.js'
 import Payment from '../models/Payment.js'
-import Invoice from '../models/Invoice.js'
 import Expense from '../models/Expense.js'
+import FeePayment from '../models/FeePayment.js'
+import SalaryRecord from '../models/SalaryRecord.js'
 
 // Helper: last N months labels + boundaries
 function lastNMonths(n) {
@@ -333,144 +334,219 @@ async function studentCharts(_req, res, user, monthCount) {
   })
 }
 
+// Supported currencies + approximate PKR conversion rates. Used to roll the
+// multi-currency figures up into a single PKR-equivalent headline number.
+const REVENUE_CURRENCIES = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
+const PKR_RATES = { PKR: 1, USD: 278, EUR: 312, GBP: 355, CAD: 205 }
+const toPKR = (amount, cur) => (amount || 0) * (PKR_RATES[cur] || 1)
+
+// The students page lets a fee be tagged with a foreign currency, but in practice
+// almost every agreed fee is entered as a PKR amount (fees are collected in PKR on
+// the fee-management page). A genuine foreign monthly fee is a small number
+// ($20–80 / £15–60); a PKR fee is in the thousands. So a "foreign" label sitting on
+// a thousands-range fee is a data-entry mislabel — the value is really PKR and must
+// NOT be multiplied by the FX rate (that's what inflated Total/Avg fee to millions).
+// We therefore trust a foreign label only when the amount is small enough to plausibly
+// be that currency; anything at or above this cap is treated as PKR.
+const FOREIGN_FEE_MAX = 500
+const effectiveFeeCurrency = (fee, currency) => {
+  if (!currency || currency === 'PKR') return 'PKR'
+  return (fee || 0) < FOREIGN_FEE_MAX ? currency : 'PKR'
+}
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
 /**
  * GET /api/portal/dashboard/revenue
- * Returns revenue/finance statistics for admin dashboard.
+ * Revenue = fees received. Two independent sources are combined:
+ *   - Manual fees  → FeePayment (bank transfer / cash / cheque, recorded by hand)
+ *   - Gateway fees → Payment (status 'completed', from payment links / Mastercard)
+ * Expenses include paid staff salaries. Filters: year, month (or whole year),
+ * and source (all | manual | gateway).
  */
 export async function getRevenueStats(req, res) {
   try {
-    const { dateFrom, dateTo, currency } = req.query
+    const now = new Date()
+    const year = parseInt(req.query.year, 10) || now.getFullYear()
 
-    // Build date filter
-    const dateFilter = {}
-    if (dateFrom) dateFilter.$gte = new Date(dateFrom)
-    if (dateTo) dateFilter.$lte = new Date(dateTo)
-    const hasDateFilter = Object.keys(dateFilter).length > 0
+    // Period is a month range within the year: fromMonth..toMonth (1-12, inclusive),
+    // which supports the Month / Quarter / Year selector on the page. The older
+    // `month` / `month=all` params still work (mapped onto the range) for back-compat.
+    let fromMonth, toMonth
+    if (req.query.fromMonth != null || req.query.toMonth != null) {
+      fromMonth = Math.min(12, Math.max(1, parseInt(req.query.fromMonth, 10) || 1))
+      toMonth = Math.max(fromMonth, Math.min(12, Math.max(1, parseInt(req.query.toMonth, 10) || 12)))
+    } else {
+      const monthParam = req.query.month
+      const isWholeYear = monthParam === 'all' || monthParam === '0'
+      const m = isWholeYear ? null : Math.min(12, Math.max(1, parseInt(monthParam, 10) || (now.getMonth() + 1)))
+      fromMonth = isWholeYear ? 1 : m
+      toMonth = isWholeYear ? 12 : m
+    }
+    const wholeYear = fromMonth === 1 && toMonth === 12
 
-    const paymentMatch = { status: 'completed' }
-    if (hasDateFilter) paymentMatch.createdAt = dateFilter
-    if (currency) paymentMatch.currency = currency
+    const source = ['manual', 'gateway'].includes(req.query.source) ? req.query.source : 'all'
+    const includeManual = source !== 'gateway'
+    const includeGateway = source !== 'manual'
 
-    const expenseMatch = {}
-    if (hasDateFilter) expenseMatch.date = dateFilter
+    // Selected-period boundaries (fromMonth..toMonth within the year). periodEnd is
+    // exclusive: the first day of the month after toMonth (rolls to next Jan at 12).
+    const periodStart = new Date(year, fromMonth - 1, 1)
+    const periodEnd = new Date(year, toMonth, 1)
+    // Whole-year boundaries (for the 12-month trend chart)
+    const yearStart = new Date(year, 0, 1)
+    const yearEnd = new Date(year + 1, 0, 1)
 
-    // 1. Revenue by currency (completed payments)
-    const revenueByCurrency = await Payment.aggregate([
-      { $match: paymentMatch },
-      { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 }, avgAmount: { $avg: '$amount' } } },
-      { $sort: { total: -1 } },
+    // ── 1. Fees received in the period, per currency (both sources) ──
+    const manualByCurrency = includeManual ? await FeePayment.aggregate([
+      { $match: { paidAt: { $gte: periodStart, $lt: periodEnd } } },
+      { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]) : []
+
+    const gatewayByCurrency = includeGateway ? await Payment.aggregate([
+      { $match: { status: 'completed', createdAt: { $gte: periodStart, $lt: periodEnd } } },
+      { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]) : []
+
+    const manualMap = Object.fromEntries(manualByCurrency.map(r => [r._id || 'PKR', r]))
+    const gatewayMap = Object.fromEntries(gatewayByCurrency.map(r => [r._id || 'PKR', r]))
+
+    const receivedByCurrency = REVENUE_CURRENCIES.map(c => {
+      const manual = manualMap[c]?.total || 0
+      const gateway = gatewayMap[c]?.total || 0
+      const count = (manualMap[c]?.count || 0) + (gatewayMap[c]?.count || 0)
+      return { currency: c, manual, gateway, total: manual + gateway, count }
+    })
+
+    const manualReceivedPKR = manualByCurrency.reduce((s, r) => s + toPKR(r.total, r._id), 0)
+    const gatewayReceivedPKR = gatewayByCurrency.reduce((s, r) => s + toPKR(r.total, r._id), 0)
+    const totalReceivedPKR = manualReceivedPKR + gatewayReceivedPKR
+    const paymentCount = manualByCurrency.reduce((s, r) => s + r.count, 0)
+      + gatewayByCurrency.reduce((s, r) => s + r.count, 0)
+    const avgReceivedPerPayment = paymentCount > 0 ? totalReceivedPKR / paymentCount : 0
+
+    // ── 2. Expenses in the period (operating + paid salaries) ──
+    const expenseByCurrency = await Expense.aggregate([
+      { $match: { type: 'expense', date: { $gte: periodStart, $lt: periodEnd } } },
+      { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 } } },
     ])
-
-    // 2. Monthly revenue trend (last 12 months or date range)
-    const monthlyRevenue = await Payment.aggregate([
-      { $match: paymentMatch },
-      { $group: {
-        _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' }, currency: '$currency' },
-        total: { $sum: '$amount' },
-        count: { $sum: 1 },
-      }},
-      { $sort: { '_id.year': 1, '_id.month': 1 } },
-    ])
-
-    // 3. Payment status breakdown (all payments, not just completed)
-    const allPaymentMatch = {}
-    if (hasDateFilter) allPaymentMatch.createdAt = dateFilter
-    const paymentsByStatus = await Payment.aggregate([
-      { $match: allPaymentMatch },
-      { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$amount' } } },
-    ])
-
-    // 4. Payment method breakdown
-    const paymentsByMethod = await Payment.aggregate([
-      { $match: paymentMatch },
-      { $group: { _id: '$paymentMethod', count: { $sum: 1 }, total: { $sum: '$amount' } } },
-    ])
-
-    // 5. Invoice stats
-    const invoiceMatch = {}
-    if (hasDateFilter) invoiceMatch.createdAt = dateFilter
-    const invoicesByStatus = await Invoice.aggregate([
-      { $match: invoiceMatch },
-      { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$amount' }, paid: { $sum: '$paidAmount' } } },
-    ])
-
-    // 6. Expenses vs Income
-    const expenseVsIncome = await Expense.aggregate([
-      { $match: expenseMatch },
-      { $group: { _id: '$type', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-    ])
-
-    // 7. Monthly expenses trend
-    const monthlyExpenses = await Expense.aggregate([
-      { $match: expenseMatch },
-      { $group: {
-        _id: { year: { $year: '$date' }, month: { $month: '$date' }, type: '$type' },
-        total: { $sum: '$amount' },
-        count: { $sum: 1 },
-      }},
-      { $sort: { '_id.year': 1, '_id.month': 1 } },
-    ])
-
-    // 8. Expense by category
     const expenseByCategory = await Expense.aggregate([
-      { $match: { ...expenseMatch, type: 'expense' } },
+      { $match: { type: 'expense', date: { $gte: periodStart, $lt: periodEnd } } },
       { $group: { _id: '$category', total: { $sum: '$amount' }, count: { $sum: 1 } } },
       { $sort: { total: -1 } },
     ])
 
-    // 9. Discount usage stats
-    const discountStats = await Payment.aggregate([
-      { $match: { ...paymentMatch, discountAmount: { $gt: 0 } } },
-      { $group: {
-        _id: '$discountCode',
-        timesUsed: { $sum: 1 },
-        totalDiscount: { $sum: '$discountAmount' },
-        totalRevenue: { $sum: '$amount' },
-      }},
-      { $sort: { totalDiscount: -1 } },
-      { $limit: 10 },
+    // Salaries: paid only. SalaryRecord is keyed by month/year, not a date.
+    const salaryMatch = { status: 'paid', year }
+    if (!wholeYear) salaryMatch.month = { $gte: fromMonth, $lte: toMonth }
+    const salaryByCurrency = await SalaryRecord.aggregate([
+      { $match: salaryMatch },
+      { $group: { _id: '$currency', total: { $sum: '$netPayable' }, count: { $sum: 1 } } },
     ])
 
-    // 10. Recent payments (last 10)
-    const recentPayments = await Payment.find({ status: 'completed' })
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .select('amount currency studentName studentEmail paymentMethod createdAt discountCode discountAmount')
-      .lean()
+    const expenseOnlyPKR = expenseByCurrency.reduce((s, r) => s + toPKR(r.total, r._id), 0)
+    const salaryPKR = salaryByCurrency.reduce((s, r) => s + toPKR(r.total, r._id), 0)
+    const totalExpensePKR = expenseOnlyPKR + salaryPKR
+    const netProfitPKR = totalReceivedPKR - totalExpensePKR
 
-    // PKR conversion rates (approximate live rates)
-    const conversionRates = { PKR: 1, USD: 278, EUR: 312, GBP: 355 }
+    // ── 3. Total fee of students (current agreed monthly fee, a snapshot) ──
+    // Grouped by each student's EFFECTIVE fee currency (see effectiveFeeCurrency):
+    // a foreign label on a PKR-magnitude fee is a mislabel and counted as PKR, so
+    // Total/Avg fee reflect real rupee figures instead of FX-inflated ones.
+    const feeStudents = await Student.find({ status: { $in: ['active', 'leave'] } })
+      .select('billing.fee billing.currency').lean()
+    const feeCurAgg = {} // currency -> { total, count }
+    let totalFeePKR = 0
+    for (const s of feeStudents) {
+      const fee = s.billing?.fee || 0
+      const cur = effectiveFeeCurrency(fee, s.billing?.currency)
+      const bucket = feeCurAgg[cur] || (feeCurAgg[cur] = { total: 0, count: 0 })
+      bucket.total += fee
+      bucket.count += 1
+      totalFeePKR += toPKR(fee, cur)
+    }
+    const totalFeeByCurrency = REVENUE_CURRENCIES.map(c => ({
+      currency: c, total: feeCurAgg[c]?.total || 0, count: feeCurAgg[c]?.count || 0,
+    }))
+    const studentCount = feeStudents.length
+    const avgFeePerStudentPKR = studentCount > 0 ? totalFeePKR / studentCount : 0
 
-    // Total revenue in PKR
-    const totalRevenuePKR = revenueByCurrency.reduce((sum, r) => {
-      const rate = conversionRates[r._id] || 1
-      return sum + (r.total * rate)
-    }, 0)
+    // ── 4. 12-month trend for the selected year (PKR-equiv) ──
+    const monthGroup = (dateField) => ([
+      { $group: { _id: { month: { $month: dateField }, currency: '$currency' }, total: { $sum: '$amount' } } },
+    ])
+    const manualMonthlyAgg = includeManual ? await FeePayment.aggregate([
+      { $match: { paidAt: { $gte: yearStart, $lt: yearEnd } } },
+      ...monthGroup('$paidAt'),
+    ]) : []
+    const gatewayMonthlyAgg = includeGateway ? await Payment.aggregate([
+      { $match: { status: 'completed', createdAt: { $gte: yearStart, $lt: yearEnd } } },
+      ...monthGroup('$createdAt'),
+    ]) : []
+    const expenseMonthlyAgg = await Expense.aggregate([
+      { $match: { type: 'expense', date: { $gte: yearStart, $lt: yearEnd } } },
+      ...monthGroup('$date'),
+    ])
+    const salaryMonthlyAgg = await SalaryRecord.aggregate([
+      { $match: { status: 'paid', year } },
+      { $group: { _id: { month: '$month', currency: '$currency' }, total: { $sum: '$netPayable' } } },
+    ])
+    const sumMonth = (agg, m) => agg.filter(a => a._id.month === m).reduce((s, a) => s + toPKR(a.total, a._id.currency), 0)
+    const monthlyTrend = Array.from({ length: 12 }, (_, i) => {
+      const m = i + 1
+      const manual = sumMonth(manualMonthlyAgg, m)
+      const gateway = sumMonth(gatewayMonthlyAgg, m)
+      const expense = sumMonth(expenseMonthlyAgg, m) + sumMonth(salaryMonthlyAgg, m)
+      return { month: m, label: MONTH_LABELS[i], manual, gateway, received: manual + gateway, expense }
+    })
 
-    const totalExpenses = expenseVsIncome.find(e => e._id === 'expense')?.total || 0
-    const totalIncome = expenseVsIncome.find(e => e._id === 'income')?.total || 0
-    const totalPayments = paymentsByStatus.reduce((sum, s) => sum + s.count, 0)
-    const completedPayments = paymentsByStatus.find(s => s._id === 'completed')?.count || 0
-    const conversionRate = totalPayments > 0 ? Math.round((completedPayments / totalPayments) * 100) : 0
+    // ── 5. Recent payments in the period (combined + tagged) ──
+    const recentManual = includeManual ? await FeePayment.find({ paidAt: { $gte: periodStart, $lt: periodEnd } })
+      .sort({ paidAt: -1 }).limit(12)
+      .select('amount currency method payerName reference paidAt').lean() : []
+    const recentGateway = includeGateway ? await Payment.find({ status: 'completed', createdAt: { $gte: periodStart, $lt: periodEnd } })
+      .sort({ createdAt: -1 }).limit(12)
+      .select('amount currency paymentMethod studentName createdAt').lean() : []
+    const recentPayments = [
+      ...recentManual.map(p => ({ name: p.payerName || p.reference || '—', amount: p.amount, currency: p.currency, method: p.method, source: 'manual', date: p.paidAt })),
+      ...recentGateway.map(p => ({ name: p.studentName || '—', amount: p.amount, currency: p.currency, method: p.paymentMethod, source: 'gateway', date: p.createdAt })),
+    ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 12)
 
     res.json({
-      conversionRates,
-      totalRevenuePKR: Math.round(totalRevenuePKR),
-      totalExpenses,
-      totalIncome,
-      netProfit: Math.round(totalRevenuePKR) - totalExpenses + totalIncome,
-      paymentConversionRate: conversionRate,
-      totalPayments,
-      completedPayments,
-      revenueByCurrency,
-      monthlyRevenue,
-      paymentsByStatus,
-      paymentsByMethod,
-      invoicesByStatus,
-      expenseVsIncome,
-      monthlyExpenses,
+      period: {
+        year, fromMonth, toMonth, wholeYear,
+        month: fromMonth === toMonth ? fromMonth : null,
+        label: wholeYear ? `${year}`
+          : fromMonth === toMonth ? `${MONTH_LABELS[fromMonth - 1]} ${year}`
+            : `${MONTH_LABELS[fromMonth - 1]}–${MONTH_LABELS[toMonth - 1]} ${year}`,
+      },
+      source,
+      conversionRates: PKR_RATES,
+      currencies: REVENUE_CURRENCIES,
+
+      // Student fees (snapshot)
+      totalFeePKR: Math.round(totalFeePKR),
+      totalFeeByCurrency,
+      studentCount,
+      avgFeePerStudentPKR: Math.round(avgFeePerStudentPKR),
+
+      // Received (manual + gateway)
+      totalReceivedPKR: Math.round(totalReceivedPKR),
+      manualReceivedPKR: Math.round(manualReceivedPKR),
+      gatewayReceivedPKR: Math.round(gatewayReceivedPKR),
+      paymentCount,
+      avgReceivedPerPayment: Math.round(avgReceivedPerPayment),
+      receivedByCurrency,
+
+      // Expenses (incl. paid salaries)
+      totalExpensePKR: Math.round(totalExpensePKR),
+      expenseOnlyPKR: Math.round(expenseOnlyPKR),
+      salaryPKR: Math.round(salaryPKR),
       expenseByCategory,
-      discountStats,
+
+      // Net
+      netProfitPKR: Math.round(netProfitPKR),
+
+      monthlyTrend,
       recentPayments,
     })
   } catch (err) {

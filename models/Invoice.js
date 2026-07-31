@@ -17,7 +17,7 @@ const invoiceSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   currency: {
     type: String,
-    enum: ['PKR', 'USD', 'EUR', 'GBP'],
+    enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'],
     default: 'PKR',
   },
   dueDate: { type: Date },

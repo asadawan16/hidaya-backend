@@ -44,7 +44,7 @@ export async function create(req, res) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
-    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP']
+    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
     const invoiceNo = await generateInvoiceNo()
 
     const normalizedTaxType = ['percentage', 'fixed'].includes(taxType) ? taxType : 'none'

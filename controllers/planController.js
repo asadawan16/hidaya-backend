@@ -17,7 +17,7 @@ const COUNTRY_CURRENCY = {
   TR: 'USD', EG: 'USD', ZA: 'USD', NG: 'USD', KE: 'USD',
   BR: 'USD', MX: 'USD', AR: 'USD', CO: 'USD', CL: 'USD',
 }
-const SUPPORTED = ['PKR', 'USD', 'EUR', 'GBP']
+const SUPPORTED = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
 
 function detectCurrencyFromIp(req) {
   const forwarded = req.headers['x-forwarded-for']

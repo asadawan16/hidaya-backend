@@ -1,3 +1,4 @@
+import mongoose from 'mongoose'
 import TutorAttendance from '../models/TutorAttendance.js'
 import { logActivity } from '../utils/activityLogger.js'
 
@@ -213,6 +214,78 @@ export async function getAttendanceSummary(req, res) {
     res.json({ records, presentDays, absentDays, totalHours, totalDays: records.length })
   } catch (err) {
     console.error('Attendance summary error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// Period overview — grand totals + a per-subject rollup for the current filter.
+// Powers the KPI row and the "By person" view. Aggregated in Mongo so it scales
+// past the 100-row list cap (a full month across every tutor is one query).
+export async function getAttendanceOverview(req, res) {
+  try {
+    const { tutorId, userId, subjectType, dateFrom, dateTo, status } = req.query
+
+    const match = {}
+    if (tutorId) match.tutorId = new mongoose.Types.ObjectId(String(tutorId))
+    if (userId) match.userId = new mongoose.Types.ObjectId(String(userId))
+    if (subjectType) match.subjectType = subjectType
+    if (status) match.status = status
+    if (dateFrom || dateTo) {
+      match.date = {}
+      if (dateFrom) match.date.$gte = new Date(dateFrom)
+      if (dateTo) match.date.$lte = new Date(dateTo)
+    }
+
+    const subjects = await TutorAttendance.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: { subjectType: '$subjectType', tutorId: '$tutorId', userId: '$userId' },
+          presentDays: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+          absentDays: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
+          partialDays: { $sum: { $cond: [{ $eq: ['$status', 'partial'] }, 1, 0] } },
+          totalHours: { $sum: { $ifNull: ['$totalHours', 0] } },
+          records: { $sum: 1 },
+          checkedOut: { $sum: { $cond: [{ $ifNull: ['$checkOutAt', false] }, 1, 0] } },
+          lastDate: { $max: '$date' },
+        },
+      },
+      { $lookup: { from: 'tutorprofiles', localField: '_id.tutorId', foreignField: '_id', as: 'tutor' } },
+      { $lookup: { from: 'users', localField: '_id.userId', foreignField: '_id', as: 'user' } },
+      { $unwind: { path: '$tutor', preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 0,
+          subjectType: '$_id.subjectType',
+          tutorId: '$_id.tutorId',
+          userId: '$_id.userId',
+          name: { $ifNull: ['$user.displayName', { $ifNull: ['$tutor.name', 'Unknown'] }] },
+          code: { $ifNull: ['$tutor.tutorId', { $ifNull: ['$user.email', ''] }] },
+          presentDays: 1, absentDays: 1, partialDays: 1,
+          totalHours: { $round: ['$totalHours', 1] },
+          records: 1, checkedOut: 1, lastDate: 1,
+        },
+      },
+      { $sort: { name: 1 } },
+    ])
+
+    const totals = subjects.reduce((acc, s) => {
+      acc.presentDays += s.presentDays
+      acc.absentDays += s.absentDays
+      acc.partialDays += s.partialDays
+      acc.totalHours += s.totalHours
+      acc.records += s.records
+      return acc
+    }, { presentDays: 0, absentDays: 0, partialDays: 0, totalHours: 0, records: 0 })
+    totals.totalHours = Math.round(totals.totalHours * 10) / 10
+    totals.people = subjects.length
+    const marked = totals.presentDays + totals.absentDays
+    totals.attendanceRate = marked ? Math.round((totals.presentDays / marked) * 100) : null
+
+    res.json({ subjects, totals })
+  } catch (err) {
+    console.error('Attendance overview error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

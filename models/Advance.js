@@ -11,7 +11,7 @@ const advanceSchema = new mongoose.Schema({
   tutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'TutorProfile', required: true },
   type: { type: String, enum: ['short_term', 'long_term'], required: true },
   totalAmount: { type: Number, required: true },
-  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP'], default: 'PKR' },
+  currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], default: 'PKR' },
   installmentAmount: { type: Number, required: true },
   installmentFrequency: { type: String, enum: ['weekly', 'monthly'], default: 'monthly' },
   amountRepaid: { type: Number, default: 0 },
