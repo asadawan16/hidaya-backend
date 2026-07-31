@@ -171,6 +171,51 @@ export async function getAssessment(req, res) {
   }
 }
 
+export async function updateAssessment(req, res) {
+  try {
+    const data = req.body
+
+    // Same responses normalization as create: accept the frontend's object shape.
+    if (data.responses !== undefined) {
+      data.responses = Array.isArray(data.responses)
+        ? data.responses
+        : Object.entries(data.responses || {}).map(([key, value]) => ({ key, value }))
+    }
+
+    const assessment = await Assessment.findByIdAndUpdate(
+      req.params.id,
+      data,
+      { new: true, runValidators: true },
+    )
+      .populate('studentId', 'name rollNo')
+      .populate('templateId', 'name')
+      .lean()
+
+    if (!assessment) return res.status(404).json({ error: 'Assessment not found' })
+
+    await logActivity({ level: 'info', category: 'assessment', action: 'assessment_updated', message: `Assessment ${req.params.id} updated`, req })
+
+    res.json(assessment)
+  } catch (err) {
+    console.error('Update assessment error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function deleteAssessment(req, res) {
+  try {
+    const assessment = await Assessment.findByIdAndDelete(req.params.id)
+    if (!assessment) return res.status(404).json({ error: 'Assessment not found' })
+
+    await logActivity({ level: 'info', category: 'assessment', action: 'assessment_deleted', message: `Assessment ${req.params.id} deleted`, req })
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('Delete assessment error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 export async function getReportCard(req, res) {
   try {
     const assessment = await Assessment.findById(req.params.id)
