@@ -52,7 +52,7 @@ import portalBadgeRoutes from './routes/portalBadgeRoutes.js'
 import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js'
 import portalFeeRoutes from './routes/portalFeeRoutes.js'
 import { initSocket } from './config/socket.js'
-import requestLogger from './middleware/requestLogger.js'
+// import requestLogger from './middleware/requestLogger.js' // disabled 2026-08-02 — see app.use note below
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
 import { runAutoSessionGeneration, autoCompleteOverrunSessions } from './controllers/portalScheduleController.js'
 import { ALL_PERMISSIONS, RESTRICTION_PERMISSIONS } from './config/permissions.js'
@@ -102,8 +102,11 @@ app.use(helmet())
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }))
 app.use(express.json({ limit: '5mb' }))
 
-// Request logging (after body parsing, before routes)
-app.use(requestLogger)
+// Request logging DISABLED (2026-08-02): the per-request access logger wrote one
+// Log document for every HTTP request (~51k/day, mostly frontend polling GETs),
+// which filled the Atlas free tier. Business audit events are still recorded via
+// utils/activityLogger.js. Re-enable below only if reduced to writes/errors.
+// app.use(requestLogger)
 
 // Rate limiting (JSON responses for frontend compatibility)
 const rl = (max) => rateLimit({ windowMs: 15 * 60 * 1000, max, handler: (req, res) => res.status(429).json({ error: 'Too many requests. Please try again later.' }) })
