@@ -4,7 +4,7 @@ import User from '../models/User.js'
 import Role from '../models/Role.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification, notifyRoles } from './portalNotificationController.js'
-import { emitToAll } from '../config/socket.js'
+import { emitToStaff } from '../config/socket.js'
 
 const STATUSES = ['scheduled', 'sign_up', 'failed', 'no_show', 'start_later']
 
@@ -143,7 +143,8 @@ export async function createDemo(req, res) {
     const tUid = await tutorUserId(demo.demoTutorId)
     if (tUid) recipients.add(tUid)
     await notifyDemoAssigned(demo, [...recipients], { includeAdmins: true })
-    emitToAll('demo_announced', {
+    // staff-only: students must not receive demo-trial announcements
+    emitToStaff('demo_announced', {
       demoId: demo._id, studentName: demo.studentName,
       tutorLabel: demo.demoTutor, date: demo.date, time: demo.time,
     })

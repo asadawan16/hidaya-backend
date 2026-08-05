@@ -5,7 +5,7 @@ import {
   listSessions, createSession, updateSession, deleteSession,
   startSession, completeSession, markSessionMissed, resetSession, updateSessionStatus, forceCompleteSession,
   getLiveBoard, getMyLiveSessions, getMyUnloggedSessions, generateSessionsForDate, getBoard, getSlotBoard,
-  getScheduleConfig, updateScheduleConfig,
+  getScheduleConfig, updateScheduleConfig, getMyAttendanceSummary,
 } from '../controllers/portalScheduleController.js'
 
 const router = Router()
@@ -46,6 +46,7 @@ router.delete('/sessions/:id', requirePermission('schedule.manage'), deleteSessi
 router.get('/live-board', requirePermission('liveboard.view'), getLiveBoard)
 // A tutor's own live sessions (for the overrun reminder) — no liveboard.view needed
 router.get('/my-live', requirePermission('schedule.read'), getMyLiveSessions)
+router.get('/my-attendance', requirePermission('schedule.read'), getMyAttendanceSummary)
 // A tutor's completed-but-unlogged sessions (auto/force completed) — prompt to log
 router.get('/my-unlogged', requirePermission('schedule.read'), getMyUnloggedSessions)
 

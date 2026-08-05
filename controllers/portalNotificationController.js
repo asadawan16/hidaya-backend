@@ -1,5 +1,6 @@
 import Notification from '../models/Notification.js'
 import { emitToUser } from '../config/socket.js'
+import { registerDevice, sendPushToUser, unregisterDevice } from '../services/push.js'
 
 export async function listNotifications(req, res) {
   try {
@@ -97,10 +98,36 @@ export async function createNotification({ userId, type, title, body, payload })
     if (!userId) return null
     const notif = await Notification.create({ userId, type, title, body, payload })
     emitToUser(userId.toString(), 'notification', notif)
+    // Fire-and-forget mobile push (never awaited into the parent action).
+    sendPushToUser(userId, { title, body, data: { type, ...(payload || {}) } })
     return notif
   } catch (err) {
     console.error('Create notification failed:', err.message)
     return null
+  }
+}
+
+// ─── Mobile push device registration ───
+
+export async function registerDeviceHandler(req, res) {
+  try {
+    const { token, platform, deviceId } = req.body || {}
+    if (!token) return res.status(400).json({ error: 'token required' })
+    await registerDevice(req.userId, { token, platform, deviceId })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Could not register device' })
+  }
+}
+
+export async function unregisterDeviceHandler(req, res) {
+  try {
+    const { token } = req.body || {}
+    if (!token) return res.status(400).json({ error: 'token required' })
+    await unregisterDevice(req.userId, token)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' })
   }
 }
 

@@ -53,11 +53,13 @@ export async function portalLogin(req, res) {
       }
     }
 
-    // Sign JWT
+    // Sign JWT. Students get a longer-lived session (they are children using a
+    // mobile app; a 12h expiry would log them out mid-day). Staff keep 12h.
+    const isStudent = user.roles.some(r => r.key === 'student')
     const token = jwt.sign(
       { id: user._id, type: 'portal' },
       process.env.JWT_SECRET,
-      { expiresIn: '12h' }
+      { expiresIn: isStudent ? '30d' : '12h' }
     )
 
     user.lastLoginAt = new Date()

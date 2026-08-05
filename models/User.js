@@ -76,6 +76,15 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     sparse: true,
   },
+  // Registered mobile push tokens (Expo push tokens). Populated by the mobile
+  // app via /portal/notifications/register-device. Used by services/push.js.
+  pushTokens: [{
+    token: { type: String, required: true },
+    platform: { type: String, enum: ['ios', 'android'], default: 'android' },
+    deviceId: { type: String, default: '' },
+    lastSeenAt: { type: Date, default: Date.now },
+    _id: false,
+  }],
 }, { timestamps: true })
 
 userSchema.index({ status: 1 })

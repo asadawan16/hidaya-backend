@@ -145,14 +145,25 @@ export async function getActiveNoticesForUser(req, res) {
     // Global broadcasts must exclude those so role notices only reach their roles.
     const notRoleTargeted = { $or: [{ targetRoles: { $exists: false } }, { targetRoles: { $size: 0 } }] }
 
-    // Global notices (no specific target, and not role-targeted)
-    orConditions.push({ targetTutorId: { $exists: false }, targetStudentId: { $exists: false }, targetStudentIds: { $size: 0 }, ...notRoleTargeted })
-    orConditions.push({ targetTutorId: null, targetStudentId: null, targetStudentIds: { $size: 0 }, ...notRoleTargeted })
+    // Audience type: students must only ever see student-typed global notices.
+    // Staff (no linkedStudentId) see teacher-typed globals. Without this filter,
+    // un-targeted teacher announcements leaked to students. See mobile plan §9.
+    const audienceType = req.user.linkedStudentId ? 'student' : 'teacher'
+
+    // Global notices (no specific target, and not role-targeted) — type-scoped.
+    orConditions.push({ type: audienceType, targetTutorId: { $exists: false }, targetStudentId: { $exists: false }, targetStudentIds: { $size: 0 }, ...notRoleTargeted })
+    orConditions.push({ type: audienceType, targetTutorId: null, targetStudentId: null, targetStudentIds: { $size: 0 }, ...notRoleTargeted })
 
     // Role-targeted notices for the current user's roles
     const roleKeys = (req.user.roles || []).map(r => r.key).filter(Boolean)
     if (roleKeys.length) {
       orConditions.push({ targetRoles: { $in: roleKeys } })
+    }
+
+    // If user is linked to a student, deliver notices addressed to that student.
+    if (req.user.linkedStudentId) {
+      orConditions.push({ targetStudentId: req.user.linkedStudentId })
+      orConditions.push({ targetStudentIds: req.user.linkedStudentId })
     }
 
     // If user is linked to a tutor profile, get tutor-targeted notices

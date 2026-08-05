@@ -134,6 +134,14 @@ export function emitToAll(event, data) {
   if (portal) portal.emit(event, data)
 }
 
+// Emit to all connected portal users EXCEPT students (staff-only broadcasts,
+// e.g. demo-trial announcements). Students join the `role:student` room on
+// connect, so we exclude that room.
+export function emitToStaff(event, data) {
+  const portal = getPortalNamespace()
+  if (portal) portal.except('role:student').emit(event, data)
+}
+
 // Emit to live-board watchers
 export function emitToLiveBoard(event, data) {
   const portal = getPortalNamespace()

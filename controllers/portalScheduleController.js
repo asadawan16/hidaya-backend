@@ -1241,3 +1241,46 @@ export async function updateScheduleConfig(req, res) {
     res.status(500).json({ error: 'Server error' })
   }
 }
+
+// ─── Student attendance summary (mobile "My Attendance") ───
+// Auto-scoped to the caller's linked student. A student sees their own
+// present/late/missed counts and recent sessions. Perm: schedule.read.
+export async function getMyAttendanceSummary(req, res) {
+  try {
+    const studentId = req.user.linkedStudentId || req.query.studentId
+    if (!studentId) return res.json({ total: 0, present: 0, late: 0, missed: 0, rate: 0, recent: [] })
+
+    // Only sessions that have actually occurred count toward attendance.
+    const sessions = await ClassSession.find({
+      studentId,
+      status: { $in: ['completed', 'missed'] },
+    })
+      .populate('slotId', 'track')
+      .sort({ date: -1 })
+      .limit(200)
+      .lean()
+
+    let present = 0, late = 0, missed = 0
+    for (const s of sessions) {
+      if (s.status === 'missed' || s.attendance === 'no_show') missed++
+      else if (s.attendance === 'late') { present++; late++ }
+      else present++ // completed / on_time
+    }
+    const counted = present + missed
+    const rate = counted ? Math.round((present / counted) * 100) : 0
+
+    const recent = sessions.slice(0, 20).map(s => ({
+      _id: s._id,
+      date: s.date,
+      track: s.slotId?.track || '',
+      status: s.status,
+      attendance: s.attendance || '',
+      present: s.status === 'completed' && s.attendance !== 'no_show',
+    }))
+
+    res.json({ total: counted, present, late, missed, rate, recent })
+  } catch (err) {
+    console.error('My attendance summary error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}

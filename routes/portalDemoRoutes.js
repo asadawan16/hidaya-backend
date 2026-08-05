@@ -8,9 +8,16 @@ import {
 const router = Router()
 router.use(portalAuth)
 
+// Students must never receive demo-trial announcements (they are staff popups).
+// A student account is identified by its linkedStudentId. See mobile plan §9.
+const blockStudents = (req, res, next) => {
+  if (req.user?.linkedStudentId) return res.status(403).json({ error: 'Forbidden' })
+  next()
+}
+
 // Announcement popup — available to ALL authenticated staff (no demo perm needed)
-router.get('/pending-announcement', pendingAnnouncement)
-router.post('/:id/ack', ackAnnouncement)
+router.get('/pending-announcement', blockStudents, pendingAnnouncement)
+router.post('/:id/ack', blockStudents, ackAnnouncement)
 
 router.get('/', requirePermission('demo.read'), listDemos)
 router.get('/stats', requirePermission('demo.read'), getDemoStats)
