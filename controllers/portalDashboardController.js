@@ -435,16 +435,29 @@ export async function getRevenueStats(req, res) {
       { $sort: { total: -1 } },
     ])
 
-    // Salaries: paid only. SalaryRecord is keyed by month/year, not a date.
-    const salaryMatch = { status: 'paid', year }
-    if (!wholeYear) salaryMatch.month = { $gte: fromMonth, $lte: toMonth }
-    const salaryByCurrency = await SalaryRecord.aggregate([
-      { $match: salaryMatch },
-      { $group: { _id: '$currency', total: { $sum: '$netPayable' }, count: { $sum: 1 } } },
+    // Salaries are a cash outflow in the month AFTER their pay period: July's salary
+    // is handed out in early August, so it counts as an August expense. SalaryRecord
+    // is keyed by (month, year) of the pay period — shift forward one month (Dec →
+    // Jan of the next year) when bucketing into the revenue/expense view. Paid only.
+    const shiftPeriod = (m, y) => (m === 12 ? { month: 1, year: y + 1 } : { month: m + 1, year: y })
+    // Salaries that can pay out within `year`: all of `year` plus the previous
+    // December (which is handed out in January of `year`).
+    const paidSalaries = await SalaryRecord.aggregate([
+      { $match: { status: 'paid', $or: [{ year }, { year: year - 1, month: 12 }] } },
+      { $group: { _id: { month: '$month', year: '$year', currency: '$currency' }, total: { $sum: '$netPayable' } } },
     ])
+    // Bucket each paid salary into its cash-outflow month within `year`.
+    const salaryByExpenseMonth = {} // month (1-12 of `year`) → PKR
+    for (const r of paidSalaries) {
+      const { month: em, year: ey } = shiftPeriod(r._id.month, r._id.year)
+      if (ey !== year) continue // e.g. December of `year` pays out next January — not this year
+      salaryByExpenseMonth[em] = (salaryByExpenseMonth[em] || 0) + toPKR(r.total, r._id.currency)
+    }
+    const salaryPKR = Object.entries(salaryByExpenseMonth)
+      .filter(([m]) => Number(m) >= fromMonth && Number(m) <= toMonth)
+      .reduce((s, [, v]) => s + v, 0)
 
     const expenseOnlyPKR = expenseByCurrency.reduce((s, r) => s + toPKR(r.total, r._id), 0)
-    const salaryPKR = salaryByCurrency.reduce((s, r) => s + toPKR(r.total, r._id), 0)
     const totalExpensePKR = expenseOnlyPKR + salaryPKR
     const netProfitPKR = totalReceivedPKR - totalExpensePKR
 
@@ -486,16 +499,13 @@ export async function getRevenueStats(req, res) {
       { $match: { type: 'expense', date: { $gte: yearStart, $lt: yearEnd } } },
       ...monthGroup('$date'),
     ])
-    const salaryMonthlyAgg = await SalaryRecord.aggregate([
-      { $match: { status: 'paid', year } },
-      { $group: { _id: { month: '$month', currency: '$currency' }, total: { $sum: '$netPayable' } } },
-    ])
     const sumMonth = (agg, m) => agg.filter(a => a._id.month === m).reduce((s, a) => s + toPKR(a.total, a._id.currency), 0)
     const monthlyTrend = Array.from({ length: 12 }, (_, i) => {
       const m = i + 1
       const manual = sumMonth(manualMonthlyAgg, m)
       const gateway = sumMonth(gatewayMonthlyAgg, m)
-      const expense = sumMonth(expenseMonthlyAgg, m) + sumMonth(salaryMonthlyAgg, m)
+      // Salaries are shifted to their pay-out month (see salaryByExpenseMonth above).
+      const expense = sumMonth(expenseMonthlyAgg, m) + (salaryByExpenseMonth[m] || 0)
       return { month: m, label: MONTH_LABELS[i], manual, gateway, received: manual + gateway, expense }
     })
 

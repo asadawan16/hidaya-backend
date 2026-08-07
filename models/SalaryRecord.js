@@ -6,8 +6,10 @@ const deductionSchema = new mongoose.Schema({
 }, { _id: true })
 
 const salaryRecordSchema = new mongoose.Schema({
-  // A record is for a tutor (tutorId) OR a management/staff user (userId).
-  subjectType: { type: String, enum: ['tutor', 'staff'], default: 'tutor' },
+  // A record is for a tutor (tutorId), a management/staff user (userId), or a
+  // "custom" off-portal person (no account — e.g. guard, sweeper, IT, or any
+  // manager not on the portal), identified by personName/personRole.
+  subjectType: { type: String, enum: ['tutor', 'staff', 'custom'], default: 'tutor' },
   tutorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'TutorProfile',
@@ -16,6 +18,9 @@ const salaryRecordSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
   },
+  // Custom subject only: free-text name + designation (no portal account).
+  personName: { type: String, trim: true, default: '' },
+  personRole: { type: String, trim: true, default: '' },
   month: { type: Number, required: true, min: 1, max: 12 },
   year: { type: Number, required: true },
   baseAmount: { type: Number, required: true },

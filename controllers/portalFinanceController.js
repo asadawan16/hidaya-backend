@@ -30,9 +30,18 @@ async function getStaffSubjects() {
     linkedTutorId: { $in: [null, undefined] },
     linkedStudentId: { $in: [null, undefined] },
   }).populate('roles', 'key').select('displayName email roles').lean()
+
+  // Exclude anyone who actually OWNS a tutor profile — they belong in the Tutor
+  // scope, not Staff. Catches placeholder/system accounts (e.g. the import
+  // "Unassigned Tutor", which has a tutor role + TutorProfile but no linkedTutorId)
+  // and real tutors whose linkedTutorId was never backfilled.
+  const tutorOwners = await TutorProfile.find({ userId: { $in: users.map(u => u._id) } }).select('userId').lean()
+  const tutorUserIds = new Set(tutorOwners.map(t => String(t.userId)))
+
   // On payroll: has a non-student role, and is not a super_admin (the boss pays
   // staff, they aren't a payroll subject themselves).
   return users.filter(u => {
+    if (tutorUserIds.has(String(u._id))) return false
     const keys = (u.roles || []).map(r => r.key)
     return keys.some(k => k !== 'student') && !keys.includes('super_admin')
   })
@@ -239,6 +248,37 @@ async function suggestAdvanceDeduction(tutorId) {
 export async function generateSalary(req, res) {
   try {
     const { tutorId, userId, month, year } = req.body
+    const num = (v, fallback = 0) => (v === undefined || v === null || v === '' ? fallback : Number(v))
+
+    // ── Custom / off-portal person (guard, sweeper, IT, off-portal manager, …) ──
+    // Identified by a free-text name — no tutor/user account. Created directly
+    // (no attendance, no advance ledger, no notification).
+    const isCustom = req.body.subjectType === 'custom' || (!tutorId && !userId && !!(req.body.personName || '').trim())
+    if (isCustom) {
+      const personName = (req.body.personName || '').trim()
+      if (!personName || !month || !year) return res.status(400).json({ error: 'personName, month, and year are required' })
+      const currency = ['PKR', 'USD', 'EUR', 'GBP', 'CAD'].includes(req.body.currency) ? req.body.currency : 'PKR'
+      const draft = {
+        subjectType: 'custom', personName, personRole: (req.body.personRole || '').trim(),
+        month: Number(month), year: Number(year), currency,
+        baseAmount: num(req.body.baseAmount),
+        absenteesDeduction: 0,
+        fine: num(req.body.fine),
+        extraClassesAmount: num(req.body.extraClassesAmount),
+        extraMoney: num(req.body.extraMoney),
+        advanceDeductions: num(req.body.advanceDeductions),
+        comment: (req.body.comment || '').trim(),
+        status: ['draft', 'finalized'].includes(req.body.status) ? req.body.status : 'draft',
+        generatedBy: req.userId,
+      }
+      draft.netPayable = computeSalaryNet(draft)
+      draft.totalDeductions = (draft.fine || 0) + (draft.advanceDeductions || 0)
+      draft.bonuses = (draft.extraClassesAmount || 0) + (draft.extraMoney || 0)
+      const record = await SalaryRecord.create(draft)
+      await logActivity({ level: 'info', category: 'salary', action: 'salary_generated', message: `Salary generated for ${personName} (custom, ${month}/${year})`, req })
+      return res.status(201).json(record)
+    }
+
     if ((!tutorId && !userId) || !month || !year) return res.status(400).json({ error: 'tutorId or userId, month, and year are required' })
 
     const isStaff = !!userId && !tutorId
@@ -276,7 +316,6 @@ export async function generateSalary(req, res) {
     const totalHours = attendance.reduce((sum, a) => sum + (a.totalHours || 0), 0)
 
     const currency = req.body.currency || defaultCurrency
-    const num = (v, fallback = 0) => (v === undefined || v === null || v === '' ? fallback : Number(v))
 
     // Advance ledger is tutor-only; staff advanceDeductions is a plain manual number.
     const advanceDeductions = num(req.body.advanceDeductions, isStaff ? 0 : await suggestAdvanceDeduction(tutorId))
@@ -593,7 +632,24 @@ export async function getSalaryRoster(req, res) {
     const year = Number(req.query.year)
     if (!month || !year) return res.status(400).json({ error: 'month and year are required' })
 
-    const scope = req.query.scope === 'staff' ? 'staff' : 'tutor'
+    const scope = ['staff', 'custom'].includes(req.query.scope) ? req.query.scope : 'tutor'
+
+    // ── Custom scope: off-portal people (guard, sweeper, IT, off-portal manager). ──
+    // No pre-existing subject roster — the rows ARE the custom records for the period,
+    // added on demand via generateSalary({ subjectType: 'custom', ... }).
+    if (scope === 'custom') {
+      const records = await SalaryRecord.find({ month, year, subjectType: 'custom' })
+        .sort({ personName: 1 }).lean()
+      const roster = records.map(r => ({
+        subjectType: 'custom',
+        personName: r.personName,
+        personRole: r.personRole,
+        currency: r.currency || 'PKR',
+        outstandingAdvance: 0,
+        record: r,
+      }))
+      return res.json({ roster, month, year, scope, total: records.length, generated: records.length, pending: 0 })
+    }
 
     // ── Staff scope: management/staff users on payroll ──
     if (scope === 'staff') {
@@ -625,7 +681,7 @@ export async function getSalaryRoster(req, res) {
     // ── Tutor scope (default) ──
     const [tutors, records, activeAdvances] = await Promise.all([
       TutorProfile.find({ status: 'active' }).select('name tutorId salary').sort({ name: 1 }).lean(),
-      SalaryRecord.find({ month, year, subjectType: { $ne: 'staff' } }).populate('tutorId', 'name tutorId').lean(),
+      SalaryRecord.find({ month, year, subjectType: { $nin: ['staff', 'custom'] } }).populate('tutorId', 'name tutorId').lean(),
       Advance.find({ status: 'active' }).select('tutorId remainingBalance currency').lean(),
     ])
 

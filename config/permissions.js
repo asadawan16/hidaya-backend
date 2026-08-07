@@ -57,6 +57,11 @@ export const PERMISSIONS = {
   // Salary
   salary: ['salary.read', 'salary.manage'],
 
+  // Staff / HR — management & support employees (non-tutor, non-student portal
+  // users). staff.manage covers their HR profile (joining date, designation,
+  // department) + base salary + salary increments; staff.read is view-only.
+  staff: ['staff.read', 'staff.manage'],
+
   // Blogs
   blog: ['blog.read', 'blog.create', 'blog.update', 'blog.delete'],
 
@@ -153,6 +158,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'liveboard.view', 'chat.use',
     'schedule.read',
     'finance.read', 'finance.manage', 'revenue.read',
+    'staff.read',
     // Full billing surface (matches the pre-split finance.read+manage access)
     'payment.read', 'payment.create', 'payment.update',
     'payment_link.read', 'payment_link.create', 'payment_link.send', 'payment_link.delete',
@@ -181,6 +187,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'liveboard.view', 'chat.use',
     'whatsapp.send',
     'finance.read', 'revenue.read',
+    'staff.read',
     // Read-only billing surface (matches the pre-split finance.read access)
     'payment.read', 'payment_link.read', 'plan.read', 'discount_code.read',
     'family.read', 'family.create', 'family.update',

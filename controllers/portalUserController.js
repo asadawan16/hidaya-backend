@@ -7,7 +7,7 @@ export async function listUsers(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
-    const { search, status, role } = req.query
+    const { search, status, role, category } = req.query
 
     const filter = {}
 
@@ -21,6 +21,32 @@ export async function listUsers(req, res) {
     if (role) {
       const roleDoc = await Role.findOne({ key: role })
       if (roleDoc) filter.roles = roleDoc._id
+    }
+
+    // Category filter: staff | student | tutor. A user is a student/tutor if it
+    // holds that role OR is linked to a student/tutor profile; "staff" is everyone
+    // who is neither (management & support). Combined via $and so it stacks with
+    // the search $or without clobbering it.
+    if (['staff', 'student', 'tutor'].includes(category)) {
+      const stRoles = await Role.find({ key: { $in: ['student', 'tutor'] } }).select('_id key').lean()
+      const studentRoleId = stRoles.find(r => r.key === 'student')?._id
+      const tutorRoleId = stRoles.find(r => r.key === 'tutor')?._id
+      const and = []
+      if (category === 'student') {
+        const or = [{ linkedStudentId: { $nin: [null, undefined] } }]
+        if (studentRoleId) or.push({ roles: studentRoleId })
+        and.push({ $or: or })
+      } else if (category === 'tutor') {
+        const or = [{ linkedTutorId: { $nin: [null, undefined] } }]
+        if (tutorRoleId) or.push({ roles: tutorRoleId })
+        and.push({ $or: or })
+      } else { // staff = not a student and not a tutor
+        const excludeRoles = [studentRoleId, tutorRoleId].filter(Boolean)
+        and.push({ linkedStudentId: { $in: [null, undefined] } })
+        and.push({ linkedTutorId: { $in: [null, undefined] } })
+        if (excludeRoles.length) and.push({ roles: { $nin: excludeRoles } })
+      }
+      filter.$and = and
     }
 
     const total = await User.countDocuments(filter)

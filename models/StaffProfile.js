@@ -7,8 +7,9 @@ const staffProfileSchema = new mongoose.Schema({
     required: true,
     unique: true,
   },
-  title: { type: String, trim: true, default: '' },
+  title: { type: String, trim: true, default: '' }, // designation / job title
   department: { type: String, trim: true, default: '' },
+  joiningDate: { type: Date }, // informational — does NOT prorate first month's pay
   notes: { type: String, trim: true, default: '' },
   // Payroll: monthly base salary for this staff member (used as the default when
   // generating their salary record; editable per-month on the salary sheet).
