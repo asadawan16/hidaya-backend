@@ -14,6 +14,7 @@ import Badge from '../models/Badge.js'
 import Certificate from '../models/Certificate.js'
 import Complaint from '../models/Complaint.js'
 import LessonEntry from '../models/LessonEntry.js'
+import { assessmentBreakdown } from '../utils/assessmentScore.js'
 
 // Build a short human summary of what was taught in a daily lesson entry.
 function summarizeLesson(lesson) {
@@ -199,7 +200,7 @@ export async function getStudentProgressDetail(req, res) {
       ]),
 
       Assessment.find({ studentId })
-        .populate('templateId', 'name')
+        .populate('templateId')
         .populate('testTeacherId', 'name tutorId')
         .sort({ date: -1 })
         .limit(20)
@@ -369,15 +370,24 @@ export async function getStudentProgressDetail(req, res) {
         }
       }),
       feedbacks,
-      assessments: assessments.map(a => ({
-        _id: a._id,
-        date: a.date,
-        scope: a.scope,
-        overallScore: a.overallScore,
-        attendance: a.attendance,
-        templateName: a.templateId?.name || '',
-        testTeacher: a.testTeacherId?.name || '',
-      })),
+      assessments: assessments.map(a => {
+        const breakdown = assessmentBreakdown(a.templateId, a.responses || [])
+        const nums = breakdown.map(b => b.score).filter(n => typeof n === 'number')
+        return {
+          _id: a._id,
+          date: a.date,
+          scope: a.scope,
+          // Records saved before scoring existed have no stored score — derive it.
+          overallScore: a.overallScore != null
+            ? a.overallScore
+            : (nums.length ? Math.round(nums.reduce((x, y) => x + y, 0) / nums.length) : null),
+          attendance: a.attendance,
+          examinerNotes: a.examinerNotes || '',
+          templateName: a.templateId?.name || '',
+          testTeacher: a.testTeacherId?.name || '',
+          breakdown,
+        }
+      }),
       badges,
       certificates,
       parentComplaints,

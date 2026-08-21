@@ -2,6 +2,7 @@ import AssessmentTemplate from '../models/AssessmentTemplate.js'
 import Assessment from '../models/Assessment.js'
 import Student from '../models/Student.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { scoreAssessment } from '../utils/assessmentScore.js'
 import { createNotification } from './portalNotificationController.js'
 
 // ─── Templates ───
@@ -119,13 +120,19 @@ export async function createAssessment(req, res) {
 
     // Frontend sends responses as an object keyed by "sectionKey.fieldKey";
     // normalize to the array-of-{ key, value } shape the schema/report card expect.
-    const responses = Array.isArray(data.responses)
+    const rawResponses = Array.isArray(data.responses)
       ? data.responses
       : Object.entries(data.responses || {}).map(([key, value]) => ({ key, value }))
+
+    // Derive the per-field + overall percentage from the template so reports and
+    // the progress page have a real score to show.
+    const template = await AssessmentTemplate.findById(data.templateId).lean()
+    const { responses, overallScore } = scoreAssessment(template, rawResponses)
 
     const assessment = await Assessment.create({
       ...data,
       responses,
+      overallScore: data.overallScore != null ? data.overallScore : overallScore,
       conductedBy: req.userId,
     })
 
@@ -177,9 +184,14 @@ export async function updateAssessment(req, res) {
 
     // Same responses normalization as create: accept the frontend's object shape.
     if (data.responses !== undefined) {
-      data.responses = Array.isArray(data.responses)
+      const rawResponses = Array.isArray(data.responses)
         ? data.responses
         : Object.entries(data.responses || {}).map(([key, value]) => ({ key, value }))
+      const templateId = data.templateId || (await Assessment.findById(req.params.id).select('templateId').lean())?.templateId
+      const template = await AssessmentTemplate.findById(templateId).lean()
+      const { responses, overallScore } = scoreAssessment(template, rawResponses)
+      data.responses = responses
+      if (data.overallScore == null) data.overallScore = overallScore
     }
 
     const assessment = await Assessment.findByIdAndUpdate(

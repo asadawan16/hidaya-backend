@@ -4,6 +4,7 @@ import Assessment from '../models/Assessment.js'
 import TutorAttendance from '../models/TutorAttendance.js'
 import LessonEntry from '../models/LessonEntry.js'
 import Assignment from '../models/Assignment.js'
+import { assessmentBreakdown } from '../utils/assessmentScore.js'
 
 export async function getStudentReport(req, res) {
   try {
@@ -30,24 +31,72 @@ export async function getStudentReport(req, res) {
       .sort({ completedDate: 1 })
       .lean()
 
-    // Assessments
+    // Assessments — the full template is needed to label + score each response.
     const assessQuery = { studentId }
     if (hasDateFilter) assessQuery.date = dateFilter
-    const assessments = await Assessment.find(assessQuery)
-      .populate('templateId', 'name')
+    const assessmentDocs = await Assessment.find(assessQuery)
+      .populate('templateId')
       .populate('testTeacherId', 'name tutorId')
+      .populate('regularTeacherId', 'name tutorId')
       .sort({ date: -1 })
       .lean()
 
-    // Recent lessons
+    const assessments = assessmentDocs.map(a => {
+      const breakdown = assessmentBreakdown(a.templateId, a.responses || [])
+      const nums = breakdown.map(b => b.score).filter(n => typeof n === 'number')
+      // Older records were saved before scoring existed — derive on read.
+      const overallScore = a.overallScore != null
+        ? a.overallScore
+        : (nums.length ? Math.round(nums.reduce((x, y) => x + y, 0) / nums.length) : null)
+      return {
+        _id: a._id,
+        date: a.date,
+        scope: a.scope,
+        attendance: a.attendance,
+        overallScore,
+        examinerNotes: a.examinerNotes || '',
+        templateName: a.templateId?.name || '',
+        templateId: a.templateId ? { _id: a.templateId._id, name: a.templateId.name } : null,
+        testTeacher: a.testTeacherId?.name || '',
+        regularTeacher: a.regularTeacherId?.name || '',
+        breakdown,
+      }
+    })
+
+    // Recent lessons — flattened for display (label + coverage per logged item).
     const lessonQuery = { studentId }
     if (hasDateFilter) lessonQuery.date = dateFilter
-    const recentLessons = await LessonEntry.find(lessonQuery)
+    const lessonDocs = await LessonEntry.find(lessonQuery)
       .populate('items.curriculumItemId', 'label track')
       .populate('tutorId', 'name tutorId')
       .sort({ date: -1 })
       .limit(50)
       .lean()
+
+    const recentLessons = lessonDocs.map(l => ({
+      _id: l._id,
+      date: l.date,
+      kind: l.kind || 'daily',
+      classStart: l.classStart || '',
+      classEnd: l.classEnd || '',
+      tutorName: l.tutorId?.name || '',
+      customText: l.customText || '',
+      notes: l.notes || '',
+      // Track shown on the row = the first item's track (rows are per class).
+      track: l.items?.find(it => it.curriculumItemId?.track)?.curriculumItemId?.track || '',
+      items: (l.items || []).map(it => ({
+        label: it.curriculumItemId?.label || '',
+        track: it.curriculumItemId?.track || '',
+        portion: it.portion || '',
+        fromUnit: it.fromUnit || '',
+        toUnit: it.toUnit || '',
+        fromPage: it.fromPage ?? null,
+        toPage: it.toPage ?? null,
+        fromLine: it.fromLine ?? null,
+        toLine: it.toLine ?? null,
+        ayah: it.ayah || '',
+      })),
+    }))
 
     // Assignment history
     const assignments = await Assignment.find({ studentId })
