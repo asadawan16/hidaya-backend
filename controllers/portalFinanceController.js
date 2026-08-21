@@ -355,6 +355,10 @@ export async function generateSalary(req, res) {
 
     res.status(201).json(record)
   } catch (err) {
+    if (err?.code === 11000) {
+      console.error('Generate salary duplicate key:', err.keyPattern, err.keyValue)
+      return res.status(400).json({ error: 'A salary record already exists for this person and period' })
+    }
     console.error('Generate salary error:', err)
     res.status(500).json({ error: 'Server error' })
   }
@@ -626,89 +630,103 @@ export async function updateStaffBaseSalary(req, res) {
   }
 }
 
+// ── Custom roster: off-portal people (guard, sweeper, IT, off-portal manager). ──
+// No pre-existing subject roster — the rows ARE the custom records for the period,
+// added on demand via generateSalary({ subjectType: 'custom', ... }).
+async function customRosterRows(month, year) {
+  const records = await SalaryRecord.find({ month, year, subjectType: 'custom' })
+    .sort({ personName: 1 }).lean()
+  return records.map(r => ({
+    subjectType: 'custom',
+    personName: r.personName,
+    personRole: r.personRole,
+    currency: r.currency || 'PKR',
+    outstandingAdvance: 0,
+    record: r,
+  }))
+}
+
+// ── Staff roster: management/staff users on payroll ──
+async function staffRosterRows(month, year) {
+  const [subjects, records] = await Promise.all([
+    getStaffSubjects(),
+    SalaryRecord.find({ month, year, subjectType: 'staff' }).populate('userId', 'displayName email').lean(),
+  ])
+  const profiles = await StaffProfile.find({ userId: { $in: subjects.map(s => s._id) } }).lean()
+  const profByUser = new Map(profiles.map(p => [String(p.userId), p]))
+  const recByUser = new Map(records.map(r => [String(r.userId?._id || r.userId), r]))
+
+  return subjects
+    .sort((a, b) => String(a.displayName || a.email).localeCompare(String(b.displayName || b.email)))
+    .map(u => {
+      const prof = profByUser.get(String(u._id))
+      return {
+        subjectType: 'staff',
+        userId: { _id: u._id, displayName: u.displayName, email: u.email },
+        baseAmount: prof?.baseSalary || 0,
+        currency: prof?.salaryCurrency || 'PKR',
+        outstandingAdvance: 0, // staff have no advance ledger
+        record: recByUser.get(String(u._id)) || null,
+      }
+    })
+}
+
+// ── Tutor roster (default scope) ──
+async function tutorRosterRows(month, year) {
+  const [tutors, records, activeAdvances] = await Promise.all([
+    TutorProfile.find({ status: 'active' }).select('name tutorId salary').sort({ name: 1 }).lean(),
+    SalaryRecord.find({ month, year, subjectType: { $nin: ['staff', 'custom'] } }).populate('tutorId', 'name tutorId').lean(),
+    Advance.find({ status: 'active' }).select('tutorId remainingBalance currency').lean(),
+  ])
+
+  const recByTutor = new Map(records.map(r => [String(r.tutorId?._id || r.tutorId), r]))
+  const advByTutor = new Map()
+  for (const a of activeAdvances) {
+    const k = String(a.tutorId)
+    advByTutor.set(k, (advByTutor.get(k) || 0) + (a.remainingBalance || 0))
+  }
+
+  return tutors.map(t => ({
+    subjectType: 'tutor',
+    tutorId: { _id: t._id, name: t.name, tutorId: t.tutorId },
+    baseAmount: t.salary?.baseAmount || 0,
+    currency: t.salary?.currency || 'PKR',
+    outstandingAdvance: advByTutor.get(String(t._id)) || 0,
+    record: recByTutor.get(String(t._id)) || null,
+  }))
+}
+
 export async function getSalaryRoster(req, res) {
   try {
     const month = Number(req.query.month)
     const year = Number(req.query.year)
     if (!month || !year) return res.status(400).json({ error: 'month and year are required' })
 
-    const scope = ['staff', 'custom'].includes(req.query.scope) ? req.query.scope : 'tutor'
+    const scope = ['staff', 'custom', 'all'].includes(req.query.scope) ? req.query.scope : 'tutor'
 
-    // ── Custom scope: off-portal people (guard, sweeper, IT, off-portal manager). ──
-    // No pre-existing subject roster — the rows ARE the custom records for the period,
-    // added on demand via generateSalary({ subjectType: 'custom', ... }).
-    if (scope === 'custom') {
-      const records = await SalaryRecord.find({ month, year, subjectType: 'custom' })
-        .sort({ personName: 1 }).lean()
-      const roster = records.map(r => ({
-        subjectType: 'custom',
-        personName: r.personName,
-        personRole: r.personRole,
-        currency: r.currency || 'PKR',
-        outstandingAdvance: 0,
-        record: r,
-      }))
-      return res.json({ roster, month, year, scope, total: records.length, generated: records.length, pending: 0 })
-    }
-
-    // ── Staff scope: management/staff users on payroll ──
-    if (scope === 'staff') {
-      const [subjects, records] = await Promise.all([
-        getStaffSubjects(),
-        SalaryRecord.find({ month, year, subjectType: 'staff' }).populate('userId', 'displayName email').lean(),
+    let roster
+    if (scope === 'custom') roster = await customRosterRows(month, year)
+    else if (scope === 'staff') roster = await staffRosterRows(month, year)
+    else if (scope === 'all') {
+      // Everyone on payroll for the period: tutors → staff → off-portal people.
+      const parts = await Promise.all([
+        tutorRosterRows(month, year),
+        staffRosterRows(month, year),
+        customRosterRows(month, year),
       ])
-      const profiles = await StaffProfile.find({ userId: { $in: subjects.map(s => s._id) } }).lean()
-      const profByUser = new Map(profiles.map(p => [String(p.userId), p]))
-      const recByUser = new Map(records.map(r => [String(r.userId?._id || r.userId), r]))
+      roster = parts.flat()
+    } else roster = await tutorRosterRows(month, year)
 
-      const roster = subjects
-        .sort((a, b) => String(a.displayName || a.email).localeCompare(String(b.displayName || b.email)))
-        .map(u => {
-          const prof = profByUser.get(String(u._id))
-          return {
-            subjectType: 'staff',
-            userId: { _id: u._id, displayName: u.displayName, email: u.email },
-            baseAmount: prof?.baseSalary || 0,
-            currency: prof?.salaryCurrency || 'PKR',
-            outstandingAdvance: 0, // staff have no advance ledger
-            record: recByUser.get(String(u._id)) || null,
-          }
-        })
-
-      return res.json({ roster, month, year, scope, total: subjects.length, generated: records.length, pending: subjects.length - records.length })
-    }
-
-    // ── Tutor scope (default) ──
-    const [tutors, records, activeAdvances] = await Promise.all([
-      TutorProfile.find({ status: 'active' }).select('name tutorId salary').sort({ name: 1 }).lean(),
-      SalaryRecord.find({ month, year, subjectType: { $nin: ['staff', 'custom'] } }).populate('tutorId', 'name tutorId').lean(),
-      Advance.find({ status: 'active' }).select('tutorId remainingBalance currency').lean(),
-    ])
-
-    const recByTutor = new Map(records.map(r => [String(r.tutorId?._id || r.tutorId), r]))
-    const advByTutor = new Map()
-    for (const a of activeAdvances) {
-      const k = String(a.tutorId)
-      advByTutor.set(k, (advByTutor.get(k) || 0) + (a.remainingBalance || 0))
-    }
-
-    const roster = tutors.map(t => ({
-      subjectType: 'tutor',
-      tutorId: { _id: t._id, name: t.name, tutorId: t.tutorId },
-      baseAmount: t.salary?.baseAmount || 0,
-      currency: t.salary?.currency || 'PKR',
-      outstandingAdvance: advByTutor.get(String(t._id)) || 0,
-      record: recByTutor.get(String(t._id)) || null,
-    }))
+    const generated = roster.filter(r => r.record).length
 
     res.json({
       roster,
       month,
       year,
       scope,
-      total: tutors.length,
-      generated: records.length,
-      pending: tutors.length - records.length,
+      total: roster.length,
+      generated,
+      pending: roster.length - generated,
     })
   } catch (err) {
     console.error('Salary roster error:', err)
