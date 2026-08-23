@@ -5,6 +5,7 @@ import CurriculumItem from '../models/CurriculumItem.js'
 import Student from '../models/Student.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification, notifyRoles } from './portalNotificationController.js'
+import { summarizeLesson, detailLessonItems } from './portalStudentProgressController.js'
 
 // ─── Daily Lesson Entries ───
 
@@ -400,6 +401,60 @@ export async function getStudentCurriculumView(req, res) {
     res.json({ tracks, totalCompleted: approved.length, totalItems: allItems.length })
   } catch (err) {
     console.error('Student curriculum view error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /portal/lessons/history/:studentId — paginated daily-lesson history shaped
+// exactly like the staff-facing /portal/student-progress/:id/lessons feed, but
+// gated by `lesson.read` so a STUDENT can review their own lessons on My Progress.
+// Scope mirrors listLessons: a student only ever sees their own entries, a tutor
+// only entries they logged.
+export async function getStudentLessonHistory(req, res) {
+  try {
+    const { studentId } = req.params
+
+    if (req.user.linkedStudentId && String(req.user.linkedStudentId) !== String(studentId)) {
+      return res.status(403).json({ error: 'You do not have access to this student' })
+    }
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10))
+
+    const filter = { studentId }
+    if (req.user.linkedTutorId) filter.tutorId = req.user.linkedTutorId
+    if (req.query.dateFrom || req.query.dateTo) {
+      filter.date = {}
+      if (req.query.dateFrom) filter.date.$gte = new Date(req.query.dateFrom)
+      if (req.query.dateTo) filter.date.$lte = new Date(req.query.dateTo)
+    }
+
+    const total = await LessonEntry.countDocuments(filter)
+    const lessons = await LessonEntry.find(filter)
+      .sort({ date: -1, createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate('tutorId', 'name tutorId')
+      .populate('items.curriculumItemId', 'label track')
+      .lean()
+
+    const records = lessons.map(l => ({
+      _id: l._id,
+      date: l.date,
+      kind: l.kind,
+      classStart: l.classStart || '',
+      classEnd: l.classEnd || '',
+      taught: summarizeLesson(l),
+      notes: l.notes || '',
+      tutorName: l.tutorId?.name || '',
+      track: l.items?.[0]?.curriculumItemId?.track || '',
+      items: detailLessonItems(l),
+      customText: l.customText || '',
+    }))
+
+    res.json({ records, total, page, pages: Math.max(1, Math.ceil(total / limit)) })
+  } catch (err) {
+    console.error('Student lesson history error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

@@ -7,6 +7,8 @@ import FeePayment from '../models/FeePayment.js'
 import Student from '../models/Student.js'
 import Family from '../models/Family.js'
 import Payment from '../models/Payment.js'
+// Imported for its side effect: registers the User model so `recordedBy` populates.
+import '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 
 function computeStatus(rec) {
@@ -409,6 +411,206 @@ export async function listLinkablePayments(req, res) {
     res.json({ records })
   } catch (err) {
     console.error('List linkable payments error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Student fee history (one student's complete ledger) ───
+
+// "Today" in Asia/Karachi — the academy's billing clock, same boundary the grid uses.
+function karachiNow() {
+  const s = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  return { year: Number(s.slice(0, 4)), month: Number(s.slice(5, 7)) }
+}
+
+// Walks every month from the student's joining month up to the current month,
+// merging saved StudentFeeRecord cells with the auto-billed base fee for months
+// that were never recorded — the exact rule getFeeGrid applies, so the history
+// can never disagree with the yearly grid. Returns null if the student is gone.
+//
+// Shared by the staff "Student History" tab and the student's own My Fees page.
+async function buildStudentFeeHistory(studentId) {
+  const student = await Student.findById(studentId)
+    .select('name rollNo status familyId billing joiningDate createdAt')
+    .populate('familyId', 'familyCode primaryGuardian')
+    .lean()
+  if (!student) return null
+
+  const [cells, payments] = await Promise.all([
+    StudentFeeRecord.find({ studentId }).lean(),
+    FeePayment.find({ 'allocations.studentId': studentId })
+      .populate('recordedBy', 'displayName')
+      .populate('familyId', 'familyCode')
+      .populate('linkedPaymentId', 'studentName amount currency gatewayTransactionId invoiceNo')
+      .sort({ paidAt: -1 })
+      .lean(),
+  ])
+
+  const now = karachiNow()
+  const baseFee = student.billing?.fee || 0
+  const currency = student.billing?.currency || 'PKR'
+  const autoBillable = student.status !== 'left' && baseFee > 0
+
+  // Window start: the joining month, or the earliest recorded cell if that's older.
+  const jd = student.joiningDate || student.createdAt
+  const j = jd ? new Date(jd) : null
+  let startYear = j && !isNaN(j.getTime()) ? j.getUTCFullYear() : now.year
+  let startMonth = j && !isNaN(j.getTime()) ? j.getUTCMonth() + 1 : 1
+  for (const c of cells) {
+    if (c.year < startYear || (c.year === startYear && c.month < startMonth)) {
+      startYear = c.year; startMonth = c.month
+    }
+  }
+  // Window end: the current month, or a later month already paid in advance.
+  let endYear = now.year, endMonth = now.month
+  for (const c of cells) {
+    if (c.year > endYear || (c.year === endYear && c.month > endMonth)) {
+      endYear = c.year; endMonth = c.month
+    }
+  }
+
+  const cellMap = new Map(cells.map(c => [`${c.year}-${c.month}`, c]))
+
+  // Payments that touched a given month, with the slice allocated to this student.
+  const paymentsForMonth = (year, month) => payments
+    .filter(p => (p.allocations || []).some(a =>
+      String(a.studentId) === String(studentId) && a.year === year && a.month === month))
+    .map(p => ({
+      _id: p._id,
+      amount: (p.allocations || [])
+        .filter(a => String(a.studentId) === String(studentId) && a.year === year && a.month === month)
+        .reduce((sum, a) => sum + (a.amount || 0), 0),
+      currency: p.currency,
+      method: p.method,
+      reference: p.reference || '',
+      payerName: p.payerName || '',
+      paidAt: p.paidAt,
+    }))
+
+  const months = []
+  let y = startYear, m = startMonth
+  let guard = 0
+  while ((y < endYear || (y === endYear && m <= endMonth)) && guard++ < 600) {
+    const cell = cellMap.get(`${y}-${m}`)
+    const isDueYet = y < now.year || (y === now.year && m <= now.month)
+    if (cell) {
+      months.push({
+        year: y, month: m,
+        amount: cell.amount || 0,
+        amountPaid: cell.amountPaid || 0,
+        currency: cell.currency || currency,
+        status: cell.status,
+        method: cell.method || '',
+        note: cell.note || '',
+        paidAt: cell.paidAt || null,
+        auto: false,
+        payments: paymentsForMonth(y, m),
+      })
+    } else if (isDueYet && autoBillable) {
+      // No manual record and the month is on/after joining → auto-billed as pending.
+      months.push({
+        year: y, month: m,
+        amount: baseFee,
+        amountPaid: 0,
+        currency,
+        status: 'pending',
+        method: '', note: '', paidAt: null,
+        auto: true,
+        payments: [],
+      })
+    }
+    m += 1
+    if (m > 12) { m = 1; y += 1 }
+  }
+
+  months.sort((a, b) => (b.year - a.year) || (b.month - a.month))
+
+  // Cells carry their own currency (a student can be re-priced from PKR to USD
+  // mid-history), so totals are grouped per currency and never summed across.
+  const byCurrency = new Map()
+  for (const r of months) {
+    if (r.status === 'waived') continue
+    const c = r.currency || currency
+    const t = byCurrency.get(c) || { currency: c, billed: 0, paid: 0, due: 0 }
+    t.billed += r.amount || 0
+    t.paid += r.amountPaid || 0
+    t.due += Math.max(0, (r.amount || 0) - (r.amountPaid || 0))
+    byCurrency.set(c, t)
+  }
+  const totalsByCurrency = [...byCurrency.values()]
+    .filter(t => t.billed || t.paid || t.due)
+    .sort((a, b) => (a.currency === currency ? -1 : b.currency === currency ? 1 : 0))
+  // Headline figures = the student's own billing currency (falls back to the first
+  // currency present when nothing was ever recorded in it).
+  const totals = totalsByCurrency.find(t => t.currency === currency)
+    || totalsByCurrency[0]
+    || { currency, billed: 0, paid: 0, due: 0 }
+
+  const currentMonth = months.find(r => r.year === now.year && r.month === now.month) || null
+
+  return {
+    student: {
+      _id: student._id,
+      name: student.name,
+      rollNo: student.rollNo,
+      status: student.status,
+      baseFee,
+      currency,
+      cycle: student.billing?.cycle || 'monthly',
+      familyCode: student.familyId?.familyCode || '',
+    },
+    months,
+    payments: payments.map(p => ({
+      _id: p._id,
+      amount: p.amount,
+      allocatedToStudent: (p.allocations || [])
+        .filter(a => String(a.studentId) === String(studentId))
+        .reduce((sum, a) => sum + (a.amount || 0), 0),
+      currency: p.currency,
+      method: p.method,
+      reference: p.reference || '',
+      payerName: p.payerName || '',
+      note: p.note || '',
+      paidAt: p.paidAt,
+      familyCode: p.familyId?.familyCode || '',
+      recordedBy: p.recordedBy?.displayName || '',
+      gatewayRef: p.linkedPaymentId?.gatewayTransactionId || '',
+      months: (p.allocations || [])
+        .filter(a => String(a.studentId) === String(studentId))
+        .map(a => ({ year: a.year, month: a.month, amount: a.amount || 0 })),
+    })),
+    totals,
+    totalsByCurrency,
+    current: currentMonth,
+    now,
+  }
+}
+
+// GET /portal/fees/student/:studentId/history — staff view (fee.read).
+export async function getStudentFeeHistory(req, res) {
+  try {
+    const data = await buildStudentFeeHistory(req.params.studentId)
+    if (!data) return res.status(404).json({ error: 'Student not found' })
+    res.json(data)
+  } catch (err) {
+    console.error('Student fee history error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /portal/fees/my — the logged-in student's own ledger. Deliberately NOT
+// gated by fee.read (students hold no finance permissions); the account's
+// linkedStudentId IS the authorization, so no id can be passed in.
+export async function getMyFees(req, res) {
+  try {
+    if (!req.user.linkedStudentId) {
+      return res.status(403).json({ error: 'Your account is not linked to a student record' })
+    }
+    const data = await buildStudentFeeHistory(req.user.linkedStudentId)
+    if (!data) return res.status(404).json({ error: 'Student not found' })
+    res.json(data)
+  } catch (err) {
+    console.error('My fees error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

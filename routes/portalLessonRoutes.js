@@ -4,7 +4,7 @@ import {
   listLessons, createLesson, getLesson,
   listPermanentLessons, submitPermanentLesson,
   approvePermanentLesson, rejectPermanentLesson,
-  getStudentProgress, getStudentCurriculumView,
+  getStudentProgress, getStudentCurriculumView, getStudentLessonHistory,
 } from '../controllers/portalLessonController.js'
 
 const router = Router()
@@ -23,6 +23,8 @@ router.post('/permanent/:id/reject', requirePermission('lesson.approve'), reject
 // Student progress
 router.get('/progress/:studentId', requirePermission('lesson.read'), getStudentProgress)
 router.get('/curriculum-view/:studentId', requirePermission('lesson.read'), getStudentCurriculumView)
+// Daily-lesson history for one student — powers the student's own My Progress page
+router.get('/history/:studentId', requirePermission('lesson.read'), getStudentLessonHistory)
 
 // Single lesson by ID — AFTER all specific routes
 router.get('/:id', requirePermission('lesson.read'), getLesson)

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose'
 import Advance from '../models/Advance.js'
+import TutorProfile from '../models/TutorProfile.js'
 import User from '../models/User.js'
 import Notification from '../models/Notification.js'
 import { logActivity } from '../utils/activityLogger.js'
@@ -364,6 +365,65 @@ export async function deleteAdvance(req, res) {
     res.json({ success: true })
   } catch (err) {
     console.error('Delete advance error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /portal/advances/by-person — one row per tutor who has ever taken an
+// advance, with lifetime totals so management can deep-dive a person's history
+// instead of scrolling a flat list of individual advances.
+export async function listAdvancesByPerson(req, res) {
+  try {
+    const match = {}
+    // Tutors only ever see themselves, regardless of query params.
+    if (req.user.linkedTutorId) match.tutorId = new mongoose.Types.ObjectId(String(req.user.linkedTutorId))
+    if (req.query.type) match.type = req.query.type
+
+    const rows = await Advance.aggregate([
+      ...(Object.keys(match).length ? [{ $match: match }] : []),
+      {
+        $group: {
+          _id: '$tutorId',
+          currency: { $first: '$currency' },
+          advanceCount: { $sum: 1 },
+          activeCount: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+          requestedCount: { $sum: { $cond: [{ $eq: ['$status', 'requested'] }, 1, 0] } },
+          fullyPaidCount: { $sum: { $cond: [{ $eq: ['$status', 'fully_paid'] }, 1, 0] } },
+          // "Taken" excludes rejected/cancelled — money that never left the till.
+          totalTaken: { $sum: { $cond: [{ $in: ['$status', ['active', 'fully_paid']] }, '$totalAmount', 0] } },
+          totalRepaid: { $sum: '$amountRepaid' },
+          outstanding: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, '$remainingBalance', 0] } },
+          firstAdvanceAt: { $min: '$startDate' },
+          lastAdvanceAt: { $max: '$startDate' },
+          installmentCount: { $sum: { $size: { $ifNull: ['$installments', []] } } },
+        },
+      },
+      { $sort: { outstanding: -1, totalTaken: -1 } },
+    ])
+
+    const tutors = await TutorProfile.find({ _id: { $in: rows.map(r => r._id) } })
+      .select('name tutorId status')
+      .lean()
+    const byId = new Map(tutors.map(t => [String(t._id), t]))
+
+    const records = rows.map(r => ({
+      tutorId: byId.get(String(r._id)) || { _id: r._id, name: 'Unknown Tutor', tutorId: '' },
+      currency: r.currency || 'PKR',
+      advanceCount: r.advanceCount,
+      activeCount: r.activeCount,
+      requestedCount: r.requestedCount,
+      fullyPaidCount: r.fullyPaidCount,
+      totalTaken: r.totalTaken,
+      totalRepaid: r.totalRepaid,
+      outstanding: r.outstanding,
+      installmentCount: r.installmentCount,
+      firstAdvanceAt: r.firstAdvanceAt,
+      lastAdvanceAt: r.lastAdvanceAt,
+    }))
+
+    res.json({ records, total: records.length })
+  } catch (err) {
+    console.error('Advances by person error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

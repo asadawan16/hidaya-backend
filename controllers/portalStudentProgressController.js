@@ -14,10 +14,13 @@ import Badge from '../models/Badge.js'
 import Certificate from '../models/Certificate.js'
 import Complaint from '../models/Complaint.js'
 import LessonEntry from '../models/LessonEntry.js'
+import StudentStatusHistory from '../models/StudentStatusHistory.js'
 import { assessmentBreakdown } from '../utils/assessmentScore.js'
 
 // Build a short human summary of what was taught in a daily lesson entry.
-function summarizeLesson(lesson) {
+// Exported so the lesson-history endpoint (portalLessonController) shapes rows
+// identically — the student and staff lesson views render the same component.
+export function summarizeLesson(lesson) {
   if (!lesson) return ''
   if (lesson.customText?.trim()) return lesson.customText.trim()
   const parts = (lesson.items || []).map(it => {
@@ -35,7 +38,7 @@ function summarizeLesson(lesson) {
 // Structured per-item detail for the progress page — exposes EVERYTHING entered
 // while logging (page + line numbers, ayah reference, hifz portion) so the client
 // can render the full lesson, not just the one-line summary.
-function detailLessonItems(lesson) {
+export function detailLessonItems(lesson) {
   return (lesson.items || []).map(it => ({
     label: it.curriculumItemId?.label || it.fromUnit || '',
     track: it.curriculumItemId?.track || '',
@@ -168,7 +171,7 @@ export async function getStudentProgressDetail(req, res) {
     const startRef = student.joiningDate ? new Date(student.joiningDate) : new Date(student.createdAt || Date.now())
     const now = new Date()
 
-    const [items, approved, recentSessions, classStats, assessments, badges, certificates, complaintsRaw, assignments] = await Promise.all([
+    const [items, approved, recentSessions, classStats, assessments, badges, certificates, complaintsRaw, assignments, statusHistory] = await Promise.all([
       CurriculumItem.find({ active: { $ne: false } })
         .select('track type label order expectedDays meta')
         .sort({ track: 1, order: 1 })
@@ -210,7 +213,11 @@ export async function getStudentProgressDetail(req, res) {
 
       Certificate.find({ studentId, status: 'approved' }).sort({ issuedDate: -1 }).lean(),
 
-      Complaint.find({ studentId })
+      // Management-only complaints never reach tutors.
+      Complaint.find({
+        studentId,
+        ...(req.user.linkedTutorId ? { visibility: { $ne: 'management_only' } } : {}),
+      })
         .populate('againstTutorId', 'name tutorId')
         .populate('createdBy', 'displayName')
         .sort({ createdAt: -1 })
@@ -219,6 +226,12 @@ export async function getStudentProgressDetail(req, res) {
       Assignment.find({ studentId, endDate: null })
         .populate('tutorId', 'name tutorId')
         .select('tutorId track type startDate')
+        .lean(),
+
+      // Enrolment lifecycle — when the student left, went on leave, came back.
+      StudentStatusHistory.find({ studentId })
+        .populate('changedBy', 'displayName email')
+        .sort({ effectiveDate: -1, createdAt: -1 })
         .lean(),
     ])
 
@@ -392,6 +405,13 @@ export async function getStudentProgressDetail(req, res) {
       certificates,
       parentComplaints,
       managementComplaints,
+      statusHistory: statusHistory.map(h => ({
+        _id: h._id,
+        status: h.status,
+        date: h.effectiveDate || h.createdAt,
+        comment: h.comment || '',
+        changedBy: h.changedBy?.displayName || h.changedBy?.email || '',
+      })),
     })
   } catch (err) {
     console.error('Student progress detail error:', err)

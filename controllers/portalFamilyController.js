@@ -3,16 +3,21 @@ import Student from '../models/Student.js'
 import StudentRelationship from '../models/StudentRelationship.js'
 import { logActivity } from '../utils/activityLogger.js'
 
-// Generate next family code: FAM001, FAM002, ...
+// Generate next family code: HF001, HF002, ...
+// Families created before the rename still carry FAM### codes, so the counter
+// walks BOTH prefixes and continues past the highest number seen — no two
+// families ever share a number, whichever prefix they were created under.
 async function generateFamilyCode() {
-  const last = await Family.findOne({ familyCode: { $regex: /^FAM\d+$/ } })
-    .sort({ familyCode: -1 })
+  const existing = await Family.find({ familyCode: { $regex: /^(HF|FAM)\d+$/ } })
     .select('familyCode')
     .lean()
 
-  if (!last) return 'FAM001'
-  const num = parseInt(last.familyCode.replace('FAM', ''), 10) + 1
-  return `FAM${String(num).padStart(3, '0')}`
+  const highest = existing.reduce((max, f) => {
+    const n = parseInt(String(f.familyCode).replace(/^(HF|FAM)/, ''), 10)
+    return Number.isFinite(n) && n > max ? n : max
+  }, 0)
+
+  return `HF${String(highest + 1).padStart(3, '0')}`
 }
 
 // ─── Check family code availability ───

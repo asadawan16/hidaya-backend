@@ -200,3 +200,41 @@ export async function createStaffIncrement(req, res) {
     res.status(500).json({ error: 'Server error' })
   }
 }
+
+// GET /portal/staff/picker — typeahead source for AsyncSelect(resource="staff").
+// Same "who counts as staff" rule as the list, trimmed to what a dropdown needs.
+export async function pickerStaff(req, res) {
+  try {
+    const lim = Math.max(1, Math.min(30, parseInt(req.query.limit, 10) || 20))
+    const { q, ids, status } = req.query
+
+    const extra = {}
+    if (ids) {
+      // Hydrating pre-selected values — resolve them regardless of status filters.
+      const idList = String(ids).split(',').map(s => s.trim()).filter(Boolean).slice(0, 50)
+      extra._id = { $in: idList }
+    } else if (status) {
+      extra.status = status
+    }
+    if (!ids && q) {
+      const regex = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      extra.$or = [{ displayName: regex }, { email: regex }]
+    }
+
+    // buildStaffFilter already sets `_id: { $nin: tutorOwnerIds }`, so an explicit
+    // id lookup has to be merged with $and rather than overwrite it.
+    const base = await buildStaffFilter()
+    const filter = extra._id ? { $and: [base, extra] } : { ...base, ...extra }
+
+    const records = await User.find(filter)
+      .select('displayName email status')
+      .sort({ displayName: 1 })
+      .limit(ids ? 50 : lim)
+      .lean()
+
+    res.json(records)
+  } catch (err) {
+    console.error('Staff picker error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}

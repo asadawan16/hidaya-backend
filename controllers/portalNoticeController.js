@@ -269,12 +269,15 @@ export async function listComplaints(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
-    const { studentId, againstTutorId, status } = req.query
+    const { studentId, againstTutorId, status, visibility } = req.query
 
     const filter = {}
     if (studentId) filter.studentId = studentId
     if (againstTutorId) filter.againstTutorId = againstTutorId
     if (status) filter.status = status
+    if (visibility) filter.visibility = visibility
+    // Management-only complaints never reach tutors.
+    if (req.user.linkedTutorId) filter.visibility = { $ne: 'management_only' }
 
     const total = await Complaint.countDocuments(filter)
     const pages = Math.ceil(total / lim) || 1

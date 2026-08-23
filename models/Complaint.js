@@ -30,9 +30,12 @@ const complaintSchema = new mongoose.Schema({
     default: 'base',
   },
   bold: { type: Boolean, default: false },
+  // Who may read this complaint. `management_only` keeps it away from tutors
+  // entirely (enforced in listComplaints + the student-progress detail) — used
+  // when the complaint is about a tutor and shouldn't reach them.
   visibility: {
     type: String,
-    enum: ['teacher_only', 'all_staff'],
+    enum: ['teacher_only', 'all_staff', 'management_only'],
     default: 'teacher_only',
   },
   status: {

@@ -2,13 +2,15 @@ import { Router } from 'express'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
   listAdvances, createAdvance, updateAdvance, deleteAdvance, getAdvance,
-  requestAdvance, approveAdvance, rejectAdvance,
+  requestAdvance, approveAdvance, rejectAdvance, listAdvancesByPerson,
 } from '../controllers/portalAdvanceController.js'
 
 const router = Router()
 router.use(portalAuth)
 
 router.get('/', requirePermission('advance.read'), listAdvances)
+// Per-person rollup — MUST precede /:id so "by-person" isn't cast as an ObjectId
+router.get('/by-person', requirePermission('advance.read'), listAdvancesByPerson)
 // Tutor self-service request (before the /:id routes)
 router.post('/request', requirePermission('advance.request'), requestAdvance)
 router.get('/:id', requirePermission('advance.read'), getAdvance)

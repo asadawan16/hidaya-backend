@@ -28,8 +28,12 @@ export async function listPayments(req, res) {
       filter.$or = [
         { studentName: regex },
         { studentEmail: regex },
+        { studentPhone: regex },
+        { studentNames: regex },
         { invoiceNo: regex },
         { gatewayOrderId: regex },
+        { gatewayTransactionId: regex },
+        { discountCode: regex },
       ]
     }
 
@@ -43,8 +47,21 @@ export async function listPayments(req, res) {
     const pages = Math.ceil(total / lim) || 1
     const safePage = Math.min(pg, pages)
 
+    // Everything a payment carries — the originating link (payee, description,
+    // line items, notes, tax) and the student/family it was received against — so
+    // the Payments page can show what the money was actually for.
     const records = await Payment.find(filter)
-      .populate('paymentLink', 'payeeName description')
+      .populate({
+        path: 'paymentLink',
+        select: 'payeeName payeeEmail payeePhone description items listType notes invoiceNo token taxType taxValue currency amount student familyId studentIds expiresAfterPayment createdAt',
+        populate: [
+          { path: 'student', select: 'name rollNo' },
+          { path: 'familyId', select: 'familyCode primaryGuardian' },
+          { path: 'studentIds', select: 'name rollNo' },
+        ],
+      })
+      .populate('student', 'name rollNo status')
+      .populate('discountCodeRef', 'code discountAmount currency usageType')
       .sort({ createdAt: -1 })
       .skip((safePage - 1) * lim)
       .limit(lim)
@@ -170,8 +187,10 @@ export async function listPaymentLinks(req, res) {
       filter.$or = [
         { payeeName: regex },
         { payeeEmail: regex },
+        { payeePhone: regex },
         { description: regex },
         { invoiceNo: regex },
+        { token: regex },
       ]
     }
 
@@ -248,7 +267,15 @@ export async function createPaymentLink(req, res) {
       taxValue: ['percentage', 'fixed'].includes(taxType) ? Math.max(0, Number(taxValue) || 0) : 0,
       notes: notes || '',
       expiresAfterPayment: expiresAfterPayment !== undefined ? expiresAfterPayment : true,
-      items: items || [],
+      // items is [String] — coerce any object shape a client sends into a line of
+      // text so it never lands in Mongo as "[object Object]".
+      items: (items || [])
+        .map(it => (typeof it === 'string'
+          ? it
+          : [it?.description, it?.amount != null && it?.amount !== '' ? `— ${it.amount}` : '']
+            .filter(Boolean).join(' ')))
+        .map(s => String(s).trim())
+        .filter(Boolean),
       listType: listType || 'bullet',
       invoiceNo,
     }
