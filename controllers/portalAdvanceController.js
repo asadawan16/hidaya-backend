@@ -12,6 +12,33 @@ async function tutorUserId(tutorId) {
   return u?._id || null
 }
 
+// The portal account that owns an advance, whichever subject it belongs to —
+// this is who gets notified about approvals, repayments and cancellations.
+async function subjectUserId(advance) {
+  if (advance.subjectType === 'staff') return advance.userId || null
+  return tutorUserId(advance.tutorId)
+}
+
+// Display name for logs/notifications without another round trip when populated.
+const subjectName = (advance) =>
+  advance?.subjectType === 'staff'
+    ? (advance.userId?.displayName || advance.userId?.email || 'A staff member')
+    : (advance.tutorId?.name || 'A tutor')
+
+// Populate both subject refs — only one is ever set, so the unused one is null.
+const withSubject = (query) => query
+  .populate('tutorId', 'name tutorId')
+  .populate('userId', 'displayName email')
+
+// Mongo filter selecting only the caller's OWN advances. Tutors are matched by
+// their linked tutor profile, everyone else by their user id. Returns null when
+// the account has no advance subject at all.
+function ownSubjectFilter(user, userId) {
+  if (user?.linkedTutorId) return { subjectType: 'tutor', tutorId: user.linkedTutorId }
+  if (userId) return { subjectType: 'staff', userId }
+  return null
+}
+
 const REVIEWER_ROLES = ['super_admin', 'admin']
 
 // Persist + push a notification to all advance reviewers (except the actor).
@@ -32,12 +59,23 @@ export async function listAdvances(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 20))
-    const { tutorId, status, type } = req.query
+    const { tutorId, userId, subjectType, status, type, mine } = req.query
 
     const filter = {}
     // Tutors only ever see their own advances, regardless of query params.
-    if (req.user.linkedTutorId) filter.tutorId = req.user.linkedTutorId
-    else if (tutorId) filter.tutorId = tutorId
+    // `mine=1` (the My Advances page) self-scopes any account — tutor or staff.
+    if (req.user.linkedTutorId) {
+      filter.subjectType = 'tutor'
+      filter.tutorId = req.user.linkedTutorId
+    } else if (mine === '1' || mine === 'true') {
+      const own = ownSubjectFilter(req.user, req.userId)
+      if (!own) return res.json({ records: [], total: 0, page: 1, pages: 1, stats: {} })
+      Object.assign(filter, own)
+    } else {
+      if (subjectType) filter.subjectType = subjectType
+      if (tutorId) { filter.tutorId = tutorId; filter.subjectType = 'tutor' }
+      if (userId) { filter.userId = userId; filter.subjectType = 'staff' }
+    }
     if (status) filter.status = status
     if (type) filter.type = type
 
@@ -45,8 +83,7 @@ export async function listAdvances(req, res) {
     const pages = Math.ceil(total / lim) || 1
     const safePage = Math.min(pg, pages)
 
-    const records = await Advance.find(filter)
-      .populate('tutorId', 'name tutorId')
+    const records = await withSubject(Advance.find(filter))
       .populate('approvedBy', 'displayName')
       .populate('requestedBy', 'displayName')
       .populate('reviewedBy', 'displayName')
@@ -58,6 +95,8 @@ export async function listAdvances(req, res) {
     // Aggregate stats across the whole filtered set (not just the current page).
     const matchStage = {}
     if (filter.tutorId) matchStage.tutorId = new mongoose.Types.ObjectId(String(filter.tutorId))
+    if (filter.userId) matchStage.userId = new mongoose.Types.ObjectId(String(filter.userId))
+    if (filter.subjectType) matchStage.subjectType = filter.subjectType
     if (filter.status) matchStage.status = filter.status
     if (filter.type) matchStage.type = filter.type
     const [agg] = await Advance.aggregate([
@@ -88,13 +127,26 @@ export async function listAdvances(req, res) {
 
 export async function createAdvance(req, res) {
   try {
-    const { tutorId, type, totalAmount, currency, installmentAmount, installmentFrequency, reason, startDate } = req.body
-    if (!tutorId || !type || !totalAmount || !installmentAmount || !startDate) {
-      return res.status(400).json({ error: 'tutorId, type, totalAmount, installmentAmount, and startDate are required' })
+    const { tutorId, userId, type, totalAmount, currency, installmentAmount, installmentFrequency, reason, startDate } = req.body
+    // Subject is whichever ref was supplied; explicit subjectType wins so a bad
+    // pairing (staff + tutorId) fails validation instead of silently mis-filing.
+    const isStaff = req.body.subjectType === 'staff' || (!tutorId && !!userId)
+    const subjectRef = isStaff ? userId : tutorId
+
+    if (!subjectRef || !type || !totalAmount || !installmentAmount || !startDate) {
+      return res.status(400).json({
+        error: `${isStaff ? 'userId' : 'tutorId'}, type, totalAmount, installmentAmount, and startDate are required`,
+      })
+    }
+    if (isStaff) {
+      const staffUser = await User.findById(userId).select('_id').lean()
+      if (!staffUser) return res.status(404).json({ error: 'Staff member not found' })
     }
 
     const advance = await Advance.create({
-      tutorId, type, totalAmount,
+      subjectType: isStaff ? 'staff' : 'tutor',
+      ...(isStaff ? { userId } : { tutorId }),
+      type, totalAmount,
       currency: currency || 'PKR',
       installmentAmount,
       installmentFrequency: installmentFrequency || 'monthly',
@@ -103,18 +155,17 @@ export async function createAdvance(req, res) {
       approvedBy: req.userId,
     })
 
-    await logActivity({
-      level: 'info', category: 'finance', action: 'advance_created',
-      message: `Advance/loan created for tutor ${tutorId}: ${totalAmount}`,
-      req,
-    })
-
-    const populated = await Advance.findById(advance._id)
-      .populate('tutorId', 'name tutorId')
+    const populated = await withSubject(Advance.findById(advance._id))
       .populate('approvedBy', 'displayName')
       .lean()
 
-    const uid = await tutorUserId(tutorId)
+    await logActivity({
+      level: 'info', category: 'finance', action: 'advance_created',
+      message: `Advance/loan created for ${isStaff ? 'staff' : 'tutor'} ${subjectName(populated)}: ${totalAmount}`,
+      req, meta: { advanceId: advance._id },
+    })
+
+    const uid = isStaff ? userId : await tutorUserId(tutorId)
     if (uid) {
       await createNotification({
         userId: uid,
@@ -132,18 +183,23 @@ export async function createAdvance(req, res) {
   }
 }
 
-// ─── Tutor requests an advance (status: requested) ───
+// ─── A tutor or staff member requests an advance for themselves (→ requested) ───
 export async function requestAdvance(req, res) {
   try {
-    const tutorId = req.user.linkedTutorId
-    if (!tutorId) return res.status(400).json({ error: 'Your account is not linked to a tutor profile' })
+    // Tutors file against their tutor profile; everyone else against their user
+    // account. Students are excluded — they aren't on payroll.
+    if (req.user.linkedStudentId) {
+      return res.status(400).json({ error: 'Student accounts cannot request salary advances' })
+    }
+    const own = ownSubjectFilter(req.user, req.userId)
+    if (!own) return res.status(400).json({ error: 'Your account cannot request an advance' })
 
     const { type, totalAmount, currency, installmentAmount, installmentFrequency, reason, startDate } = req.body
     const amount = Number(totalAmount)
     if (!amount || amount <= 0) return res.status(400).json({ error: 'A valid amount is required' })
 
     const advance = await Advance.create({
-      tutorId,
+      ...own,
       type: type || 'short_term',
       totalAmount: amount,
       currency: currency || 'PKR',
@@ -156,22 +212,25 @@ export async function requestAdvance(req, res) {
       requestedBy: req.userId,
     })
 
+    const populated = await withSubject(Advance.findById(advance._id)).lean()
+    const requesterName = subjectName(populated)
+
     await logActivity({
       level: 'info', category: 'finance', action: 'advance_requested',
-      message: `Advance requested by tutor ${tutorId}: ${amount}`, req,
+      message: `Advance requested by ${own.subjectType} ${requesterName}: ${amount}`, req,
       meta: { advanceId: advance._id },
     })
 
-    const populated = await Advance.findById(advance._id).populate('tutorId', 'name tutorId').lean()
-    const tutorName = populated?.tutorId?.name || 'A tutor'
     await notifyReviewers({
       type: 'advance_requested',
       title: 'Advance Requested',
-      body: `${tutorName} requested an advance of ${advance.currency} ${amount.toLocaleString()}.`,
+      body: `${requesterName} requested an advance of ${advance.currency} ${amount.toLocaleString()}.`,
       payload: { advanceId: advance._id },
       exceptUserId: req.userId,
     })
-    REVIEWER_ROLES.forEach(role => emitToRole(role, 'advance_request', { advanceId: advance._id, tutorName, amount }))
+    REVIEWER_ROLES.forEach(role => emitToRole(role, 'advance_request', {
+      advanceId: advance._id, tutorName: requesterName, subjectType: own.subjectType, amount,
+    }))
 
     res.status(201).json(populated)
   } catch (err) {
@@ -202,10 +261,10 @@ export async function approveAdvance(req, res) {
       message: `Advance ${advance._id} approved`, req, meta: { advanceId: advance._id },
     })
 
-    const populated = await Advance.findById(advance._id)
-      .populate('tutorId', 'name tutorId').populate('approvedBy', 'displayName').lean()
+    const populated = await withSubject(Advance.findById(advance._id))
+      .populate('approvedBy', 'displayName').lean()
 
-    const uid = await tutorUserId(advance.tutorId)
+    const uid = await subjectUserId(advance)
     if (uid) {
       const n = await createNotification({
         userId: uid, type: 'advance_approved', title: 'Advance Approved',
@@ -240,9 +299,9 @@ export async function rejectAdvance(req, res) {
       message: `Advance ${advance._id} rejected`, req, meta: { advanceId: advance._id },
     })
 
-    const populated = await Advance.findById(advance._id).populate('tutorId', 'name tutorId').lean()
+    const populated = await withSubject(Advance.findById(advance._id)).lean()
 
-    const uid = await tutorUserId(advance.tutorId)
+    const uid = await subjectUserId(advance)
     if (uid) {
       const n = await createNotification({
         userId: uid, type: 'advance_rejected', title: 'Advance Rejected',
@@ -304,12 +363,11 @@ export async function updateAdvance(req, res) {
 
     await advance.save()
 
-    const populated = await Advance.findById(advance._id)
-      .populate('tutorId', 'name tutorId')
+    const populated = await withSubject(Advance.findById(advance._id))
       .populate('approvedBy', 'displayName')
       .lean()
 
-    const uid = await tutorUserId(advance.tutorId)
+    const uid = await subjectUserId(advance)
     if (uid) {
       const what = status === 'cancelled'
         ? 'Your advance has been cancelled.'
@@ -334,8 +392,7 @@ export async function updateAdvance(req, res) {
 
 export async function getAdvance(req, res) {
   try {
-    const advance = await Advance.findById(req.params.id)
-      .populate('tutorId', 'name tutorId')
+    const advance = await withSubject(Advance.findById(req.params.id))
       .populate('approvedBy', 'displayName')
       .populate('requestedBy', 'displayName')
       .populate('reviewedBy', 'displayName')
@@ -358,7 +415,7 @@ export async function deleteAdvance(req, res) {
 
     await logActivity({
       level: 'warn', category: 'finance', action: 'advance_deleted',
-      message: `Advance ${advance._id} deleted (tutor ${advance.tutorId})`,
+      message: `Advance ${advance._id} deleted (${advance.subjectType} ${advance.tutorId || advance.userId})`,
       req, meta: { advanceId: advance._id },
     })
 
@@ -369,21 +426,28 @@ export async function deleteAdvance(req, res) {
   }
 }
 
-// GET /portal/advances/by-person — one row per tutor who has ever taken an
-// advance, with lifetime totals so management can deep-dive a person's history
-// instead of scrolling a flat list of individual advances.
+// GET /portal/advances/by-person — one row per person (tutor OR staff) who has
+// ever taken an advance, with lifetime totals so management can deep-dive a
+// person's history instead of scrolling a flat list of individual advances.
 export async function listAdvancesByPerson(req, res) {
   try {
     const match = {}
     // Tutors only ever see themselves, regardless of query params.
     if (req.user.linkedTutorId) match.tutorId = new mongoose.Types.ObjectId(String(req.user.linkedTutorId))
     if (req.query.type) match.type = req.query.type
+    if (['tutor', 'staff'].includes(req.query.subjectType)) match.subjectType = req.query.subjectType
 
     const rows = await Advance.aggregate([
       ...(Object.keys(match).length ? [{ $match: match }] : []),
       {
+        // Group on the subject that's actually set. Legacy rows predate
+        // subjectType, so a missing value reads as 'tutor' (see the
+        // migrate-advance-subject-type backfill).
         $group: {
-          _id: '$tutorId',
+          _id: {
+            subjectType: { $ifNull: ['$subjectType', 'tutor'] },
+            ref: { $ifNull: ['$tutorId', '$userId'] },
+          },
           currency: { $first: '$currency' },
           advanceCount: { $sum: 1 },
           activeCount: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
@@ -401,25 +465,46 @@ export async function listAdvancesByPerson(req, res) {
       { $sort: { outstanding: -1, totalTaken: -1 } },
     ])
 
-    const tutors = await TutorProfile.find({ _id: { $in: rows.map(r => r._id) } })
-      .select('name tutorId status')
-      .lean()
-    const byId = new Map(tutors.map(t => [String(t._id), t]))
+    const tutorRefs = rows.filter(r => r._id.subjectType !== 'staff').map(r => r._id.ref)
+    const staffRefs = rows.filter(r => r._id.subjectType === 'staff').map(r => r._id.ref)
 
-    const records = rows.map(r => ({
-      tutorId: byId.get(String(r._id)) || { _id: r._id, name: 'Unknown Tutor', tutorId: '' },
-      currency: r.currency || 'PKR',
-      advanceCount: r.advanceCount,
-      activeCount: r.activeCount,
-      requestedCount: r.requestedCount,
-      fullyPaidCount: r.fullyPaidCount,
-      totalTaken: r.totalTaken,
-      totalRepaid: r.totalRepaid,
-      outstanding: r.outstanding,
-      installmentCount: r.installmentCount,
-      firstAdvanceAt: r.firstAdvanceAt,
-      lastAdvanceAt: r.lastAdvanceAt,
-    }))
+    const [tutors, staff] = await Promise.all([
+      TutorProfile.find({ _id: { $in: tutorRefs } }).select('name tutorId status').lean(),
+      User.find({ _id: { $in: staffRefs } }).select('displayName email status').lean(),
+    ])
+    const tutorById = new Map(tutors.map(t => [String(t._id), t]))
+    const staffById = new Map(staff.map(u => [String(u._id), u]))
+
+    // Both subject kinds are flattened to a common `person` shape so the UI
+    // renders one table; `tutorId` is kept for the existing tutor drill-down.
+    const records = rows.map(r => {
+      const isStaff = r._id.subjectType === 'staff'
+      const ref = String(r._id.ref)
+      const tutor = isStaff ? null : (tutorById.get(ref) || { _id: r._id.ref, name: 'Unknown Tutor', tutorId: '' })
+      const user = isStaff ? (staffById.get(ref) || { _id: r._id.ref, displayName: 'Unknown Staff', email: '' }) : null
+      return {
+        subjectType: isStaff ? 'staff' : 'tutor',
+        subjectId: r._id.ref,
+        person: {
+          _id: r._id.ref,
+          name: isStaff ? (user.displayName || user.email) : tutor.name,
+          code: isStaff ? (user.email || '') : (tutor.tutorId || ''),
+        },
+        tutorId: tutor,
+        userId: user,
+        currency: r.currency || 'PKR',
+        advanceCount: r.advanceCount,
+        activeCount: r.activeCount,
+        requestedCount: r.requestedCount,
+        fullyPaidCount: r.fullyPaidCount,
+        totalTaken: r.totalTaken,
+        totalRepaid: r.totalRepaid,
+        outstanding: r.outstanding,
+        installmentCount: r.installmentCount,
+        firstAdvanceAt: r.firstAdvanceAt,
+        lastAdvanceAt: r.lastAdvanceAt,
+      }
+    })
 
     res.json({ records, total: records.length })
   } catch (err) {

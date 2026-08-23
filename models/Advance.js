@@ -7,8 +7,13 @@ const installmentSchema = new mongoose.Schema({
   note: { type: String, trim: true, default: '' },
 }, { _id: true })
 
+// An advance belongs to a tutor (tutorId → TutorProfile) or to a management /
+// support staff member (userId → User), mirroring SalaryRecord.subjectType so
+// payroll can deduct repayments for either. Exactly one subject ref is set.
 const advanceSchema = new mongoose.Schema({
-  tutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'TutorProfile', required: true },
+  subjectType: { type: String, enum: ['tutor', 'staff'], default: 'tutor' },
+  tutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'TutorProfile' },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   type: { type: String, enum: ['short_term', 'long_term'], required: true },
   totalAmount: { type: Number, required: true },
   currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], default: 'PKR' },
@@ -28,6 +33,22 @@ const advanceSchema = new mongoose.Schema({
 }, { timestamps: true })
 
 advanceSchema.index({ tutorId: 1, status: 1 })
+advanceSchema.index({ userId: 1, status: 1 })
+advanceSchema.index({ subjectType: 1, status: 1 })
+
+advanceSchema.pre('validate', function(next) {
+  // Keep subjectType and the subject ref in lockstep — a record with neither (or
+  // both) would slip past every scoped query and silently vanish from payroll.
+  if (this.subjectType === 'staff') {
+    if (!this.userId) return next(new Error('A staff advance requires userId'))
+    this.tutorId = undefined
+  } else {
+    this.subjectType = 'tutor'
+    if (!this.tutorId) return next(new Error('A tutor advance requires tutorId'))
+    this.userId = undefined
+  }
+  next()
+})
 
 advanceSchema.pre('save', function(next) {
   this.remainingBalance = this.totalAmount - this.amountRepaid

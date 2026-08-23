@@ -232,10 +232,20 @@ export async function listSalaryRecords(req, res) {
   }
 }
 
-// Suggest a default advance deduction for the month from the tutor's active advances
-// (does NOT mutate the advance — the amount is only posted to the ledger when the salary is paid).
-async function suggestAdvanceDeduction(tutorId) {
-  const activeAdvances = await Advance.find({ tutorId, status: 'active' }).lean()
+// Mongo filter for a payroll subject's advance ledger. Tutors and staff each own
+// their own advances; custom (off-portal) people have no ledger at all.
+function advanceSubjectFilter({ subjectType, tutorId, userId }) {
+  if (subjectType === 'staff') return userId ? { subjectType: 'staff', userId } : null
+  return tutorId ? { subjectType: 'tutor', tutorId } : null
+}
+
+// Suggest a default advance deduction for the month from the subject's active
+// advances (does NOT mutate the advance — the amount is only posted to the ledger
+// when the salary is paid).
+async function suggestAdvanceDeduction(subject) {
+  const filter = advanceSubjectFilter(subject)
+  if (!filter) return 0
+  const activeAdvances = await Advance.find({ ...filter, status: 'active' }).lean()
   let suggested = 0
   for (const adv of activeAdvances) {
     if (adv.installmentFrequency === 'monthly') {
@@ -317,8 +327,12 @@ export async function generateSalary(req, res) {
 
     const currency = req.body.currency || defaultCurrency
 
-    // Advance ledger is tutor-only; staff advanceDeductions is a plain manual number.
-    const advanceDeductions = num(req.body.advanceDeductions, isStaff ? 0 : await suggestAdvanceDeduction(tutorId))
+    // Tutors and staff both have an advance ledger — suggest this period's
+    // installment from it unless the caller passed an explicit amount.
+    const advanceDeductions = num(
+      req.body.advanceDeductions,
+      await suggestAdvanceDeduction({ subjectType: isStaff ? 'staff' : 'tutor', tutorId, userId }),
+    )
     const draft = {
       ...subjectFilter, subjectType: isStaff ? 'staff' : 'tutor',
       month, year, currency,
@@ -364,13 +378,16 @@ export async function generateSalary(req, res) {
   }
 }
 
-// Post the salary's advance deduction against the tutor's active advances (oldest first).
+// Post the salary's advance deduction against the subject's active advances
+// (oldest first). Works for tutor and staff records alike.
 // Idempotent via record.advanceRepaymentApplied.
 async function applyAdvanceRepayment(record, req) {
   if (record.advanceRepaymentApplied) return
   let remaining = Number(record.advanceDeductions) || 0
   if (remaining <= 0) { record.advanceRepaymentApplied = true; return }
-  const active = await Advance.find({ tutorId: record.tutorId, status: 'active' }).sort({ startDate: 1 })
+  const filter = advanceSubjectFilter(record)
+  if (!filter) { record.advanceRepaymentApplied = true; return }
+  const active = await Advance.find({ ...filter, status: 'active' }).sort({ startDate: 1 })
   for (const adv of active) {
     if (remaining <= 0) break
     const pay = Math.min(remaining, adv.remainingBalance)
@@ -416,9 +433,10 @@ export async function updateSalaryStatus(req, res) {
         record.paidAt = new Date()
         const count = await SalaryRecord.countDocuments({ receiptNo: { $ne: '' } })
         record.receiptNo = `SR-${String(count + 1).padStart(5, '0')}`
-        // Post the advance deduction to the tutor's advance ledger on payment.
-        // Staff have no advance ledger — the deduction is just a plain number.
-        if (record.subjectType !== 'staff' && record.tutorId) await applyAdvanceRepayment(record, req)
+        // Post the advance deduction to the subject's advance ledger on payment.
+        // Custom (off-portal) people have no ledger — the deduction stays a plain
+        // number, which applyAdvanceRepayment handles by no-op'ing.
+        if (record.subjectType !== 'custom') await applyAdvanceRepayment(record, req)
       }
     }
 
@@ -648,13 +666,19 @@ async function customRosterRows(month, year) {
 
 // ── Staff roster: management/staff users on payroll ──
 async function staffRosterRows(month, year) {
-  const [subjects, records] = await Promise.all([
+  const [subjects, records, activeAdvances] = await Promise.all([
     getStaffSubjects(),
     SalaryRecord.find({ month, year, subjectType: 'staff' }).populate('userId', 'displayName email').lean(),
+    Advance.find({ subjectType: 'staff', status: 'active' }).select('userId remainingBalance currency').lean(),
   ])
   const profiles = await StaffProfile.find({ userId: { $in: subjects.map(s => s._id) } }).lean()
   const profByUser = new Map(profiles.map(p => [String(p.userId), p]))
   const recByUser = new Map(records.map(r => [String(r.userId?._id || r.userId), r]))
+  const advByUser = new Map()
+  for (const a of activeAdvances) {
+    const k = String(a.userId)
+    advByUser.set(k, (advByUser.get(k) || 0) + (a.remainingBalance || 0))
+  }
 
   return subjects
     .sort((a, b) => String(a.displayName || a.email).localeCompare(String(b.displayName || b.email)))
@@ -665,7 +689,7 @@ async function staffRosterRows(month, year) {
         userId: { _id: u._id, displayName: u.displayName, email: u.email },
         baseAmount: prof?.baseSalary || 0,
         currency: prof?.salaryCurrency || 'PKR',
-        outstandingAdvance: 0, // staff have no advance ledger
+        outstandingAdvance: advByUser.get(String(u._id)) || 0,
         record: recByUser.get(String(u._id)) || null,
       }
     })
@@ -676,7 +700,7 @@ async function tutorRosterRows(month, year) {
   const [tutors, records, activeAdvances] = await Promise.all([
     TutorProfile.find({ status: 'active' }).select('name tutorId salary').sort({ name: 1 }).lean(),
     SalaryRecord.find({ month, year, subjectType: { $nin: ['staff', 'custom'] } }).populate('tutorId', 'name tutorId').lean(),
-    Advance.find({ status: 'active' }).select('tutorId remainingBalance currency').lean(),
+    Advance.find({ subjectType: 'tutor', status: 'active' }).select('tutorId remainingBalance currency').lean(),
   ])
 
   const recByTutor = new Map(records.map(r => [String(r.tutorId?._id || r.tutorId), r]))

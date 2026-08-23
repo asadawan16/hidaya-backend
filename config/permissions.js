@@ -114,7 +114,9 @@ export const PERMISSIONS = {
   // Awards
   award: ['award.read', 'award.manage'],
 
-  // Advances / loans
+  // Advances / loans. Held by tutors AND management/support staff — each has its
+  // own ledger, and repayments are deducted from whichever salary sheet applies.
+  // advance.request lets a person file their own request (the My Advances page).
   advance: ['advance.read', 'advance.manage', 'advance.request'],
 
   // Leave management
@@ -167,7 +169,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'family.read',
     'expense.read',
     'award.read',
-    'advance.read',
+    'advance.read', 'advance.request',
     'badge.read', 'badge.approve',
     'leave.read', 'leave.review',
     'student_progress.read',
@@ -194,7 +196,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'expense.read',
     'award.read',
     'badge.read',
-    'advance.read',
+    'advance.read', 'advance.request',
     'leave.read', 'leave.review',
     'student_progress.read',
     'demo.read', 'demo.manage',
@@ -215,6 +217,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'badge.read', 'badge.approve',
     'liveboard.view', 'chat.use',
     'leave.read', 'leave.review',
+    'advance.read', 'advance.request',
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
   ],
@@ -229,6 +232,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'badge.read', 'badge.approve',
     'report.read',
     'liveboard.view', 'chat.use',
+    'advance.read', 'advance.request',
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
   ],
