@@ -52,6 +52,8 @@ import portalLeaveRoutes from './routes/portalLeaveRoutes.js'
 import portalBadgeRoutes from './routes/portalBadgeRoutes.js'
 import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js'
 import portalFeeRoutes from './routes/portalFeeRoutes.js'
+import portalClassLinkRoutes from './routes/portalClassLinkRoutes.js'
+import publicClassLinkRoutes from './routes/publicClassLinkRoutes.js'
 import { initSocket } from './config/socket.js'
 // import requestLogger from './middleware/requestLogger.js' // disabled 2026-08-02 — see app.use note below
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
@@ -117,6 +119,7 @@ app.use('/api/enrollments', rl(100))
 app.use('/api/subscribers/subscribe', rl(50))
 app.use('/api/payment-links/t', rl(60))
 app.use('/api/discount-codes/validate', rl(100))
+app.use('/api/class-links', rl(300))
 app.use('/api/portal/auth/forgot-password', rl(10))
 app.use('/api/portal/auth/reset-password', rl(20))
 app.use('/api/portal/auth', rl(100))
@@ -134,6 +137,8 @@ app.use('/api/students', studentRoutes)
 app.use('/api/export', exportRoutes)
 app.use('/api/discount-codes', discountCodeRoutes)
 app.use('/api/logs', logRoutes)
+// Public (unauthenticated) — the shareable class-links board
+app.use('/api/class-links', publicClassLinkRoutes)
 
 // Portal routes
 app.use('/api/portal/auth', portalAuthRoutes)
@@ -169,6 +174,7 @@ app.use('/api/portal/leaves', portalLeaveRoutes)
 app.use('/api/portal/badges', portalBadgeRoutes)
 app.use('/api/portal/student-progress', portalStudentProgressRoutes)
 app.use('/api/portal/fees', portalFeeRoutes)
+app.use('/api/portal/class-links', portalClassLinkRoutes)
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))

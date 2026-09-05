@@ -132,6 +132,11 @@ export const PERMISSIONS = {
 
   // Demo trial classes (tracking + statuses)
   demo: ['demo.read', 'demo.manage'],
+
+  // Public class links page (/class-links) — the shareable meeting-link board.
+  // Super-admin only by default (see the admin exclusion list below); publishing
+  // a link exposes a join URL to anyone the page is forwarded to.
+  classLink: ['class_link.read', 'class_link.manage'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
@@ -146,9 +151,10 @@ export const RESTRICTION_PERMISSIONS = ['lesson.log_only']
 export const DEFAULT_ROLE_PERMISSIONS = {
   super_admin: ALL_PERMISSIONS.filter(p => !RESTRICTION_PERMISSIONS.includes(p)),
 
-  // Admin gets everything except role deletion and the super-admin-only Fee
-  // receivables view/KPIs (and never the opt-in restriction permissions).
-  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', ...RESTRICTION_PERMISSIONS].includes(p)),
+  // Admin gets everything except role deletion, the super-admin-only Fee
+  // receivables view/KPIs, and the public class-links board (and never the
+  // opt-in restriction permissions).
+  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', ...RESTRICTION_PERMISSIONS].includes(p)),
 
   principal: [
     'student.read', 'student.approve', 'enrollment.read', 'enrollment.update',
