@@ -1,70 +1,106 @@
 import Payment from '../models/Payment.js'
 import DiscountCode from '../models/DiscountCode.js'
 import { createCheckoutSession, initiateBrowserPayment, retrieveOrder } from '../services/mastercard.js'
+import {
+  isStripeEnabled,
+  createCheckoutSession as createStripeCheckoutSession,
+  retrieveCheckoutSession,
+} from '../services/stripe.js'
+import { applyStripeSessionRefs } from './paymentLinkController.js'
 import { notifyAdmin, sendToUser, paymentEmail, paymentConfirmationEmail } from '../services/mailer.js'
+import { logActivity } from '../utils/activityLogger.js'
+
+const VALID_CURRENCIES = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
+
+const newOrderId = () => `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+
+/* ── Validate the fee-page body and price the charge ──
+ * The fee page posts the same shape whichever processor it is pointed at, so
+ * all three initiate paths (Mastercard, PayPal, Stripe) read it identically.
+ * Returns `{ error }` for the caller to turn into a 400. */
+async function pricePlanCharge(body) {
+  const {
+    studentName, studentEmail, studentPhone, plan, amount, currency,
+    discountCode: discountCodeStr, quantity: rawQty, studentNames: rawStudentNames,
+  } = body
+
+  if (!studentName || !studentEmail || !plan || !amount) {
+    return { error: 'Missing required fields' }
+  }
+
+  const cur = VALID_CURRENCIES.includes(currency) ? currency : 'PKR'
+
+  // Multi-student: quantity defaults to 1, studentNames is optional array
+  const quantity = Math.max(1, Math.floor(Number(rawQty) || 1))
+  const studentNames = Array.isArray(rawStudentNames)
+    ? rawStudentNames.map(n => (n || '').trim()).filter(Boolean)
+    : []
+
+  // Total amount = unit price × quantity
+  const totalAmount = Number(amount) * quantity
+  if (!(totalAmount > 0)) return { error: 'Invalid amount' }
+
+  // Validate and apply discount code if provided
+  let appliedDiscount = null
+  let finalAmount = totalAmount
+  const codeStr = discountCodeStr?.trim()?.toUpperCase() || ''
+
+  if (codeStr) {
+    const dc = await DiscountCode.findOne({ code: codeStr })
+    if (!dc || !dc.isActive) return { error: 'Invalid or inactive discount code' }
+    if (dc.currency !== cur) return { error: `Discount code is for ${dc.currency} payments only` }
+    if (dc.usageType === 'one_time' && dc.timesUsed >= 1) return { error: 'This discount code has already been used' }
+    if (dc.discountAmount >= totalAmount) return { error: 'Discount cannot exceed the payment amount' }
+    appliedDiscount = dc
+    finalAmount = totalAmount - dc.discountAmount
+  }
+
+  return { studentName, studentEmail, studentPhone, plan, cur, quantity, studentNames, totalAmount, finalAmount, appliedDiscount }
+}
+
+/* ── The Payment document body for a fee-page charge ── */
+function buildPlanPaymentData(priced, { orderId, gateway, paymentMethod }) {
+  const data = {
+    studentName: priced.studentName,
+    studentEmail: priced.studentEmail,
+    studentPhone: priced.studentPhone,
+    plan: priced.plan,
+    amount: priced.finalAmount,
+    currency: priced.cur,
+    gatewayOrderId: orderId,
+    status: 'pending',
+    quantity: priced.quantity,
+    studentNames: priced.studentNames,
+  }
+  if (gateway) data.gateway = gateway
+  if (paymentMethod) data.paymentMethod = paymentMethod
+  if (priced.appliedDiscount) {
+    data.discountCode = priced.appliedDiscount.code
+    data.discountCodeRef = priced.appliedDiscount._id
+    data.discountAmount = priced.appliedDiscount.discountAmount
+    data.originalAmount = priced.totalAmount
+  }
+  return data
+}
+
+/* The label shown on the gateway's own checkout page. */
+const planLabel = priced => (priced.quantity > 1 ? `${priced.plan} (×${priced.quantity} students)` : priced.plan)
 
 export async function initiate(req, res) {
   try {
-    const { studentName, studentEmail, studentPhone, plan, amount, currency, discountCode: discountCodeStr, quantity: rawQty, studentNames: rawStudentNames } = req.body
-    if (!studentName || !studentEmail || !plan || !amount) {
-      return res.status(400).json({ error: 'Missing required fields' })
-    }
+    const priced = await pricePlanCharge(req.body)
+    if (priced.error) return res.status(400).json({ error: priced.error })
 
-    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
-    const cur = validCurrencies.includes(currency) ? currency : 'PKR'
+    const { cur, finalAmount, studentName, studentEmail } = priced
+    const orderId = newOrderId()
 
-    // Multi-student: quantity defaults to 1, studentNames is optional array
-    const quantity = Math.max(1, Math.floor(Number(rawQty) || 1))
-    const studentNames = Array.isArray(rawStudentNames)
-      ? rawStudentNames.map(n => (n || '').trim()).filter(Boolean)
-      : []
-
-    // Total amount = unit price × quantity
-    const totalAmount = Number(amount) * quantity
-
-    // Validate and apply discount code if provided
-    let appliedDiscount = null
-    let finalAmount = totalAmount
-    const codeStr = discountCodeStr?.trim()?.toUpperCase() || ''
-
-    if (codeStr) {
-      const dc = await DiscountCode.findOne({ code: codeStr })
-      if (!dc || !dc.isActive) return res.status(400).json({ error: 'Invalid or inactive discount code' })
-      if (dc.currency !== cur) return res.status(400).json({ error: `Discount code is for ${dc.currency} payments only` })
-      if (dc.usageType === 'one_time' && dc.timesUsed >= 1) return res.status(400).json({ error: 'This discount code has already been used' })
-      if (dc.discountAmount >= totalAmount) return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
-      appliedDiscount = dc
-      finalAmount = totalAmount - dc.discountAmount
-    }
-
-    const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
-
-    const paymentData = {
-      studentName,
-      studentEmail,
-      studentPhone,
-      plan,
-      amount: finalAmount,
-      currency: cur,
-      gatewayOrderId: orderId,
-      status: 'pending',
-      quantity,
-      studentNames,
-    }
-    if (appliedDiscount) {
-      paymentData.discountCode = appliedDiscount.code
-      paymentData.discountCodeRef = appliedDiscount._id
-      paymentData.discountAmount = appliedDiscount.discountAmount
-      paymentData.originalAmount = totalAmount
-    }
-
-    const payment = await Payment.create(paymentData)
+    const payment = await Payment.create(buildPlanPaymentData(priced, { orderId, gateway: 'mastercard' }))
 
     const sessionData = await createCheckoutSession({
       orderId,
       amount: finalAmount,
       currency: cur,
-      plan: quantity > 1 ? `${plan} (×${quantity} students)` : plan,
+      plan: planLabel(priced),
       returnUrl: `${process.env.FRONTEND_URL}/payment/callback?orderId=${orderId}`,
       cancelUrl: `${process.env.FRONTEND_URL}/fee`,
       customerName: studentName,
@@ -93,73 +129,27 @@ export async function initiate(req, res) {
 
 export async function initiatePayPal(req, res) {
   try {
-    const { studentName, studentEmail, studentPhone, plan, amount, currency, discountCode: discountCodeStr, quantity: rawQty, studentNames: rawStudentNames } = req.body
-    if (!studentName || !studentEmail || !plan || !amount) {
-      return res.status(400).json({ error: 'Missing required fields' })
-    }
+    const priced = await pricePlanCharge(req.body)
+    if (priced.error) return res.status(400).json({ error: priced.error })
 
-    const validCurrencies = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
-    const cur = validCurrencies.includes(currency) ? currency : 'PKR'
-
+    const { cur, finalAmount } = priced
     if (cur === 'PKR') {
       return res.status(400).json({ error: 'PayPal is not available for PKR payments' })
     }
 
-    // Multi-student: quantity defaults to 1, studentNames is optional array
-    const quantity = Math.max(1, Math.floor(Number(rawQty) || 1))
-    const studentNames = Array.isArray(rawStudentNames)
-      ? rawStudentNames.map(n => (n || '').trim()).filter(Boolean)
-      : []
-
-    // Total amount = unit price × quantity
-    const totalAmount = Number(amount) * quantity
-
-    // Validate and apply discount code if provided
-    let appliedDiscount = null
-    let finalAmount = totalAmount
-    const codeStr = discountCodeStr?.trim()?.toUpperCase() || ''
-
-    if (codeStr) {
-      const dc = await DiscountCode.findOne({ code: codeStr })
-      if (!dc || !dc.isActive) return res.status(400).json({ error: 'Invalid or inactive discount code' })
-      if (dc.currency !== cur) return res.status(400).json({ error: `Discount code is for ${dc.currency} payments only` })
-      if (dc.usageType === 'one_time' && dc.timesUsed >= 1) return res.status(400).json({ error: 'This discount code has already been used' })
-      if (dc.discountAmount >= totalAmount) return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
-      appliedDiscount = dc
-      finalAmount = totalAmount - dc.discountAmount
-    }
-
-    const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+    const orderId = newOrderId()
     const transactionId = `TXN-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
-    const paymentData = {
-      studentName,
-      studentEmail,
-      studentPhone,
-      plan,
-      amount: finalAmount,
-      currency: cur,
-      gatewayOrderId: orderId,
-      status: 'pending',
-      paymentMethod: 'PAYPAL',
-      quantity,
-      studentNames,
-    }
-    if (appliedDiscount) {
-      paymentData.discountCode = appliedDiscount.code
-      paymentData.discountCodeRef = appliedDiscount._id
-      paymentData.discountAmount = appliedDiscount.discountAmount
-      paymentData.originalAmount = totalAmount
-    }
-
-    const payment = await Payment.create(paymentData)
+    const payment = await Payment.create(buildPlanPaymentData(priced, {
+      orderId, gateway: 'mastercard', paymentMethod: 'PAYPAL',
+    }))
 
     const result = await initiateBrowserPayment({
       orderId,
       transactionId,
       amount: finalAmount,
       currency: cur,
-      plan: quantity > 1 ? `${plan} (×${quantity} students)` : plan,
+      plan: planLabel(priced),
       returnUrl: `${process.env.FRONTEND_URL}/payment/callback?orderId=${orderId}`,
     })
 
@@ -181,14 +171,159 @@ export async function initiatePayPal(req, res) {
   }
 }
 
+/* ── Public: start a Stripe hosted Checkout for a fee-page plan ──
+ * No card data touches this server: the browser is redirected to Stripe and
+ * the authoritative result arrives on POST /api/stripe/webhook. The return URL
+ * (handled below) is only a convenience re-sync so the payer sees a receipt
+ * without waiting for the hook. */
+export async function initiateStripe(req, res) {
+  try {
+    if (!isStripeEnabled()) {
+      return res.status(503).json({ error: 'Stripe payments are not configured' })
+    }
+
+    const priced = await pricePlanCharge(req.body)
+    if (priced.error) return res.status(400).json({ error: priced.error })
+
+    const orderId = newOrderId()
+    const payment = await Payment.create(buildPlanPaymentData(priced, {
+      orderId, gateway: 'stripe', paymentMethod: 'STRIPE',
+    }))
+
+    const session = await createStripeCheckoutSession({
+      amount: priced.finalAmount,
+      currency: priced.cur,
+      description: planLabel(priced),
+      items: priced.studentNames,
+      successUrl: `${process.env.FRONTEND_URL}/payment/callback?provider=stripe&session_id={CHECKOUT_SESSION_ID}`,
+      cancelUrl: `${process.env.FRONTEND_URL}/fee`,
+      customerName: priced.studentName,
+      customerEmail: priced.studentEmail || undefined,
+      // `kind: 'plan'` is what tells the webhook this session belongs to a
+      // fee-page purchase rather than a payment link.
+      metadata: { kind: 'plan', paymentId: String(payment._id), orderId },
+    })
+
+    payment.stripeSessionId = session.id
+    await payment.save()
+
+    res.json({
+      url: session.url,
+      sessionId: session.id,
+      orderId,
+      paymentId: payment._id,
+    })
+  } catch (err) {
+    console.error('Payment initiateStripe error:', err)
+    res.status(500).json({ error: err?.message || 'Failed to start Stripe checkout' })
+  }
+}
+
+/* ── Everything that happens once a fee-page payment reaches a final state ──
+ * Shared by the Mastercard return, the Stripe return and the Stripe webhook,
+ * any of which can land first. Idempotent: pass `alreadySettled: true` on a
+ * re-entry and the one-shot side effects (discount counter, emails) are
+ * skipped. `payment.status` must already carry its final value.
+ *
+ * Exported because stripeWebhookController settles plan payments through it. */
+export async function finalizePlanPayment({ payment, alreadySettled = false, req, source = '' }) {
+  await payment.save()
+  if (alreadySettled) return payment
+
+  // Increment discount code usage if applicable
+  if (payment.status === 'completed' && payment.discountCodeRef) {
+    await DiscountCode.findByIdAndUpdate(payment.discountCodeRef, { $inc: { timesUsed: 1 } })
+  }
+
+  const paymentData = payment.toObject()
+
+  logActivity({
+    level: payment.status === 'completed' ? 'info' : 'warning',
+    category: 'payment',
+    action: `payment_${payment.status}`,
+    message: `Payment ${payment.status} — ${payment.currency} ${payment.amount} from ${payment.studentName || 'unknown'} (${payment.plan})`,
+    ...(req ? { req } : {}),
+    meta: {
+      orderId: payment.gatewayOrderId,
+      paymentId: payment._id,
+      gateway: payment.gateway,
+      gatewayResult: payment.gatewayResult,
+      discountCode: payment.discountCode || null,
+      source: source || undefined,
+    },
+  })
+
+  // Notify admin (non-blocking)
+  notifyAdmin(paymentEmail(paymentData)).catch(() => {})
+
+  // Send confirmation to student (non-blocking)
+  if (paymentData.studentEmail) {
+    const userEmail = paymentConfirmationEmail(paymentData)
+    sendToUser({ to: paymentData.studentEmail, ...userEmail }).catch(() => {})
+  }
+
+  return payment
+}
+
+/* ── Settle a fee-page payment from a Stripe Checkout session ──
+ * Shared by the return URL and the webhook. `session` must be the retrieved
+ * (expanded) session, not the thin webhook copy. Returns null when the session
+ * has no fee-page payment behind it. */
+export async function settlePlanPaymentFromSession(session, { req, source = '' } = {}) {
+  const payment = await findSessionPlanPayment(session)
+  if (!payment) return null
+  // A session that belongs to a payment link is settled by the link path.
+  if (payment.paymentLink) return null
+
+  const alreadySettled = payment.status === 'completed'
+
+  // `paid` covers a normal charge; `no_payment_required` is a fully-discounted
+  // session that still completed successfully.
+  const ok = session.payment_status === 'paid' || session.payment_status === 'no_payment_required'
+
+  if (ok) {
+    payment.status = 'completed'
+    payment.gatewayResult = 'SUCCESS'
+    applyStripeSessionRefs(payment, session)
+  } else if (session.status === 'expired') {
+    // An abandoned checkout — worth recording, not worth emailing anyone about.
+    if (alreadySettled) return payment
+    payment.status = 'expired'
+    payment.gatewayResult = 'SESSION_EXPIRED'
+    await payment.save()
+    return payment
+  } else {
+    // Still open / processing — leave it pending and let the webhook decide.
+    await payment.save()
+    return payment
+  }
+
+  return finalizePlanPayment({ payment, alreadySettled, req, source })
+}
+
+async function findSessionPlanPayment(session) {
+  if (session.metadata?.paymentId) {
+    const byId = await Payment.findById(session.metadata.paymentId).catch(() => null)
+    if (byId) return byId
+  }
+  return Payment.findOne({ stripeSessionId: session.id })
+}
+
+/* ── Public: payment return URL ──
+ * Mastercard/PayPal post `{ orderId }`; Stripe's return URL posts
+ * `{ sessionId }`. Both funnel through finalizePlanPayment(). */
 export async function callback(req, res) {
   try {
-    const { orderId } = req.body
+    const { orderId, sessionId } = req.body
+
+    if (sessionId) return stripePlanCallback(req, res, sessionId)
+
     if (!orderId) return res.status(400).json({ error: 'Order ID required' })
 
     const payment = await Payment.findOne({ gatewayOrderId: orderId })
     if (!payment) return res.status(404).json({ error: 'Payment not found' })
 
+    const alreadySettled = payment.status === 'completed'
     const orderData = await retrieveOrder(orderId)
 
     if (orderData.result === 'SUCCESS' && orderData.status === 'CAPTURED') {
@@ -205,27 +340,27 @@ export async function callback(req, res) {
       payment.gatewayResultCode = orderData.error?.cause || ''
     }
 
-    await payment.save()
-
-    // Increment discount code usage if applicable
-    if (payment.status === 'completed' && payment.discountCodeRef) {
-      await DiscountCode.findByIdAndUpdate(payment.discountCodeRef, { $inc: { timesUsed: 1 } })
-    }
-
-    const paymentData = payment.toObject()
-
-    // Notify admin (non-blocking)
-    notifyAdmin(paymentEmail(paymentData)).catch(() => {})
-
-    // Send confirmation to student (non-blocking)
-    const userEmail = paymentConfirmationEmail(paymentData)
-    sendToUser({ to: paymentData.studentEmail, ...userEmail }).catch(() => {})
+    await finalizePlanPayment({ payment, alreadySettled, req, source: 'mastercard_callback' })
 
     res.json({ status: payment.status, payment })
   } catch (err) {
     console.error('Payment callback error:', err)
     res.status(500).json({ error: 'Server error' })
   }
+}
+
+/* Stripe return-URL re-sync — reads the session straight from Stripe rather
+ * than trusting the query string. */
+async function stripePlanCallback(req, res, sessionId) {
+  if (!isStripeEnabled()) return res.status(503).json({ error: 'Stripe payments are not configured' })
+
+  const session = await retrieveCheckoutSession(sessionId).catch(() => null)
+  if (!session) return res.status(404).json({ error: 'Checkout session not found' })
+
+  const payment = await settlePlanPaymentFromSession(session, { req, source: 'stripe_return' })
+  if (!payment) return res.status(404).json({ error: 'Payment not found' })
+
+  res.json({ status: payment.status, payment })
 }
 
 export async function list(req, res) {

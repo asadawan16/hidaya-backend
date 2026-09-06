@@ -4,6 +4,7 @@ import StripeEvent from '../models/StripeEvent.js'
 import { constructWebhookEvent, retrieveCheckoutSession, retrieveSubscription, fromMinorUnits, periodEndOf } from '../services/stripe.js'
 import { settleLinkPayment, buildPaymentData, generateInvoiceNo } from '../services/paymentLinkFulfillment.js'
 import { applyStripeSessionRefs, applySubscriptionToLink } from './paymentLinkController.js'
+import { settlePlanPaymentFromSession, finalizePlanPayment } from './paymentController.js'
 import { logActivity } from '../utils/activityLogger.js'
 
 /*
@@ -88,7 +89,12 @@ async function onCheckoutCompleted(sessionLite) {
   const session = await retrieveCheckoutSession(sessionLite.id).catch(() => sessionLite)
 
   const link = await findLink(session)
-  if (!link) return
+  // No link behind the session → a fee-page plan purchase (/api/payments/
+  // initiate-stripe), which settles against the Payment document alone.
+  if (!link) {
+    await settlePlanPaymentFromSession(session, { source: 'stripe_webhook' })
+    return
+  }
 
   if (session.mode === 'subscription' && session.subscription) {
     await applySubscriptionToLink(link, session)
@@ -119,7 +125,13 @@ async function onCheckoutFailed(session) {
   payment.gatewayResult = session.status === 'expired' ? 'SESSION_EXPIRED' : 'PAYMENT_FAILED'
   applyStripeSessionRefs(payment, session)
 
-  if (!link) { await payment.save(); return }
+  if (!link) {
+    // Fee-page plan purchase. An expired session is just an abandoned
+    // checkout — record it, but don't email anyone about it.
+    if (payment.status === 'expired') { await payment.save(); return }
+    await finalizePlanPayment({ payment, source: 'stripe_webhook' })
+    return
+  }
   await settleLinkPayment({ link, payment, source: 'stripe_webhook' })
 }
 

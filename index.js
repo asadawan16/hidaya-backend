@@ -133,7 +133,10 @@ app.use(express.json({ limit: '5mb' }))
 // Rate limiting (JSON responses for frontend compatibility)
 const rl = (max) => rateLimit({ windowMs: 15 * 60 * 1000, max, handler: (req, res) => res.status(429).json({ error: 'Too many requests. Please try again later.' }) })
 app.use('/api/auth', rl(100))
-app.use('/api/payments/initiate', rl(50))
+// One cap across all three fee-page initiate paths. `app.use('/…/initiate')`
+// does NOT cover the hyphenated siblings — Express only matches on a `/` or
+// end-of-path boundary — so each is listed explicitly.
+app.use(['/api/payments/initiate', '/api/payments/initiate-paypal', '/api/payments/initiate-stripe'], rl(50))
 app.use('/api/enrollments', rl(100))
 app.use('/api/subscribers/subscribe', rl(50))
 app.use('/api/payment-links/t', rl(60))
