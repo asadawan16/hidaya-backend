@@ -73,6 +73,10 @@ const paymentLinkSchema = new mongoose.Schema({
   familyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Family' },
   studentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Student' }],
 
+  // Which funnel minted this link. '' = created by staff in the portal/admin;
+  // 'qurantutornow' = self-serve checkout from the ad landing site.
+  source: { type: String, trim: true, default: '' },
+
   // Admin notes
   notes: { type: String, trim: true },
 

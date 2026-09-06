@@ -54,7 +54,9 @@ import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js
 import portalFeeRoutes from './routes/portalFeeRoutes.js'
 import portalClassLinkRoutes from './routes/portalClassLinkRoutes.js'
 import publicClassLinkRoutes from './routes/publicClassLinkRoutes.js'
+import publicCheckoutRoutes from './routes/publicCheckoutRoutes.js'
 import { stripeWebhook } from './controllers/stripeWebhookController.js'
+import { isAllowedOrigin } from './config/sites.js'
 import { initSocket } from './config/socket.js'
 // import requestLogger from './middleware/requestLogger.js' // disabled 2026-08-02 — see app.use note below
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
@@ -103,7 +105,16 @@ try {
 
 // Security
 app.use(helmet())
-app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }))
+
+// CORS — a hardcoded allow-list (config/sites.js) rather than a single env var,
+// because two front ends now talk to this API: hidaya.online and the
+// qurantutornow.com ad site. Whatever FRONTEND_URL points at is allowed too, so
+// preview deploys keep working. A disallowed origin simply gets no CORS headers
+// (cb(null, false)) instead of a 500 from a thrown error.
+app.use(cors({
+  origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
+  credentials: true,
+}))
 
 // Stripe webhook — MUST be mounted before express.json(). The signature is
 // computed over the exact bytes Stripe sent, so the handler needs the raw
@@ -128,6 +139,10 @@ app.use('/api/subscribers/subscribe', rl(50))
 app.use('/api/payment-links/t', rl(60))
 app.use('/api/discount-codes/validate', rl(100))
 app.use('/api/class-links', rl(300))
+// Satellite marketing sites (qurantutornow.com): price book + self-serve
+// checkout + trial form. Generous enough for a shared office IP, tight enough
+// that nobody can farm payment links.
+app.use('/api/public', rl(60))
 app.use('/api/portal/auth/forgot-password', rl(10))
 app.use('/api/portal/auth/reset-password', rl(20))
 app.use('/api/portal/auth', rl(100))
@@ -147,6 +162,8 @@ app.use('/api/discount-codes', discountCodeRoutes)
 app.use('/api/logs', logRoutes)
 // Public (unauthenticated) — the shareable class-links board
 app.use('/api/class-links', publicClassLinkRoutes)
+// Public (unauthenticated) — satellite marketing sites (qurantutornow.com)
+app.use('/api/public', publicCheckoutRoutes)
 
 // Portal routes
 app.use('/api/portal/auth', portalAuthRoutes)

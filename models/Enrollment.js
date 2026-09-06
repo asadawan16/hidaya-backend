@@ -7,7 +7,9 @@ const enrollmentSchema = new mongoose.Schema({
   message: { type: String, trim: true },
   source: {
     type: String,
-    enum: ['hero_form', 'free_class', 'contact', 'enrollment', 'manual'],
+    // 'qurantutornow' = the Google Ads landing site (qurantutornow.com), which
+    // has no portal of its own and posts its trial form / checkout leads here.
+    enum: ['hero_form', 'free_class', 'contact', 'enrollment', 'manual', 'qurantutornow'],
     default: 'hero_form',
   },
   status: {
