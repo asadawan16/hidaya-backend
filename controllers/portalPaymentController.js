@@ -5,6 +5,8 @@ import Plan from '../models/Plan.js'
 import Student from '../models/Student.js'
 import Family from '../models/Family.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { normalizeGatewayFields } from '../utils/paymentLinkOptions.js'
+import { isStripeEnabled, cancelSubscription as cancelStripeSubscription, retrieveSubscription, periodEndOf } from '../services/stripe.js'
 
 // ──────────────────────────────────────────────
 // PAYMENTS
@@ -53,7 +55,7 @@ export async function listPayments(req, res) {
     const records = await Payment.find(filter)
       .populate({
         path: 'paymentLink',
-        select: 'payeeName payeeEmail payeePhone description items listType notes invoiceNo token taxType taxValue currency amount student familyId studentIds expiresAfterPayment createdAt',
+        select: 'payeeName payeeEmail payeePhone description items listType notes invoiceNo token taxType taxValue currency amount student familyId studentIds expiresAfterPayment gateway paymentMode recurring subscriptionStatus createdAt',
         populate: [
           { path: 'student', select: 'name rollNo' },
           { path: 'familyId', select: 'familyCode primaryGuardian' },
@@ -222,6 +224,11 @@ export async function createPaymentLink(req, res) {
       return res.status(400).json({ error: 'description and amount are required' })
     }
 
+    // gateway / paymentMode / recurring — recurring is Stripe-only and forces
+    // the link to stay reusable (one charge per cycle).
+    const gatewayFields = normalizeGatewayFields(req.body)
+    if (gatewayFields.error) return res.status(400).json({ error: gatewayFields.error })
+
     // Generate invoice number: HO-YYYYMM-XXXX
     const now = new Date()
     const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
@@ -278,6 +285,7 @@ export async function createPaymentLink(req, res) {
         .filter(Boolean),
       listType: listType || 'bullet',
       invoiceNo,
+      ...gatewayFields.values,
     }
 
     if (student) linkData.student = student
@@ -389,6 +397,75 @@ export async function sendPaymentLinkEmail(req, res) {
   } catch (err) {
     console.error('sendPaymentLinkEmail error:', err)
     res.status(500).json({ error: 'Server error' })
+  }
+}
+
+/* ── Cancel the Stripe subscription behind a recurring payment link ──
+ * Defaults to cancel-at-period-end so the payer keeps the cycle they've already
+ * paid for; `?immediately=true` stops billing on the spot. The link's stored
+ * status is refreshed from Stripe's response rather than assumed — the
+ * `customer.subscription.updated` webhook will confirm it again. */
+export async function cancelPaymentLinkSubscription(req, res) {
+  try {
+    if (!isStripeEnabled()) return res.status(503).json({ error: 'Stripe is not configured' })
+
+    const link = await PaymentLink.findById(req.params.id)
+    if (!link) return res.status(404).json({ error: 'Payment link not found' })
+    if (!link.stripeSubscriptionId) {
+      return res.status(400).json({ error: 'No active subscription on this payment link' })
+    }
+
+    const immediately = req.body?.immediately === true || req.query.immediately === 'true'
+    const sub = await cancelStripeSubscription(link.stripeSubscriptionId, { immediately })
+
+    link.subscriptionStatus = sub.status || link.subscriptionStatus
+    link.subscriptionCancelAtPeriodEnd = Boolean(sub.cancel_at_period_end)
+    const periodEnd = periodEndOf(sub)
+    if (periodEnd) link.subscriptionCurrentPeriodEnd = periodEnd
+    if (sub.status === 'canceled') link.status = link.payments?.length ? 'completed' : 'failed'
+    await link.save()
+
+    await logActivity({
+      level: 'warning',
+      category: 'payment_link',
+      action: 'subscription.cancel',
+      message: `Subscription ${immediately ? 'cancelled immediately' : 'set to cancel at period end'} for ${link.payeeName || 'unknown'} (${link.invoiceNo})`,
+      req,
+      meta: { paymentLinkId: link._id, subscriptionId: link.stripeSubscriptionId, immediately },
+    })
+
+    res.json({
+      subscriptionStatus: link.subscriptionStatus,
+      cancelAtPeriodEnd: link.subscriptionCancelAtPeriodEnd,
+      currentPeriodEnd: link.subscriptionCurrentPeriodEnd,
+    })
+  } catch (err) {
+    console.error('cancelPaymentLinkSubscription error:', err)
+    res.status(500).json({ error: err?.message || 'Server error' })
+  }
+}
+
+/* ── Live subscription detail for a recurring link ── */
+export async function getPaymentLinkSubscription(req, res) {
+  try {
+    const link = await PaymentLink.findById(req.params.id).lean()
+    if (!link) return res.status(404).json({ error: 'Payment link not found' })
+    if (!link.stripeSubscriptionId) return res.json({ subscription: null })
+    if (!isStripeEnabled()) return res.status(503).json({ error: 'Stripe is not configured' })
+
+    const sub = await retrieveSubscription(link.stripeSubscriptionId)
+    res.json({
+      subscription: {
+        id: sub.id,
+        status: sub.status,
+        cancelAtPeriodEnd: sub.cancel_at_period_end,
+        currentPeriodEnd: periodEndOf(sub),
+        startDate: sub.start_date ? new Date(sub.start_date * 1000) : null,
+      },
+    })
+  } catch (err) {
+    console.error('getPaymentLinkSubscription error:', err)
+    res.status(500).json({ error: err?.message || 'Server error' })
   }
 }
 

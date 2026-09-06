@@ -9,6 +9,8 @@ import {
   getPaymentLinkHistory,
   sendPaymentLinkEmail,
   deletePaymentLink,
+  getPaymentLinkSubscription,
+  cancelPaymentLinkSubscription,
   listDiscountCodes,
   createDiscountCode,
   toggleDiscountCode,
@@ -31,6 +33,10 @@ router.get('/payment-links', requirePermission('payment_link.read'), listPayment
 router.post('/payment-links', requirePermission('payment_link.create'), createPaymentLink)
 router.get('/payment-links/:id/payments', requirePermission('payment_link.read'), getPaymentLinkHistory)
 router.post('/payment-links/:id/send', requirePermission('payment_link.send'), sendPaymentLinkEmail)
+router.get('/payment-links/:id/subscription', requirePermission('payment_link.read'), getPaymentLinkSubscription)
+// Cancelling recurring billing is destructive, so it rides on the same
+// permission as deleting the link rather than introducing a new one.
+router.post('/payment-links/:id/cancel-subscription', requirePermission('payment_link.delete'), cancelPaymentLinkSubscription)
 router.delete('/payment-links/:id', requirePermission('payment_link.delete'), deletePaymentLink)
 
 // Discount Codes

@@ -12,13 +12,27 @@ const paymentSchema = new mongoose.Schema({
   currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], default: 'PKR' },
 
   // Payment method used
-  paymentMethod: { type: String, enum: ['CARD', 'PAYPAL'], default: 'CARD' },
+  paymentMethod: { type: String, enum: ['CARD', 'PAYPAL', 'STRIPE'], default: 'CARD' },
 
-  // Mastercard gateway response (NO card details stored)
+  // Which processor handled this payment
+  gateway: { type: String, enum: ['mastercard', 'stripe'], default: 'mastercard' },
+
+  // Gateway response (NO card details stored). `gatewayOrderId` is our own
+  // reference and is set for both processors, so lookups stay uniform.
   gatewayOrderId: { type: String },
   gatewayTransactionId: { type: String },
   gatewayResult: { type: String }, // SUCCESS, FAILURE, PENDING
   gatewayResultCode: { type: String },
+
+  // Stripe references (gateway === 'stripe')
+  stripeSessionId: { type: String, default: '' },
+  stripePaymentIntentId: { type: String, default: '' },
+  // No default — the field must stay ABSENT on non-Stripe payments so the
+  // partial unique index below only ever covers real Stripe invoices.
+  stripeInvoiceId: { type: String },
+  stripeSubscriptionId: { type: String, default: '' },
+  // subscription_create = first cycle · subscription_cycle = a renewal charge
+  billingReason: { type: String, default: '' },
 
   // Invoice number — copied from payment link
   invoiceNo: { type: String, trim: true, default: '' },
@@ -58,5 +72,11 @@ paymentSchema.index({ status: 1 })
 paymentSchema.index({ createdAt: -1 })
 paymentSchema.index({ student: 1 })
 paymentSchema.index({ paymentLink: 1 })
+paymentSchema.index({ stripeSessionId: 1 })
+// Sparse-unique: one Payment per Stripe invoice, so a redelivered `invoice.paid`
+// webhook can never double-record a subscription cycle.
+// (partialFilterExpression and `sparse` are mutually exclusive in MongoDB — the
+// partial filter alone is what keeps non-Stripe payments out of the index.)
+paymentSchema.index({ stripeInvoiceId: 1 }, { unique: true, partialFilterExpression: { stripeInvoiceId: { $type: 'string' } } })
 
 export default mongoose.model('Payment', paymentSchema)

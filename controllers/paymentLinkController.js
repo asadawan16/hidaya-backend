@@ -1,40 +1,23 @@
 import PaymentLink from '../models/PaymentLink.js'
 import Payment from '../models/Payment.js'
-import DiscountCode from '../models/DiscountCode.js'
 import { createCheckoutSession, initiateBrowserPayment, retrieveOrder } from '../services/mastercard.js'
 import {
-  notifyAdmin, sendToUser,
-  paymentLinkEmail, paymentLinkAdminEmail,
-  paymentEmail, paymentConfirmationEmail, invoiceEmail,
-} from '../services/mailer.js'
-import { logActivity } from '../utils/activityLogger.js'
-
-/* ── Compute tax added on top of a (post-discount) subtotal ── */
-function computeTax(subtotal, taxType, taxValue) {
-  const val = Number(taxValue) || 0
-  if (taxType === 'percentage') return Math.round(subtotal * (val / 100) * 100) / 100
-  if (taxType === 'fixed') return Math.max(0, val)
-  return 0
-}
-
-/* ── Generate unique invoice number: HO-YYYYMM-XXXX ── */
-async function generateInvoiceNo() {
-  const now = new Date()
-  const prefix = `HO-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
-  // Find the highest invoice number for this month
-  const latest = await PaymentLink.findOne(
-    { invoiceNo: new RegExp(`^${prefix}-`) },
-    { invoiceNo: 1 },
-    { sort: { invoiceNo: -1 } }
-  )
-  let seq = 1
-  if (latest?.invoiceNo) {
-    const parts = latest.invoiceNo.split('-')
-    const lastSeq = parseInt(parts[parts.length - 1], 10)
-    if (!isNaN(lastSeq)) seq = lastSeq + 1
-  }
-  return `${prefix}-${String(seq).padStart(4, '0')}`
-}
+  isStripeEnabled,
+  createCheckoutSession as createStripeCheckoutSession,
+  createSubscriptionSession as createStripeSubscriptionSession,
+  createOnceOffCoupon,
+  retrieveCheckoutSession,
+  periodEndOf,
+} from '../services/stripe.js'
+import {
+  generateInvoiceNo,
+  priceLinkCharge,
+  buildPaymentData,
+  settleLinkPayment,
+  expirePendingPayment,
+} from '../services/paymentLinkFulfillment.js'
+import { normalizeGatewayFields } from '../utils/paymentLinkOptions.js'
+import { paymentLinkEmail, paymentLinkAdminEmail, notifyAdmin, sendToUser } from '../services/mailer.js'
 
 /* ── Admin: Create a payment link ── */
 export async function create(req, res) {
@@ -48,6 +31,11 @@ export async function create(req, res) {
     const invoiceNo = await generateInvoiceNo()
 
     const normalizedTaxType = ['percentage', 'fixed'].includes(taxType) ? taxType : 'none'
+
+    // gateway / paymentMode / recurring — validated together (recurring is
+    // Stripe-only and always leaves the link reusable).
+    const gatewayFields = normalizeGatewayFields(req.body)
+    if (gatewayFields.error) return res.status(400).json({ error: gatewayFields.error })
 
     const linkData = {
       payeeName,
@@ -63,6 +51,7 @@ export async function create(req, res) {
       items: Array.isArray(items) ? items.filter(i => i.trim()) : [],
       listType: listType === 'numbered' ? 'numbered' : 'bullet',
       invoiceNo,
+      ...gatewayFields.values,
     }
     if (student) linkData.student = student
 
@@ -235,6 +224,17 @@ export async function getByToken(req, res) {
       items: link.items || [],
       listType: link.listType || 'bullet',
       invoiceNo: link.invoiceNo,
+      // Which checkout the pay page should render
+      gateway: link.gateway || 'mastercard',
+      paymentMode: link.paymentMode || 'one_time',
+      recurring: link.paymentMode === 'recurring'
+        ? {
+          interval: link.recurring?.interval || 'month',
+          intervalCount: link.recurring?.intervalCount || 1,
+          trialDays: link.recurring?.trialDays || 0,
+        }
+        : null,
+      subscriptionStatus: link.subscriptionStatus || '',
     })
   } catch (err) {
     console.error('PaymentLink getByToken error:', err)
@@ -242,7 +242,7 @@ export async function getByToken(req, res) {
   }
 }
 
-/* ── Public: Initiate payment from link ── */
+/* ── Public: Initiate a Mastercard payment from link ── */
 export async function initiate(req, res) {
   try {
     const link = await PaymentLink.findOne({ token: req.params.token })
@@ -250,71 +250,22 @@ export async function initiate(req, res) {
     if (link.status === 'completed') {
       return res.status(400).json({ error: 'This payment link has already been used' })
     }
-
-    // Expire any previous pending payment for this link
-    if (link.payment) {
-      await Payment.updateOne(
-        { _id: link.payment, status: 'pending' },
-        { status: 'expired' }
-      )
+    if (link.paymentMode === 'recurring') {
+      return res.status(400).json({ error: 'This is a recurring link — use the Stripe checkout' })
     }
 
-    // Validate and apply discount code if provided
-    const discountCodeStr = req.body.discountCode?.trim()?.toUpperCase() || ''
-    let appliedDiscount = null
-    let finalAmount = link.amount
+    await expirePendingPayment(link)
 
-    if (discountCodeStr) {
-      const dc = await DiscountCode.findOne({ code: discountCodeStr })
-      if (!dc || !dc.isActive) {
-        return res.status(400).json({ error: 'Invalid or inactive discount code' })
-      }
-      if (dc.currency !== (link.currency || 'PKR')) {
-        return res.status(400).json({ error: `Discount code is for ${dc.currency} payments only` })
-      }
-      if (dc.usageType === 'one_time' && dc.timesUsed >= 1) {
-        return res.status(400).json({ error: 'This discount code has already been used' })
-      }
-      if (dc.discountAmount >= link.amount) {
-        return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
-      }
-      appliedDiscount = dc
-      finalAmount = link.amount - dc.discountAmount
-    }
-
-    // Apply tax on top of the (post-discount) subtotal
-    const taxAmount = computeTax(finalAmount, link.taxType, link.taxValue)
-    finalAmount = finalAmount + taxAmount
+    const pricing = await priceLinkCharge(link, req.body.discountCode)
+    if (pricing.error) return res.status(400).json({ error: pricing.error })
+    const { finalAmount, taxAmount, appliedDiscount } = pricing
 
     const orderId = `PL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
-    const paymentData = {
-      studentName: link.payeeName,
-      studentEmail: link.payeeEmail,
-      studentPhone: link.payeePhone,
-      plan: link.description,
-      amount: finalAmount,
-      currency: link.currency || 'PKR',
-      gatewayOrderId: orderId,
-      paymentLink: link._id,
-      invoiceNo: link.invoiceNo,
-      status: 'pending',
-    }
-    if (link.student) paymentData.student = link.student
-    if (appliedDiscount) {
-      paymentData.discountCode = appliedDiscount.code
-      paymentData.discountCodeRef = appliedDiscount._id
-      paymentData.discountAmount = appliedDiscount.discountAmount
-      paymentData.originalAmount = link.amount
-    }
-    if (taxAmount > 0) {
-      paymentData.taxAmount = taxAmount
-      paymentData.taxType = link.taxType
-      paymentData.taxValue = link.taxValue
-      if (!appliedDiscount) paymentData.originalAmount = link.amount
-    }
-
-    const payment = await Payment.create(paymentData)
+    const payment = await Payment.create(buildPaymentData(link, {
+      orderId, finalAmount, taxAmount, appliedDiscount,
+      gateway: 'mastercard', paymentMethod: 'CARD',
+    }))
 
     // Link the payment to the payment link
     link.payment = payment._id
@@ -364,73 +315,23 @@ export async function initiatePayPal(req, res) {
     if (currency === 'PKR') {
       return res.status(400).json({ error: 'PayPal is not available for PKR payments' })
     }
-
-    // Expire any previous pending payment for this link
-    if (link.payment) {
-      await Payment.updateOne(
-        { _id: link.payment, status: 'pending' },
-        { status: 'expired' }
-      )
+    if (link.paymentMode === 'recurring') {
+      return res.status(400).json({ error: 'This is a recurring link — use the Stripe checkout' })
     }
 
-    // Validate and apply discount code if provided
-    const discountCodeStr = req.body.discountCode?.trim()?.toUpperCase() || ''
-    let appliedDiscount = null
-    let finalAmount = link.amount
+    await expirePendingPayment(link)
 
-    if (discountCodeStr) {
-      const dc = await DiscountCode.findOne({ code: discountCodeStr })
-      if (!dc || !dc.isActive) {
-        return res.status(400).json({ error: 'Invalid or inactive discount code' })
-      }
-      if (dc.currency !== currency) {
-        return res.status(400).json({ error: `Discount code is for ${dc.currency} payments only` })
-      }
-      if (dc.usageType === 'one_time' && dc.timesUsed >= 1) {
-        return res.status(400).json({ error: 'This discount code has already been used' })
-      }
-      if (dc.discountAmount >= link.amount) {
-        return res.status(400).json({ error: 'Discount cannot exceed the payment amount' })
-      }
-      appliedDiscount = dc
-      finalAmount = link.amount - dc.discountAmount
-    }
-
-    // Apply tax on top of the (post-discount) subtotal
-    const taxAmount = computeTax(finalAmount, link.taxType, link.taxValue)
-    finalAmount = finalAmount + taxAmount
+    const pricing = await priceLinkCharge(link, req.body.discountCode)
+    if (pricing.error) return res.status(400).json({ error: pricing.error })
+    const { finalAmount, taxAmount, appliedDiscount } = pricing
 
     const orderId = `PL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
     const transactionId = `TXN-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
-    const paymentData = {
-      studentName: link.payeeName,
-      studentEmail: link.payeeEmail,
-      studentPhone: link.payeePhone,
-      plan: link.description,
-      amount: finalAmount,
-      currency,
-      gatewayOrderId: orderId,
-      paymentLink: link._id,
-      invoiceNo: link.invoiceNo,
-      status: 'pending',
-      paymentMethod: 'PAYPAL',
-    }
-    if (link.student) paymentData.student = link.student
-    if (appliedDiscount) {
-      paymentData.discountCode = appliedDiscount.code
-      paymentData.discountCodeRef = appliedDiscount._id
-      paymentData.discountAmount = appliedDiscount.discountAmount
-      paymentData.originalAmount = link.amount
-    }
-    if (taxAmount > 0) {
-      paymentData.taxAmount = taxAmount
-      paymentData.taxType = link.taxType
-      paymentData.taxValue = link.taxValue
-      if (!appliedDiscount) paymentData.originalAmount = link.amount
-    }
-
-    const payment = await Payment.create(paymentData)
+    const payment = await Payment.create(buildPaymentData(link, {
+      orderId, finalAmount, taxAmount, appliedDiscount,
+      gateway: 'mastercard', paymentMethod: 'PAYPAL',
+    }))
     link.payment = payment._id
     await link.save()
 
@@ -461,19 +362,155 @@ export async function initiatePayPal(req, res) {
   }
 }
 
-/* ── Public: Payment callback for link ── */
+/* ── Public: Initiate a Stripe hosted-checkout payment from link ──
+ * Handles BOTH billing modes. A one-off link opens a `mode: 'payment'` session;
+ * a recurring link opens `mode: 'subscription'`, which is what makes Stripe
+ * store the mandate and keep charging every cycle.
+ *
+ * The Payment row created here is a placeholder for the FIRST charge only.
+ * Every subsequent cycle gets its own Payment row, created by the webhook when
+ * Stripe emits `invoice.paid` — nothing is recorded here optimistically. */
+export async function initiateStripe(req, res) {
+  try {
+    if (!isStripeEnabled()) {
+      return res.status(503).json({ error: 'Stripe payments are not configured' })
+    }
+
+    const link = await PaymentLink.findOne({ token: req.params.token })
+    if (!link) return res.status(404).json({ error: 'Payment link not found' })
+    if (link.status === 'completed') {
+      return res.status(400).json({ error: 'This payment link has already been used' })
+    }
+    if (link.paymentMode === 'recurring' && link.stripeSubscriptionId &&
+        ['active', 'trialing', 'past_due'].includes(link.subscriptionStatus)) {
+      return res.status(400).json({ error: 'A subscription is already active on this link' })
+    }
+
+    await expirePendingPayment(link)
+
+    const pricing = await priceLinkCharge(link, req.body.discountCode)
+    if (pricing.error) return res.status(400).json({ error: pricing.error })
+    const { subtotal, finalAmount, taxAmount, appliedDiscount } = pricing
+
+    const isRecurring = link.paymentMode === 'recurring'
+    const orderId = `PL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+
+    const payment = await Payment.create(buildPaymentData(link, {
+      orderId,
+      // A subscription's recurring price is the UNDISCOUNTED total; the discount
+      // rides along as a one-off coupon on the first invoice (see below), so the
+      // placeholder still records what this first charge is expected to be.
+      finalAmount, taxAmount, appliedDiscount,
+      gateway: 'stripe', paymentMethod: 'STRIPE',
+    }))
+    if (isRecurring) payment.billingReason = 'subscription_create'
+    await payment.save()
+
+    link.payment = payment._id
+    await link.save()
+
+    const successUrl = `${process.env.FRONTEND_URL}/pay/${link.token}/callback?provider=stripe&session_id={CHECKOUT_SESSION_ID}`
+    const cancelUrl = `${process.env.FRONTEND_URL}/pay/${link.token}`
+    const metadata = {
+      paymentLinkId: String(link._id),
+      paymentId: String(payment._id),
+      orderId,
+      invoiceNo: link.invoiceNo || '',
+      token: link.token,
+    }
+
+    let session
+    if (isRecurring) {
+      // Recurring price = amount + tax, charged every cycle. A discount code
+      // becomes a `duration: 'once'` coupon so it can't silently repeat forever.
+      const recurringAmount = link.amount + computeTaxForLink(link, link.amount)
+      let discountCouponId
+      if (appliedDiscount) {
+        const coupon = await createOnceOffCoupon({
+          amountOff: appliedDiscount.discountAmount,
+          currency: link.currency || 'PKR',
+          name: appliedDiscount.code,
+        })
+        discountCouponId = coupon.id
+      }
+
+      session = await createStripeSubscriptionSession({
+        amount: recurringAmount,
+        currency: link.currency || 'PKR',
+        description: link.description,
+        items: link.items || [],
+        interval: link.recurring?.interval || 'month',
+        intervalCount: link.recurring?.intervalCount || 1,
+        trialDays: link.recurring?.trialDays || 0,
+        successUrl, cancelUrl,
+        customerName: link.payeeName,
+        customerEmail: link.payeeEmail || undefined,
+        metadata,
+        clientReferenceId: String(link._id),
+        discountCouponId,
+      })
+    } else {
+      session = await createStripeCheckoutSession({
+        amount: finalAmount,
+        currency: link.currency || 'PKR',
+        description: link.description,
+        items: link.items || [],
+        successUrl, cancelUrl,
+        customerName: link.payeeName,
+        customerEmail: link.payeeEmail || undefined,
+        metadata,
+        clientReferenceId: String(link._id),
+      })
+    }
+
+    payment.stripeSessionId = session.id
+    await payment.save()
+
+    // Hosted checkout — the browser goes to Stripe's page.
+    res.json({
+      url: session.url,
+      sessionId: session.id,
+      orderId,
+      paymentId: payment._id,
+      mode: isRecurring ? 'subscription' : 'payment',
+      subtotal,
+    })
+  } catch (err) {
+    console.error('PaymentLink initiateStripe error:', err)
+    res.status(500).json({ error: err?.message || 'Failed to start Stripe checkout' })
+  }
+}
+
+/* Tax on a raw (pre-discount) amount for this link — used for the recurring price. */
+function computeTaxForLink(link, amount) {
+  const val = Number(link.taxValue) || 0
+  if (link.taxType === 'percentage') return Math.round(amount * (val / 100) * 100) / 100
+  if (link.taxType === 'fixed') return Math.max(0, val)
+  return 0
+}
+
+/* ── Public: Payment callback for link ──
+ * Mastercard posts `{ orderId }`; Stripe's return URL posts `{ sessionId }`.
+ *
+ * For Stripe this is only a convenience re-sync so the payer sees a confirmed
+ * receipt immediately — the webhook is the authority and may well have landed
+ * first. Both paths funnel through settleLinkPayment(), which is idempotent. */
 export async function callback(req, res) {
   try {
-    const { orderId } = req.body
     const { token } = req.params
-    if (!orderId) return res.status(400).json({ error: 'Order ID required' })
+    const { orderId, sessionId } = req.body
 
     const link = await PaymentLink.findOne({ token })
     if (!link) return res.status(404).json({ error: 'Payment link not found' })
 
+    if (sessionId) return stripeCallback({ req, res, link, sessionId })
+
+    if (!orderId) return res.status(400).json({ error: 'Order ID required' })
+
     const payment = await Payment.findOne({ gatewayOrderId: orderId })
     if (!payment) return res.status(404).json({ error: 'Payment not found' })
 
+    const alreadySettled = payment.status === 'completed'
     const orderData = await retrieveOrder(orderId)
 
     if (orderData.result === 'SUCCESS' && orderData.status === 'CAPTURED') {
@@ -490,63 +527,84 @@ export async function callback(req, res) {
       payment.gatewayResultCode = orderData.error?.cause || ''
     }
 
-    await payment.save()
-
-    // Add payment to the link's payments array
-    if (!link.payments) link.payments = []
-    if (!link.payments.includes(payment._id)) {
-      link.payments.push(payment._id)
-    }
-
-    if (payment.status === 'completed' && link.expiresAfterPayment) {
-      // Single-use link — mark as completed
-      link.status = 'completed'
-    } else if (payment.status === 'completed' && !link.expiresAfterPayment) {
-      // Recurring link — generate new invoice number for next payment
-      link.invoiceNo = await generateInvoiceNo()
-    }
-
-    await link.save()
-
-    // Increment discount code usage count if this payment used one
-    if (payment.status === 'completed' && payment.discountCodeRef) {
-      await DiscountCode.findByIdAndUpdate(payment.discountCodeRef, { $inc: { timesUsed: 1 } })
-    }
-
-    const paymentData = payment.toObject()
-
-    // Log payment outcome
-    logActivity({
-      level: payment.status === 'completed' ? 'info' : 'warning',
-      category: 'payment_link',
-      action: `payment_${payment.status}`,
-      message: `Payment ${payment.status} — ${payment.currency} ${payment.amount} from ${payment.studentName || 'unknown'} (${link.invoiceNo})`,
-      req,
-      meta: {
-        orderId,
-        paymentId: payment._id,
-        linkId: link._id,
-        amount: payment.amount,
-        currency: payment.currency,
-        discountCode: payment.discountCode || null,
-        gatewayResult: payment.gatewayResult,
-      },
-    })
-
-    // Notify admin
-    notifyAdmin(paymentEmail(paymentData)).catch(() => {})
-
-    if (payment.status === 'completed') {
-      const invoice = invoiceEmail({ link: link.toObject(), payment: paymentData })
-      sendToUser({ to: paymentData.studentEmail, ...invoice }).catch(() => {})
-    } else {
-      const userEmail = paymentConfirmationEmail(paymentData)
-      sendToUser({ to: paymentData.studentEmail, ...userEmail }).catch(() => {})
-    }
+    await settleLinkPayment({ link, payment, req, alreadySettled, source: 'mastercard_callback' })
 
     res.json({ status: payment.status, payment })
   } catch (err) {
     console.error('PaymentLink callback error:', err)
     res.status(500).json({ error: 'Server error' })
   }
+}
+
+/* Stripe return-URL re-sync — reads the session straight from Stripe rather
+ * than trusting the query string. */
+async function stripeCallback({ req, res, link, sessionId }) {
+  if (!isStripeEnabled()) return res.status(503).json({ error: 'Stripe payments are not configured' })
+
+  const session = await retrieveCheckoutSession(sessionId)
+  if (!session || String(session.metadata?.paymentLinkId || '') !== String(link._id)) {
+    return res.status(404).json({ error: 'Checkout session not found for this link' })
+  }
+
+  const payment = await Payment.findOne({ stripeSessionId: sessionId })
+  if (!payment) return res.status(404).json({ error: 'Payment not found' })
+
+  const alreadySettled = payment.status === 'completed'
+
+  // `paid` covers one-off sessions; a subscription session with a 100%-trial
+  // start is 'no_payment_required' but still a successful activation.
+  const ok = session.payment_status === 'paid' || session.payment_status === 'no_payment_required'
+
+  if (ok) {
+    payment.status = 'completed'
+    payment.gatewayResult = 'SUCCESS'
+    applyStripeSessionRefs(payment, session)
+  } else if (session.status === 'expired') {
+    payment.status = 'failed'
+    payment.gatewayResult = 'SESSION_EXPIRED'
+  } else {
+    // Still 'open' / processing — leave it pending and let the webhook decide.
+    await payment.save()
+    return res.json({ status: payment.status, payment })
+  }
+
+  if (session.mode === 'subscription' && session.subscription) {
+    await applySubscriptionToLink(link, session)
+  }
+
+  await settleLinkPayment({ link, payment, req, alreadySettled, source: 'stripe_return' })
+  res.json({ status: payment.status, payment })
+}
+
+/* Copy Stripe's identifiers onto a Payment (shared with the webhook handler). */
+export function applyStripeSessionRefs(payment, session) {
+  payment.gateway = 'stripe'
+  payment.paymentMethod = 'STRIPE'
+  payment.stripeSessionId = session.id
+  const pi = session.payment_intent
+  if (pi) {
+    payment.stripePaymentIntentId = typeof pi === 'string' ? pi : pi.id
+    payment.gatewayTransactionId = payment.stripePaymentIntentId
+  }
+  const sub = session.subscription
+  if (sub) payment.stripeSubscriptionId = typeof sub === 'string' ? sub : sub.id
+  if (session.invoice) {
+    payment.stripeInvoiceId = typeof session.invoice === 'string' ? session.invoice : session.invoice.id
+  }
+}
+
+/* Record the newly-created subscription on the link. */
+export async function applySubscriptionToLink(link, session) {
+  const sub = session.subscription
+  link.stripeSubscriptionId = typeof sub === 'string' ? sub : sub?.id || ''
+  link.stripeCustomerId = typeof session.customer === 'string' ? session.customer : session.customer?.id || ''
+  if (sub && typeof sub !== 'string') {
+    link.subscriptionStatus = sub.status || 'active'
+    const periodEnd = periodEndOf(sub)
+    if (periodEnd) link.subscriptionCurrentPeriodEnd = periodEnd
+    link.subscriptionCancelAtPeriodEnd = Boolean(sub.cancel_at_period_end)
+  } else if (!link.subscriptionStatus) {
+    link.subscriptionStatus = 'active'
+  }
+  await link.save()
 }

@@ -54,6 +54,7 @@ import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js
 import portalFeeRoutes from './routes/portalFeeRoutes.js'
 import portalClassLinkRoutes from './routes/portalClassLinkRoutes.js'
 import publicClassLinkRoutes from './routes/publicClassLinkRoutes.js'
+import { stripeWebhook } from './controllers/stripeWebhookController.js'
 import { initSocket } from './config/socket.js'
 // import requestLogger from './middleware/requestLogger.js' // disabled 2026-08-02 — see app.use note below
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
@@ -103,6 +104,13 @@ try {
 // Security
 app.use(helmet())
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }))
+
+// Stripe webhook — MUST be mounted before express.json(). The signature is
+// computed over the exact bytes Stripe sent, so the handler needs the raw
+// Buffer; a parsed-and-re-serialized body never verifies. Server-to-server,
+// so it is deliberately outside CORS/auth and authenticated by signature only.
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhook)
+
 app.use(express.json({ limit: '5mb' }))
 
 // Request logging DISABLED (2026-08-02): the per-request access logger wrote one
