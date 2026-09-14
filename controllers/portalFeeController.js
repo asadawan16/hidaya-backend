@@ -191,11 +191,23 @@ export async function upsertFeeCell(req, res) {
     const { studentId, year, month, amount, amountPaid, status, note, currency } = req.body
     if (!studentId || !year || !month) return res.status(400).json({ error: 'studentId, year and month are required' })
 
-    const student = await Student.findById(studentId).select('familyId').lean()
+    const student = await Student.findById(studentId).select('familyId billing.currency').lean()
     if (!student) return res.status(404).json({ error: 'Student not found' })
 
+    // A new cell inherits the student's agreed billing currency. Without this it
+    // fell back to the schema default (PKR), so a student priced in USD or GBP
+    // on their student detail page got a month recorded in rupees — and since
+    // totals are grouped per currency and never converted, the ledger then
+    // showed the wrong figure to the student and to the office.
+    // (bulkUpsertReceivables already does this; this path was the gap.)
     const rec = await StudentFeeRecord.findOne({ studentId, year, month: clampMonth(month) })
-      || new StudentFeeRecord({ studentId, year, month: clampMonth(month), familyId: student.familyId })
+      || new StudentFeeRecord({
+        studentId,
+        year,
+        month: clampMonth(month),
+        familyId: student.familyId,
+        currency: student.billing?.currency || 'PKR',
+      })
 
     if (amount !== undefined) rec.amount = Math.max(0, Number(amount) || 0)
     if (amountPaid !== undefined) rec.amountPaid = Math.max(0, Number(amountPaid) || 0)
