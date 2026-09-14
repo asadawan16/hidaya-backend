@@ -1,5 +1,7 @@
 import ClassLink from '../models/ClassLink.js'
 import ClassLinkSettings from '../models/ClassLinkSettings.js'
+import StudentClassLink from '../models/StudentClassLink.js'
+import '../models/Student.js'
 // Registered explicitly: the tutor → userId (avatar) populate below resolves the
 // 'TutorProfile' and 'User' models by name, so neither may depend on some other
 // route module having been imported first.
@@ -111,6 +113,77 @@ export async function getPublicClassLinks(req, res) {
 export async function trackClassLinkClick(req, res) {
   try {
     await ClassLink.updateOne({ _id: req.params.id, isActive: true }, { $inc: { clicks: 1 } })
+    res.json({ ok: true })
+  } catch {
+    res.json({ ok: false })
+  }
+}
+
+/* ── Per-student links (/my-class/:token) ──────────────────────────────────
+ * One student, one page, one Join button — so nobody has to work out which of
+ * fifteen tutor cards is theirs. The token IS the credential, so this endpoint
+ * is not behind the board's access code; it returns only the fields that page
+ * renders, and never the student's contacts, guardians, fees or ids.
+ */
+
+// A null theme still has to look the same on every visit, so it's derived from
+// the token rather than from the request.
+function themeFromToken(token) {
+  let sum = 0
+  for (let i = 0; i < token.length; i++) sum += token.charCodeAt(i)
+  return sum % 8
+}
+
+// First name only — "Assalamu alaikum, Muhammad" reads like a greeting where
+// the full three-part registered name reads like a register.
+function firstNameOf(name) {
+  return String(name || '').trim().split(/\s+/)[0] || ''
+}
+
+export async function getPublicStudentClassLink(req, res) {
+  try {
+    const token = String(req.params.token || '').trim()
+    // A miss is a 200 with found:false, not a 404 — the page renders a calm
+    // "check the link" card instead of an error screen.
+    if (!token) return res.json({ found: false })
+
+    const link = await StudentClassLink.findOne({ token })
+      .populate('student', 'name courseLabels')
+      .lean()
+
+    if (!link) return res.json({ found: false })
+
+    if (!link.isActive) {
+      return res.json({ found: true, active: false, firstName: firstNameOf(link.studentName) })
+    }
+
+    res.json({
+      found: true,
+      active: true,
+      id: String(link._id),
+      studentName: link.studentName,
+      firstName: firstNameOf(link.studentName),
+      url: link.url,
+      label: link.label || '',
+      tutorName: link.tutorName || '',
+      platform: link.platform || 'other',
+      timing: link.timing || '',
+      note: link.note || '',
+      courses: link.student?.courseLabels || [],
+      theme: Number.isInteger(link.theme) ? link.theme : themeFromToken(token),
+    })
+  } catch (err) {
+    console.error('Public student class link error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function trackStudentClassLinkClick(req, res) {
+  try {
+    await StudentClassLink.updateOne(
+      { token: String(req.params.token || ''), isActive: true },
+      { $inc: { clicks: 1 }, $set: { lastClickedAt: new Date() } },
+    )
     res.json({ ok: true })
   } catch {
     res.json({ ok: false })
