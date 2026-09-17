@@ -7,10 +7,23 @@ import {
   addStudentFeedback, deleteStudentFeedback,
   pickerStudents, checkRollNo,
 } from '../controllers/portalStudentController.js'
+import {
+  getMyStudent, updateMyStudent, createMyComplaint, listMyComplaints,
+} from '../controllers/portalStudentSelfController.js'
 
 const router = Router()
 
 router.use(portalAuth)
+
+// ── The student's own record ──
+// Authorized by the account's linkedStudentId rather than by student.read —
+// students hold none of the student.* permissions and must not, since those
+// serve the whole directory. Literal paths, so they MUST precede '/:id' or
+// Express hands "me" to the id route and Mongoose fails to cast it.
+router.get('/me', getMyStudent)
+router.patch('/me', updateMyStudent)
+router.get('/me/complaints', listMyComplaints)
+router.post('/me/complaints', createMyComplaint)
 
 router.get('/', requirePermission('student.read'), listStudents)
 router.get('/stats', requirePermission('student.read'), getStudentStats)

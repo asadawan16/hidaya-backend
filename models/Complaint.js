@@ -43,6 +43,16 @@ const complaintSchema = new mongoose.Schema({
     enum: ['open', 'resolved', 'dismissed'],
     default: 'open',
   },
+  // Where the complaint came in from. Everything the portal creates is
+  // 'portal' — a staff member typing up what a family told them. 'student_app'
+  // means the family submitted it themselves from the mobile app, unmediated,
+  // which is worth knowing when reading the tone of it and is the filter the
+  // family's own "my complaints" list is built on.
+  source: {
+    type: String,
+    enum: ['portal', 'student_app'],
+    default: 'portal',
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
