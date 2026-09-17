@@ -2,10 +2,16 @@
  * Channel price books.
  *
  * qurantutornow.com is a separate acquisition funnel (Google Ads) with its own
- * published rates — deliberately higher than hidaya.online's, because an ad
- * lead converts at a different price point. Those rates therefore CANNOT come
- * from the `Plan` collection: that is what hidaya.online's own fee page sells,
- * and the two must be free to move independently.
+ * published rates. Those rates CANNOT come from the `Plan` collection: that is
+ * what hidaya.online's own fee page sells, and the two must be free to move
+ * independently.
+ *
+ * They were originally set above hidaya.online's, on the theory that an ad lead
+ * converts at a different price point. They are not any more: $80/month for
+ * twenty half-hour classes sat above what a parent finds by searching for ten
+ * seconds, and the click is paid for either way. The whole table moved down one
+ * step in Sep 2026 — the top plan now sits where the middle one did, and the
+ * ceiling is $55.
  *
  * This file is the authority for what a channel checkout charges. The channel's
  * marketing site renders its price cards from the SAME book at runtime
@@ -32,7 +38,7 @@ export const CHANNELS = {
         name: '2 days a week',
         sessions: '8 classes a month',
         duration: '30 minutes each',
-        prices: { USD: 40, GBP: 32, EUR: 38, PKR: 10000 },
+        prices: { USD: 30, GBP: 24, EUR: 28, PKR: 7500 },
         features: ['One-to-one sessions', 'Flexible scheduling', 'Monthly progress report', 'Free trial class'],
         popular: false,
       },
@@ -41,7 +47,7 @@ export const CHANNELS = {
         name: '3 days a week',
         sessions: '12 classes a month',
         duration: '30 minutes each',
-        prices: { USD: 55, GBP: 44, EUR: 52, PKR: 14000 },
+        prices: { USD: 40, GBP: 32, EUR: 38, PKR: 10000 },
         features: ['One-to-one sessions', 'Flexible scheduling', 'Monthly progress report', 'Free trial class', 'Backup teacher cover'],
         popular: true,
       },
@@ -50,7 +56,7 @@ export const CHANNELS = {
         name: '5 days a week',
         sessions: '20 classes a month',
         duration: '30 minutes each',
-        prices: { USD: 80, GBP: 64, EUR: 76, PKR: 21000 },
+        prices: { USD: 55, GBP: 44, EUR: 52, PKR: 14000 },
         features: ['One-to-one sessions', 'Flexible scheduling', 'Monthly progress report', 'Free trial class', 'Backup teacher cover', 'Priority support'],
         popular: false,
       },
