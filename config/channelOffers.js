@@ -44,6 +44,23 @@
  * rounding. Mirrored in the marketing site's content.js as ANNUAL_OFF. */
 export const ANNUAL_OFF = 0.11
 
+/* What every plan includes — one list, shared by all three, and deliberately
+ * so. The features used to grow down the row (backup cover from the middle
+ * plan, priority support only at the top), which told a parent picking the
+ * cheapest option they were buying the lesser service. They are not: the plans
+ * differ in days a week and in nothing else. Mirrored in the marketing site's
+ * content.js as PLAN_FEATURES, and itemised on the payment page. */
+export const PLAN_FEATURES = [
+  'One-to-one with the same tutor, every class',
+  'Your own time slot, in your own time zone',
+  'A male or female tutor, your choice',
+  'Monthly progress and test report',
+  'Backup teacher cover and make-up classes',
+  'Student and parent portal access',
+  'Priority support from a coordinator',
+  'Free trial class before you pay anything',
+]
+
 /* Sibling tiers, by head count. `off` comes off EVERY enrolled child's fee,
  * not only the second one's. Published to the marketing site so the selector
  * on the fee table and the arithmetic here are the same two numbers, and
@@ -88,17 +105,11 @@ export const CHANNELS = {
         sessions: '8 classes a month',
         duration: '90 minutes each',
         days: 'Saturday & Sunday',
-        flag: 'Most class time per month',
-        prices: { USD: 42, GBP: 34, EUR: 40, PKR: 10500 },
+        flag: 'Best value',
+        prices: { USD: 40, GBP: 32, EUR: 38, PKR: 10000 },
         list: { USD: 60, GBP: 48, EUR: 57, PKR: 15000 },
-        annual: { USD: 37, GBP: 30, EUR: 36, PKR: 9300 },
-        features: [
-          'Double-length 90-minute classes',
-          '12 hours of one-to-one class a month',
-          'Nothing to fit around a school week',
-          'Monthly progress report',
-          'Free trial class',
-        ],
+        annual: { USD: 36, GBP: 28, EUR: 34, PKR: 8900 },
+        features: PLAN_FEATURES,
         popular: false,
       },
       {
@@ -111,13 +122,7 @@ export const CHANNELS = {
         prices: { USD: 42, GBP: 34, EUR: 40, PKR: 10500 },
         list: { USD: 60, GBP: 48, EUR: 57, PKR: 15000 },
         annual: { USD: 37, GBP: 30, EUR: 36, PKR: 9300 },
-        features: [
-          'Choose Mon–Wed or Thu–Sat',
-          'The same tutor, one-to-one, every class',
-          'Monthly progress report',
-          'Backup teacher cover',
-          'Free trial class',
-        ],
+        features: PLAN_FEATURES,
         popular: true,
       },
       {
@@ -126,18 +131,14 @@ export const CHANNELS = {
         sessions: '20 classes a month',
         duration: '30 minutes each',
         days: 'Monday – Friday',
-        flag: 'Best for Hifz students',
+        // Never "Best for Hifz students" — a ribbon naming who a plan is for
+        // reads as who it is NOT for, and the adult fixing their Tajweed
+        // quietly picks a cheaper one.
+        flag: 'Fastest progress',
         prices: { USD: 55, GBP: 44, EUR: 52, PKR: 14000 },
         list: { USD: 80, GBP: 64, EUR: 75, PKR: 20000 },
         annual: { USD: 49, GBP: 39, EUR: 46, PKR: 12500 },
-        features: [
-          'A class every weekday, daily revision',
-          'The same tutor, one-to-one, every class',
-          'Monthly progress report',
-          'Backup teacher cover',
-          'Priority support',
-          'Free trial class',
-        ],
+        features: PLAN_FEATURES,
         popular: false,
       },
     ],
