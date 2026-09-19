@@ -140,6 +140,25 @@ function firstNameOf(name) {
   return String(name || '').trim().split(/\s+/)[0] || ''
 }
 
+/**
+ * Tokens are roll numbers now (`/my-class/hid518`), so they get typed by hand
+ * and shouted down a phone — and half the academy writes the roll number as
+ * HID518. The indexed exact match runs first and answers every link that was
+ * actually clicked; the anchored case-insensitive regex is the fallback that
+ * rescues a hand-typed one, and it only ever runs on a miss.
+ */
+async function findByToken(token) {
+  const exact = await StudentClassLink.findOne({ token })
+    .populate('student', 'name courseLabels')
+    .lean()
+  if (exact) return exact
+
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return StudentClassLink.findOne({ token: new RegExp(`^${escaped}$`, 'i') })
+    .populate('student', 'name courseLabels')
+    .lean()
+}
+
 export async function getPublicStudentClassLink(req, res) {
   try {
     const token = String(req.params.token || '').trim()
@@ -147,9 +166,7 @@ export async function getPublicStudentClassLink(req, res) {
     // "check the link" card instead of an error screen.
     if (!token) return res.json({ found: false })
 
-    const link = await StudentClassLink.findOne({ token })
-      .populate('student', 'name courseLabels')
-      .lean()
+    const link = await findByToken(token)
 
     if (!link) return res.json({ found: false })
 
@@ -163,6 +180,9 @@ export async function getPublicStudentClassLink(req, res) {
       id: String(link._id),
       studentName: link.studentName,
       firstName: firstNameOf(link.studentName),
+      // Shown on the card so the page confirms whose it is — the same roll
+      // number that now addresses it in the URL.
+      rollNo: link.rollNo || '',
       url: link.url,
       label: link.label || '',
       tutorName: link.tutorName || '',
@@ -180,8 +200,12 @@ export async function getPublicStudentClassLink(req, res) {
 
 export async function trackStudentClassLinkClick(req, res) {
   try {
+    const token = String(req.params.token || '').trim()
+    // Matched the same way the page itself was, or a page reached by a
+    // hand-typed HID518 would render but never count its joins.
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     await StudentClassLink.updateOne(
-      { token: String(req.params.token || ''), isActive: true },
+      { token: new RegExp(`^${escaped}$`, 'i'), isActive: true },
       { $inc: { clicks: 1 }, $set: { lastClickedAt: new Date() } },
     )
     res.json({ ok: true })

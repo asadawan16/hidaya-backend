@@ -1,5 +1,5 @@
 import Student from '../models/Student.js'
-import StudentClassLink, { newLinkToken } from '../models/StudentClassLink.js'
+import StudentClassLink, { newLinkToken, tokenFromRollNo } from '../models/StudentClassLink.js'
 import { logActivity } from '../utils/activityLogger.js'
 
 /**
@@ -25,6 +25,46 @@ function normalizeTheme(value) {
   if (value === '' || value == null) return null
   const n = Number(value)
   return Number.isInteger(n) && n >= 0 && n <= 7 ? n : null
+}
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * The token each of these students' pages will be addressed by.
+ *
+ * Roll number first — `/my-class/hid518` is a URL a coordinator can read down
+ * the phone, where a random string has to be copy-pasted or it is wrong. It
+ * falls back to a random token in the two cases where the roll number can't be
+ * the address: the student hasn't got one, or the slug already belongs to
+ * somebody else's link (roll numbers are unique on Student, but a legacy random
+ * token could in principle collide, and a batch can't hand the same slug out
+ * twice).
+ *
+ * Batched deliberately: the bulk assign runs this for a whole selection, and
+ * one `$in` beats one query per student.
+ */
+async function resolveTokens(students) {
+  const slugs = students.map(s => tokenFromRollNo(s.rollNo))
+  const wanted = slugs.filter(Boolean)
+
+  const owners = new Map()
+  if (wanted.length) {
+    const rows = await StudentClassLink
+      .find({ token: { $in: wanted.map(s => new RegExp(`^${escapeRegex(s)}$`, 'i')) } })
+      .select('token student')
+      .lean()
+    for (const r of rows) owners.set(String(r.token).toLowerCase(), String(r.student))
+  }
+
+  const claimed = new Set()
+  return students.map((s, i) => {
+    const slug = slugs[i]
+    if (!slug) return newLinkToken()
+    const owner = owners.get(slug)
+    if (claimed.has(slug) || (owner && owner !== String(s._id))) return newLinkToken()
+    claimed.add(slug)
+    return slug
+  })
 }
 
 // The optional fields a create/update/bulk body may carry, normalized once.
@@ -128,6 +168,10 @@ export async function upsertStudentClassLink(req, res) {
 
     const existing = await StudentClassLink.findOne({ student: studentId }).lean()
 
+    // `$setOnInsert`, so re-publishing a link never moves a URL already sitting
+    // in a parent's WhatsApp. Rotation is the one thing that retires a token.
+    const [token] = await resolveTokens([student])
+
     const link = await StudentClassLink.findOneAndUpdate(
       { student: studentId },
       {
@@ -138,7 +182,7 @@ export async function upsertStudentClassLink(req, res) {
           ...extraFields(req.body),
           updatedBy: req.userId,
         },
-        $setOnInsert: { token: newLinkToken(), createdBy: req.userId },
+        $setOnInsert: { token, createdBy: req.userId },
       },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: false },
     ).lean()
@@ -171,7 +215,9 @@ export async function updateStudentClassLink(req, res) {
     if (!link.url) return res.status(400).json({ error: 'Link is required' })
 
     // Rotating the token retires the old URL — the escape hatch for a link that
-    // got forwarded outside the family.
+    // got forwarded outside the family. It deliberately goes RANDOM rather than
+    // back to the roll number: the roll number is what leaked, so re-minting it
+    // would rotate the address onto itself.
     if (req.body.regenerateToken) link.token = newLinkToken()
 
     link.updatedBy = req.userId
@@ -229,7 +275,9 @@ export async function bulkAssignStudentClassLinks(req, res) {
 
     if (!targets.length) return res.json({ created: 0, updated: 0, skipped })
 
-    const result = await StudentClassLink.bulkWrite(targets.map(s => ({
+    const tokens = await resolveTokens(targets)
+
+    const result = await StudentClassLink.bulkWrite(targets.map((s, i) => ({
       updateOne: {
         filter: { student: s._id },
         update: {
@@ -241,7 +289,7 @@ export async function bulkAssignStudentClassLinks(req, res) {
             ...extras,
             updatedBy: req.userId,
           },
-          $setOnInsert: { token: newLinkToken(), createdBy: req.userId },
+          $setOnInsert: { token: tokens[i], createdBy: req.userId },
         },
         upsert: true,
       },

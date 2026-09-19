@@ -7,7 +7,7 @@
 import 'dotenv/config'
 import mongoose from 'mongoose'
 import Student from '../models/Student.js'
-import StudentClassLink from '../models/StudentClassLink.js'
+import StudentClassLink, { tokenFromRollNo } from '../models/StudentClassLink.js'
 import {
   listStudentClassLinks, upsertStudentClassLink, updateStudentClassLink,
   deleteStudentClassLink, bulkAssignStudentClassLinks, bulkDeleteStudentClassLinks,
@@ -70,7 +70,13 @@ try {
   })
   check('create returns 201', created.statusCode === 201, `got ${created.statusCode}`)
   check('url gets https:// prefixed', created.body?.url === 'https://meet.google.com/smoke-aaa-bbb', created.body?.url)
-  check('token minted', typeof created.body?.token === 'string' && created.body.token.length >= 10)
+  check('token minted', typeof created.body?.token === 'string' && created.body.token.length >= 3)
+  // A student with a roll number is addressed by it; one without falls back to
+  // a random token, and the smoke DB may contain either.
+  const alphaSlug = tokenFromRollNo(alpha.rollNo)
+  check('token is the roll number',
+    alphaSlug ? created.body?.token === alphaSlug : created.body.token.length >= 10,
+    `${created.body?.token} (roll ${alpha.rollNo || '—'})`)
   check('name snapshotted', created.body?.studentName === alpha.name)
 
   const token = created.body.token
@@ -80,7 +86,12 @@ try {
   check('public page found + active', pub.body?.found === true && pub.body?.active === true)
   check('public greets by first name', pub.body?.firstName === alpha.name.split(/\s+/)[0], pub.body?.firstName)
   check('public carries the chosen theme', pub.body?.theme === 3, String(pub.body?.theme))
-  check('public leaks no student id', !('studentId' in (pub.body || {})) && !('rollNo' in (pub.body || {})))
+  check('public leaks no student id', !('studentId' in (pub.body || {})))
+  check('public echoes the roll number', pub.body?.rollNo === (alpha.rollNo || ''), pub.body?.rollNo)
+
+  // The roll number gets typed by hand as often as it gets clicked.
+  const shouted = await call(getPublicStudentClassLink, { params: { token: token.toUpperCase() } })
+  check('token lookup is case-insensitive', shouted.body?.found === true && shouted.body?.active === true)
 
   const missing = await call(getPublicStudentClassLink, { params: { token: 'not-a-real-token' } })
   check('unknown token → found:false, not an error', missing.statusCode === 200 && missing.body?.found === false)
@@ -153,6 +164,13 @@ try {
   const batch = await StudentClassLink.find({ student: { $in: touched } }).lean()
   check('bulk wrote three links', batch.length === 3, String(batch.length))
   check('every student got their OWN token', new Set(batch.map(l => l.token)).size === 3)
+  check('bulk addresses new pages by roll number too',
+    batch.every((l) => {
+      const slug = tokenFromRollNo(students.find(s => String(s._id) === String(l.student)).rollNo)
+      // alpha's token was rotated to a random one above and bulk must not move it.
+      return String(l.student) === String(alpha._id) || !slug || l.token === slug
+    }),
+    batch.map(l => l.token).join(', '))
   check('all three point at the same room', new Set(batch.map(l => l.url)).size === 1)
   check('each page greets its own student',
     batch.every(l => l.studentName === students.find(s => String(s._id) === String(l.student)).name))

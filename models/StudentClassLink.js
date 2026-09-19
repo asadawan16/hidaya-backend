@@ -11,15 +11,34 @@ import crypto from 'crypto'
  * `find({ isActive: true })` with no "…and not a student link" clause, and a
  * student page can never accidentally list somebody else's class.
  *
- * The page is addressed by a random `token`, not by the student's _id. An
- * ObjectId encodes a timestamp and a counter, so a parent who has one URL can
- * guess neighbouring ones; a random token can't be walked.
+ * The page is addressed by a `token`, never by the student's _id — an ObjectId
+ * encodes a timestamp and a counter, so one URL hands you its neighbours.
+ *
+ * The token is normally the student's ROLL NUMBER (`/my-class/hid518`): that is
+ * what the academy already calls the student, it can be read back down a phone
+ * line, and a parent with two children can tell the two URLs apart at a glance.
+ * A random token is the fallback for a student with no roll number and the
+ * result of an explicit rotation, which is the escape hatch for a link that got
+ * forwarded outside the family.
  */
 
 // 12 url-safe chars — enough entropy that the space can't be swept, short
 // enough to paste into WhatsApp without wrapping.
 export function newLinkToken() {
   return crypto.randomBytes(9).toString('base64url')
+}
+
+// HID518 → "hid518". Lowercased and stripped to url-safe characters so the URL
+// survives a paste into WhatsApp; lookups are case-insensitive, so the
+// capitalised HID518 a staff member types by hand still resolves.
+export function tokenFromRollNo(rollNo) {
+  const slug = String(rollNo || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  // Two characters is not a roll number, it's a typo — those fall back to random.
+  return slug.length >= 3 ? slug : ''
 }
 
 const studentClassLinkSchema = new mongoose.Schema({
