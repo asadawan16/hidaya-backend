@@ -567,6 +567,11 @@ async function buildStudentFeeHistory(studentId) {
       rollNo: student.rollNo,
       status: student.status,
       baseFee,
+      // The fee grid is kept in local PKR (`baseFee` is "Fee (local)"); what the
+      // family is actually charged is `billing.amount` in `currency` ("Billed
+      // amount" on the student detail page). The student app converts dues
+      // with the ratio between the two.
+      billedAmount: student.billing?.amount || 0,
       currency,
       cycle: student.billing?.cycle || 'monthly',
       familyCode: student.familyId?.familyCode || '',
