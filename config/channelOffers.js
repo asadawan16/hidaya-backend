@@ -36,6 +36,10 @@
  *
  * The two-day plan is gone — nobody picked it — and a weekend plan of two
  * 90-minute classes replaces it.
+ *
+ * Sep 2026, third pass — the offer is now framed as a back-from-summer offer
+ * running until 30 October. Weekend moved 40 → 42 and 3 days 42 → 45; the
+ * 5-day plan is unchanged at 55.
  */
 
 /* The annual discount, as one knob. The published `annual` maps below are this
@@ -76,7 +80,7 @@ export function siblingOff(students, tiers = SIBLING_TIERS) {
   return tiers.reduce((best, t) => (students >= t.min && t.off > best ? t.off : best), 0)
 }
 
-/* Money is rounded to the cent, never to whole units: 10% off $42 is $37.80
+/* Money is rounded to the cent, never to whole units: 10% off $45 is $40.50
  * and that is what the card says, so that is what the card is charged. */
 const cents = n => Math.round(Number(n || 0) * 100) / 100
 
@@ -106,9 +110,9 @@ export const CHANNELS = {
         duration: '90 minutes each',
         days: 'Saturday & Sunday',
         flag: 'Best value',
-        prices: { USD: 40, GBP: 32, EUR: 38, PKR: 10000 },
+        prices: { USD: 42, GBP: 34, EUR: 40, PKR: 10500 },
         list: { USD: 60, GBP: 48, EUR: 57, PKR: 15000 },
-        annual: { USD: 36, GBP: 28, EUR: 34, PKR: 8900 },
+        annual: { USD: 37, GBP: 30, EUR: 36, PKR: 9300 },
         features: PLAN_FEATURES,
         popular: false,
       },
@@ -119,9 +123,9 @@ export const CHANNELS = {
         duration: '30 minutes each',
         days: 'Mon–Wed or Thu–Sat',
         flag: 'Most families choose this',
-        prices: { USD: 42, GBP: 34, EUR: 40, PKR: 10500 },
+        prices: { USD: 45, GBP: 36, EUR: 43, PKR: 11300 },
         list: { USD: 60, GBP: 48, EUR: 57, PKR: 15000 },
-        annual: { USD: 37, GBP: 30, EUR: 36, PKR: 9300 },
+        annual: { USD: 40, GBP: 32, EUR: 38, PKR: 10100 },
         features: PLAN_FEATURES,
         popular: true,
       },
