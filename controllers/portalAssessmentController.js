@@ -2,17 +2,50 @@ import AssessmentTemplate from '../models/AssessmentTemplate.js'
 import Assessment from '../models/Assessment.js'
 import Student from '../models/Student.js'
 import { logActivity } from '../utils/activityLogger.js'
-import { scoreAssessment } from '../utils/assessmentScore.js'
+import { scoreAssessment, effectiveOptionScores } from '../utils/assessmentScore.js'
 import { createNotification } from './portalNotificationController.js'
 
 // ─── Templates ───
+
+const hasOptions = (f) => f.type === 'rating' || f.type === 'select'
+
+/**
+ * Keep `optionScores` the same length as `options`, each entry a 0–100 number
+ * or null ("no %" — a blank box in the editor). A field sent without the array
+ * at all keeps it unset, so the standard scale applies.
+ */
+function cleanSections(sections) {
+  return (sections || []).map(sec => ({
+    ...sec,
+    fields: (sec.fields || []).map(f => {
+      if (!hasOptions(f) || !Array.isArray(f.optionScores)) return { ...f, optionScores: undefined }
+      const optionScores = (f.options || []).map((_, i) => {
+        const v = f.optionScores[i]
+        const n = v === null || v === '' ? NaN : Number(v)
+        return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : null
+      })
+      return { ...f, optionScores }
+    }),
+  }))
+}
+
+/** Fill in what each option is worth so the editor shows the real numbers. */
+function withEffectiveScores(template) {
+  return {
+    ...template,
+    sections: (template.sections || []).map(sec => ({
+      ...sec,
+      fields: (sec.fields || []).map(f => hasOptions(f) ? { ...f, optionScores: effectiveOptionScores(f) } : f),
+    })),
+  }
+}
 
 export async function listTemplates(req, res) {
   try {
     const filter = {}
     if (req.query.active === 'true') filter.active = true
     const templates = await AssessmentTemplate.find(filter).sort({ createdAt: -1 }).lean()
-    res.json(templates)
+    res.json(templates.map(withEffectiveScores))
   } catch (err) {
     console.error('List templates error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -25,7 +58,7 @@ export async function createTemplate(req, res) {
     if (!name) return res.status(400).json({ error: 'Name is required' })
 
     const template = await AssessmentTemplate.create({
-      name, sections: sections || [], active: true, createdBy: req.userId,
+      name, sections: cleanSections(sections), active: true, createdBy: req.userId,
     })
 
     await logActivity({ level: 'info', category: 'assessment', action: 'template_created', message: `Template created: ${name}`, req })
@@ -43,15 +76,28 @@ export async function updateTemplate(req, res) {
 
     const { name, sections, active } = req.body
     if (name !== undefined) template.name = name
-    if (sections !== undefined) template.sections = sections
+    if (sections !== undefined) template.sections = cleanSections(sections)
     if (active !== undefined) template.active = active
     await template.save()
 
-    res.json(template)
+    // Answers already recorded against this template are worth whatever the
+    // template now says, so a changed % reaches old exams too.
+    if (sections !== undefined) await rescoreTemplate(template.toObject())
+
+    res.json(withEffectiveScores(template.toObject()))
   } catch (err) {
     console.error('Update template error:', err)
     res.status(500).json({ error: 'Server error' })
   }
+}
+
+async function rescoreTemplate(template) {
+  const records = await Assessment.find({ templateId: template._id }).select('responses').lean()
+  const ops = records.map(a => {
+    const { responses, overallScore } = scoreAssessment(template, a.responses || [])
+    return { updateOne: { filter: { _id: a._id }, update: { $set: { responses, overallScore } } } }
+  })
+  if (ops.length) await Assessment.bulkWrite(ops)
 }
 
 export async function deleteTemplate(req, res) {

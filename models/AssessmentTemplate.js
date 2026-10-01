@@ -9,6 +9,9 @@ const fieldSchema = new mongoose.Schema({
     required: true,
   },
   options: [String],
+  // The % each option is worth, parallel to `options`; null = no % (left out of
+  // the average). Unset entries use the standard scale — utils/assessmentScore.js.
+  optionScores: { type: [Number], default: undefined },
   required: { type: Boolean, default: false },
 }, { _id: true })
 
