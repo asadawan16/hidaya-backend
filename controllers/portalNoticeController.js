@@ -269,18 +269,35 @@ export async function listComplaints(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
-    const { studentId, againstTutorId, status, visibility } = req.query
+    const { studentId, againstTutorId, status, visibility, category, priority } = req.query
 
-    const filter = {}
-    if (studentId) filter.studentId = studentId
-    if (againstTutorId) filter.againstTutorId = againstTutorId
-    if (status) filter.status = status
-    if (visibility) filter.visibility = visibility
+    // Everything but the status pill — the stat cards count across statuses.
+    const base = {}
+    if (studentId) base.studentId = studentId
+    if (againstTutorId) base.againstTutorId = againstTutorId
+    if (visibility) base.visibility = visibility
+    if (category) base.category = category
+    if (priority) base.priority = priority
     // Management-only complaints never reach tutors.
-    if (req.user.linkedTutorId) filter.visibility = { $ne: 'management_only' }
+    if (req.user.linkedTutorId) base.visibility = { $ne: 'management_only' }
+    const filter = status ? { ...base, status } : base
 
-    const total = await Complaint.countDocuments(filter)
+    const monthStart = new Date()
+    monthStart.setDate(1)
+    monthStart.setHours(0, 0, 0, 0)
+
+    const [total, byStatus, thisMonth, actionItems] = await Promise.all([
+      Complaint.countDocuments(filter),
+      Complaint.aggregate([{ $match: base }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
+      Complaint.countDocuments({ ...base, createdAt: { $gte: monthStart } }),
+      // A tutor's open complaints that ask something of them, whatever page they're on.
+      req.user.linkedTutorId
+        ? Complaint.find({ ...base, status: 'open', actionRequired: { $nin: [null, ''] } })
+          .populate('studentId', 'name rollNo').sort({ createdAt: -1 }).limit(50).lean()
+        : [],
+    ])
     const pages = Math.ceil(total / lim) || 1
+    const count = (s) => byStatus.find(b => b._id === s)?.n || 0
 
     const records = await Complaint.find(filter)
       .populate('studentId', 'name rollNo')
@@ -291,7 +308,11 @@ export async function listComplaints(req, res) {
       .limit(lim)
       .lean()
 
-    res.json({ records, total, page: pg, pages })
+    res.json({
+      records, total, page: pg, pages,
+      stats: { open: count('open'), resolved: count('resolved'), dismissed: count('dismissed'), thisMonth },
+      actionItems,
+    })
   } catch (err) {
     console.error('List complaints error:', err)
     res.status(500).json({ error: 'Server error' })
