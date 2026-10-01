@@ -1,3 +1,4 @@
+import mongoose from 'mongoose'
 import AssessmentTemplate from '../models/AssessmentTemplate.js'
 import Assessment from '../models/Assessment.js'
 import Student from '../models/Student.js'
@@ -126,7 +127,7 @@ export async function listAssessments(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
-    const { studentId, dateFrom, dateTo } = req.query
+    const { studentId, dateFrom, dateTo, search } = req.query
 
     const filter = {}
     // Scope: students see only their own, tutors see only assessments they conducted/are assigned to
@@ -145,6 +146,16 @@ export async function listAssessments(req, res) {
       filter.date = {}
       if (dateFrom) filter.date.$gte = new Date(dateFrom)
       if (dateTo) filter.date.$lte = new Date(dateTo)
+    }
+
+    // The Exams list's search box: student name or roll number. (It was sent
+    // all along and silently ignored, so typing a name filtered nothing.)
+    if (search?.trim()) {
+      const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      const ids = (await Student.find({ $or: [{ name: regex }, { rollNo: regex }] }).select('_id').lean()).map(s => s._id)
+      filter.studentId = filter.studentId
+        ? (ids.some(id => String(id) === String(filter.studentId)) ? filter.studentId : { $in: [] })
+        : { $in: ids }
     }
 
     const total = await Assessment.countDocuments(filter)
@@ -284,41 +295,74 @@ export async function deleteAssessment(req, res) {
   }
 }
 
+const REPORT_CARD_POPULATE = [
+  ['studentId', 'name rollNo'],
+  ['templateId'],
+  ['testTeacherId', 'name tutorId'],
+  ['regularTeacherId', 'name tutorId'],
+  ['conductedBy', 'displayName'],
+]
+
+function populateReportCard(query) {
+  for (const [path, select] of REPORT_CARD_POPULATE) query.populate(path, select)
+  return query.lean()
+}
+
+/** An assessment (populated) → the report-card shape: answers laid out by template section. */
+function toReportCard(assessment) {
+  const sections = (assessment.templateId?.sections || []).map(section => ({
+    key: section.key,
+    label: section.label,
+    fields: section.fields.map(field => {
+      const response = assessment.responses.find(r => r.key === `${section.key}.${field.key}` || r.key === field.key)
+      return {
+        key: field.key,
+        label: field.label,
+        type: field.type,
+        options: field.options,
+        value: response?.value ?? '',
+        score: response?.score ?? null,
+      }
+    }),
+  }))
+
+  return { ...assessment, structuredSections: sections }
+}
+
 export async function getReportCard(req, res) {
   try {
-    const assessment = await Assessment.findById(req.params.id)
-      .populate('studentId', 'name rollNo')
-      .populate('templateId')
-      .populate('testTeacherId', 'name tutorId')
-      .populate('regularTeacherId', 'name tutorId')
-      .populate('conductedBy', 'displayName')
-      .lean()
-
+    const assessment = await populateReportCard(Assessment.findById(req.params.id))
     if (!assessment || hiddenFrom(req, assessment)) return res.status(404).json({ error: 'Assessment not found' })
-
-    // Map responses back to template fields for structured display
-    const sections = (assessment.templateId?.sections || []).map(section => ({
-      key: section.key,
-      label: section.label,
-      fields: section.fields.map(field => {
-        const response = assessment.responses.find(r => r.key === `${section.key}.${field.key}` || r.key === field.key)
-        return {
-          key: field.key,
-          label: field.label,
-          type: field.type,
-          options: field.options,
-          value: response?.value ?? '',
-          score: response?.score ?? null,
-        }
-      }),
-    }))
-
-    res.json({
-      ...assessment,
-      structuredSections: sections,
-    })
+    res.json(toReportCard(assessment))
   } catch (err) {
     console.error('Get report card error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+const BULK_REPORT_CARD_LIMIT = 100
+
+/**
+ * Many report cards in one round trip — the Exams page's "Download all (ZIP)"
+ * builds a PDF per exam and would otherwise make one request per exam.
+ * Body: { ids: [...] } (max 100; the client batches). Same access rules as the
+ * single read: a student only ever gets their own.
+ */
+export async function getReportCards(req, res) {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(id => mongoose.isValidObjectId(id)) : []
+    if (!ids.length) return res.status(400).json({ error: 'ids is required' })
+    if (ids.length > BULK_REPORT_CARD_LIMIT) {
+      return res.status(400).json({ error: `At most ${BULK_REPORT_CARD_LIMIT} report cards per request` })
+    }
+    const found = await populateReportCard(Assessment.find({ _id: { $in: ids } }))
+    const order = new Map(ids.map((id, i) => [String(id), i]))
+    res.json(found
+      .filter(a => !hiddenFrom(req, a))
+      .sort((a, b) => order.get(String(a._id)) - order.get(String(b._id)))
+      .map(toReportCard))
+  } catch (err) {
+    console.error('Bulk report cards error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
