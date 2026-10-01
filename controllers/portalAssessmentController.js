@@ -112,6 +112,16 @@ export async function deleteTemplate(req, res) {
 
 // ─── Assessments ───
 
+/**
+ * A student may only open their own exams. The list endpoint already scopes
+ * them; this covers the by-id reads, which are now reachable by URL
+ * (/portal/assessments/:id) and so by editing the id.
+ */
+function hiddenFrom(req, assessment) {
+  const own = req.user.linkedStudentId
+  return own && String(assessment.studentId?._id || assessment.studentId) !== String(own)
+}
+
 export async function listAssessments(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
@@ -216,7 +226,7 @@ export async function getAssessment(req, res) {
       .populate('regularTeacherId', 'name tutorId')
       .lean()
 
-    if (!assessment) return res.status(404).json({ error: 'Assessment not found' })
+    if (!assessment || hiddenFrom(req, assessment)) return res.status(404).json({ error: 'Assessment not found' })
     res.json(assessment)
   } catch (err) {
     console.error('Get assessment error:', err)
@@ -284,7 +294,7 @@ export async function getReportCard(req, res) {
       .populate('conductedBy', 'displayName')
       .lean()
 
-    if (!assessment) return res.status(404).json({ error: 'Assessment not found' })
+    if (!assessment || hiddenFrom(req, assessment)) return res.status(404).json({ error: 'Assessment not found' })
 
     // Map responses back to template fields for structured display
     const sections = (assessment.templateId?.sections || []).map(section => ({
