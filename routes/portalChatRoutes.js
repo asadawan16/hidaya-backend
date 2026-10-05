@@ -6,7 +6,7 @@ import {
   toggleStar, togglePin, searchMessages, getMentionableUsers,
   toggleReaction, forwardMessage, leaveChannel, archiveChannel, setMemberRole,
   markThreadRead, updateThreadPrefs, getMyMentions, getThreadLinks,
-  getTaggableStudents, getOnlineUsers, getUnreadTotal,
+  getTaggableStudents, getOnlineUsers, getUnreadTotal, deleteThread,
 } from '../controllers/portalChatController.js'
 
 const router = Router()
@@ -26,6 +26,8 @@ router.post('/dm', getOrCreateDM)
 router.patch('/threads/:threadId/prefs', updateThreadPrefs)
 router.post('/threads/:threadId/read', markThreadRead)
 router.get('/threads/:threadId/links', getThreadLinks)
+// Whole-conversation delete — admins only (checked in the handler)
+router.delete('/threads/:threadId', deleteThread)
 
 // Messages
 router.get('/threads/:threadId/messages', getMessages)

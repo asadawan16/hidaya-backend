@@ -4,6 +4,7 @@ import User from '../models/User.js'
 import Student from '../models/Student.js'
 import { emitToUser, getOnlineUserIds } from '../config/socket.js'
 import { createNotification } from './portalNotificationController.js'
+import { logActivity } from '../utils/activityLogger.js'
 
 const URL_REGEX = /https?:\/\/[^\s<>"')\]]+/g
 const FOREVER = new Date('9999-01-01')
@@ -395,6 +396,32 @@ export async function deleteMessage(req, res) {
     res.json({ message: 'Deleted' })
   } catch (err) {
     console.error('Delete message error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// DELETE /portal/chat/threads/:threadId — admin only (super_admin / admin).
+// Removes the whole conversation — a DM or a channel — and every message in it,
+// for everyone. Unlike archive (channel owner, read-only, recoverable) this is
+// permanent. Participants get `thread_deleted` so open windows close it live.
+export async function deleteThread(req, res) {
+  try {
+    if (!isChatModerator(req)) return res.status(403).json({ error: 'Only admins can delete a chat' })
+    const thread = await ChatThread.findById(req.params.threadId).select('type name participants').lean()
+    if (!thread) return res.status(404).json({ error: 'Chat not found' })
+
+    const { deletedCount } = await Message.deleteMany({ threadId: thread._id })
+    await ChatThread.deleteOne({ _id: thread._id })
+
+    emitToParticipants(thread, null, 'thread_deleted', { threadId: thread._id })
+    await logActivity({
+      level: 'warning', category: 'chat', action: 'chat_thread_deleted',
+      message: `Chat deleted: ${thread.type === 'channel' ? `#${thread.name}` : 'direct message'} (${deletedCount} messages, ${thread.participants.length} participants)`,
+      req, meta: { threadId: thread._id, type: thread.type, messages: deletedCount },
+    })
+    res.json({ message: 'Chat deleted', messages: deletedCount })
+  } catch (err) {
+    console.error('Delete thread error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
