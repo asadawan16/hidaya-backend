@@ -311,6 +311,47 @@ export async function rejectPermanentLesson(req, res) {
   }
 }
 
+// DELETE /portal/lessons/permanent/:id
+// Approvers (lesson.approve) may delete any permanent lesson — e.g. one approved
+// by mistake or logged against the wrong student. A tutor (lesson.log) may only
+// withdraw their OWN submission that hasn't been approved yet. Nothing else is
+// stored off an approval — progress, reports and certificates all read the
+// approved records live — so removing the document fully reverts it, and the
+// curriculum item becomes submittable again.
+export async function deletePermanentLesson(req, res) {
+  try {
+    const lesson = await PermanentLesson.findById(req.params.id)
+      .populate('studentId', 'name')
+      .populate('curriculumItemId', 'label')
+    if (!lesson) return res.status(404).json({ error: 'Permanent lesson not found' })
+
+    const canApprove = req.userPermissions.has('lesson.approve')
+    const ownPending = req.userPermissions.has('lesson.log')
+      && lesson.status !== 'approved'
+      && (String(lesson.submittedBy || '') === String(req.userId)
+        || (req.user.linkedTutorId && String(lesson.tutorId) === String(req.user.linkedTutorId)))
+    if (!canApprove && !ownPending) {
+      return res.status(403).json({ error: 'You can only delete your own lessons that are not yet approved' })
+    }
+
+    await lesson.deleteOne()
+
+    await logActivity({
+      level: 'warning',
+      category: 'lesson',
+      action: 'permanent_lesson_deleted',
+      message: `Permanent lesson deleted: "${lesson.curriculumItemId?.label || lesson.curriculumItemId}" for ${lesson.studentId?.name || lesson.studentId} (was ${lesson.status})`,
+      req,
+      meta: { permanentLessonId: lesson._id, status: lesson.status },
+    })
+
+    res.json({ message: 'Permanent lesson deleted' })
+  } catch (err) {
+    console.error('Delete permanent lesson error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // ─── Student progress (approved permanent lessons) ───
 
 export async function getStudentProgress(req, res) {
