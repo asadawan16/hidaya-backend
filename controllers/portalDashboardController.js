@@ -355,13 +355,179 @@ const effectiveFeeCurrency = (fee, currency) => {
 }
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
+// ── Revenue ledger ──────────────────────────────────────────────────────────
+// Every revenue figure is built from ONE month-bucketed ledger: the four money
+// collections are each aggregated once by (year, month, …) and folded into
+// per-month buckets keyed by a month index (year*12 + month-1). The selected
+// period, the 12-month trend, the rolling history the forecast reads and the
+// previous-period comparison are then all sums over index ranges, so they can
+// never disagree with each other.
+//
+// Months are cut in Pakistan time: a card payment at 23:30 UTC on 30 Sep is an
+// October receipt for the academy.
+const REVENUE_TZ = '+05:00'
+const PK_OFFSET_MS = 5 * 3600 * 1000
+const monthIdx = (year, month) => year * 12 + (month - 1)
+const idxToYM = (i) => ({ year: Math.floor(i / 12), month: (i % 12) + 1 })
+const tzYear = (field) => ({ $year: { date: field, timezone: REVENUE_TZ } })
+const tzMonth = (field) => ({ $month: { date: field, timezone: REVENUE_TZ } })
+// Older card payments predate the `gateway` field; STRIPE as the method is the tell.
+const GATEWAY_OF = { $ifNull: ['$gateway', { $cond: [{ $eq: ['$paymentMethod', 'STRIPE'] }, 'stripe', 'mastercard'] }] }
+const GATEWAY_LABELS = { stripe: 'Stripe', mastercard: 'Mastercard' }
+const METHOD_LABELS = {
+  bank_transfer: 'Bank transfer', cash: 'Cash', card: 'Card (manual)', jazzcash: 'JazzCash',
+  easypaisa: 'Easypaisa', cheque: 'Cheque', other: 'Other',
+}
+const SALARY_TYPES = ['tutor', 'staff', 'custom']
+
+const blankMonth = () => ({
+  manual: 0, gateway: 0, manualCount: 0, gatewayCount: 0,
+  salary: { tutor: 0, staff: 0, custom: 0 }, salaryCount: 0, salaryPending: 0,
+  otherExpense: 0,
+  gatewayByCurrency: {}, // currency → { total, count, stripe, mastercard } in the payment's own currency
+  channels: {},          // 'manual:cash' | 'gateway:stripe' → { pkr, count }
+  expenseByCategory: {}, // category → { pkr, count }
+})
+
+async function loadRevenueLedger() {
+  const [manualAgg, gatewayAgg, expenseAgg, salaryAgg] = await Promise.all([
+    // A FeePayment that wraps a gateway Payment (linkedPaymentId) is the same
+    // money already counted on the gateway side — skip it or it counts twice.
+    FeePayment.aggregate([
+      { $match: { linkedPaymentId: null } },
+      { $group: { _id: { y: tzYear('$paidAt'), m: tzMonth('$paidAt'), currency: '$currency', method: '$method' }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    Payment.aggregate([
+      { $match: { status: 'completed' } },
+      { $group: { _id: { y: tzYear('$createdAt'), m: tzMonth('$createdAt'), currency: '$currency', gateway: GATEWAY_OF }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    Expense.aggregate([
+      { $match: { type: 'expense' } },
+      { $group: { _id: { y: tzYear('$date'), m: tzMonth('$date'), currency: '$currency', category: '$category' }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    SalaryRecord.aggregate([
+      { $group: { _id: { y: '$year', m: '$month', type: { $ifNull: ['$subjectType', 'tutor'] }, currency: '$currency', status: '$status' }, total: { $sum: '$netPayable' }, count: { $sum: 1 } } },
+    ]),
+  ])
+
+  const months = new Map()
+  const at = (i) => { if (!months.has(i)) months.set(i, blankMonth()); return months.get(i) }
+  const addChannel = (b, key, pkr, count) => {
+    const c = b.channels[key] || (b.channels[key] = { pkr: 0, count: 0 })
+    c.pkr += pkr; c.count += count
+  }
+
+  for (const r of manualAgg) {
+    if (!r._id.y) continue
+    const b = at(monthIdx(r._id.y, r._id.m))
+    const pkr = toPKR(r.total, r._id.currency || 'PKR')
+    b.manual += pkr
+    b.manualCount += r.count
+    addChannel(b, `manual:${r._id.method || 'other'}`, pkr, r.count)
+  }
+  for (const r of gatewayAgg) {
+    if (!r._id.y) continue
+    const b = at(monthIdx(r._id.y, r._id.m))
+    const cur = r._id.currency || 'PKR'
+    const pkr = toPKR(r.total, cur)
+    b.gateway += pkr
+    b.gatewayCount += r.count
+    const g = b.gatewayByCurrency[cur] || (b.gatewayByCurrency[cur] = { total: 0, count: 0, stripe: 0, mastercard: 0 })
+    g.total += r.total; g.count += r.count; g[r._id.gateway] = (g[r._id.gateway] || 0) + r.total
+    addChannel(b, `gateway:${r._id.gateway}`, pkr, r.count)
+  }
+  for (const r of expenseAgg) {
+    if (!r._id.y) continue
+    const b = at(monthIdx(r._id.y, r._id.m))
+    const pkr = toPKR(r.total, r._id.currency || 'PKR')
+    b.otherExpense += pkr
+    const c = b.expenseByCategory[r._id.category] || (b.expenseByCategory[r._id.category] = { pkr: 0, count: 0 })
+    c.pkr += pkr; c.count += r.count
+  }
+  // Salaries are a cash outflow in the month AFTER their pay period: July's
+  // salary is handed out in early August, so it lands in the August bucket.
+  // Only PAID records are an expense; draft/finalized ones are carried as
+  // `salaryPending` (still owed for that payout month) so the page can say so.
+  for (const r of salaryAgg) {
+    if (!r._id.y || !r._id.m) continue
+    const b = at(monthIdx(r._id.y, r._id.m) + 1)
+    const pkr = toPKR(r.total, r._id.currency || 'PKR')
+    if (r._id.status === 'paid') {
+      const type = SALARY_TYPES.includes(r._id.type) ? r._id.type : 'custom'
+      b.salary[type] += pkr
+      b.salaryCount += r.count
+    } else {
+      b.salaryPending += pkr
+    }
+  }
+  return months
+}
+
+// Fold the buckets for month indexes [from, to] into one bucket.
+function sumLedger(ledger, from, to) {
+  const out = blankMonth()
+  const merge = (target, src, keys) => {
+    for (const [k, v] of Object.entries(src)) {
+      const o = target[k] || (target[k] = Object.fromEntries(keys.map(x => [x, 0])))
+      for (const x of keys) o[x] += v[x] || 0
+    }
+  }
+  for (let i = from; i <= to; i++) {
+    const b = ledger.get(i)
+    if (!b) continue
+    out.manual += b.manual; out.gateway += b.gateway
+    out.manualCount += b.manualCount; out.gatewayCount += b.gatewayCount
+    for (const t of SALARY_TYPES) out.salary[t] += b.salary[t]
+    out.salaryCount += b.salaryCount; out.salaryPending += b.salaryPending
+    out.otherExpense += b.otherExpense
+    merge(out.gatewayByCurrency, b.gatewayByCurrency, ['total', 'count', 'stripe', 'mastercard'])
+    merge(out.channels, b.channels, ['pkr', 'count'])
+    merge(out.expenseByCategory, b.expenseByCategory, ['pkr', 'count'])
+  }
+  return out
+}
+
+const salaryTotal = (b) => b.salary.tutor + b.salary.staff + b.salary.custom
+const round = (n) => Math.round(n || 0)
+const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null)
+
+// One flat chart/table row for a month.
+function seriesRow(ledger, i, currentIdx) {
+  const { year, month } = idxToYM(i)
+  const b = ledger.get(i) || blankMonth()
+  const received = b.manual + b.gateway
+  const salary = salaryTotal(b)
+  const expense = salary + b.otherExpense
+  const net = received - expense
+  return {
+    year, month,
+    key: `${year}-${String(month).padStart(2, '0')}`,
+    label: MONTH_LABELS[month - 1],
+    received: round(received), manual: round(b.manual), gateway: round(b.gateway),
+    payments: b.manualCount + b.gatewayCount,
+    salary: round(salary),
+    salaryTutor: round(b.salary.tutor), salaryStaff: round(b.salary.staff), salaryCustom: round(b.salary.custom),
+    salaryPending: round(b.salaryPending),
+    otherExpense: round(b.otherExpense),
+    expense: round(expense),
+    net: round(net),
+    margin: pct(net, received),
+    partial: i === currentIdx, // the month still in progress
+    future: i > currentIdx,
+  }
+}
+
 /**
  * GET /api/portal/dashboard/revenue
- * Revenue = fees received. Two independent sources are combined:
+ * Revenue = fees received, from two sources combined:
  *   - Manual fees  → FeePayment (bank transfer / cash / cheque, recorded by hand)
- *   - Gateway fees → Payment (status 'completed', from payment links / Mastercard)
- * Expenses include paid staff salaries. Filters: year, month (or whole year),
- * and source (all | manual | gateway).
+ *   - Gateway fees → Payment (status 'completed', Stripe / Mastercard)
+ * Expenses = paid salaries (tutor + staff + off-portal, shifted to their payout
+ * month) + manually logged operating expenses. Filters: year + fromMonth..toMonth.
+ *
+ * The per-currency breakdown (`receivedByCurrency`) is deliberately GATEWAY-ONLY:
+ * a gateway charge's currency is what the card was actually billed in, whereas a
+ * manual record's currency is whatever the person typing it picked.
  */
 export async function getRevenueStats(req, res) {
   try {
@@ -384,82 +550,62 @@ export async function getRevenueStats(req, res) {
     }
     const wholeYear = fromMonth === 1 && toMonth === 12
 
-    const source = ['manual', 'gateway'].includes(req.query.source) ? req.query.source : 'all'
-    const includeManual = source !== 'gateway'
-    const includeGateway = source !== 'manual'
+    // "Now" in Pakistan time, to match how the ledger cuts months.
+    const pkNow = new Date(now.getTime() + PK_OFFSET_MS)
+    const currentIdx = monthIdx(pkNow.getUTCFullYear(), pkNow.getUTCMonth() + 1)
 
-    // Selected-period boundaries (fromMonth..toMonth within the year). periodEnd is
-    // exclusive: the first day of the month after toMonth (rolls to next Jan at 12).
-    const periodStart = new Date(year, fromMonth - 1, 1)
-    const periodEnd = new Date(year, toMonth, 1)
-    // Whole-year boundaries (for the 12-month trend chart)
-    const yearStart = new Date(year, 0, 1)
-    const yearEnd = new Date(year + 1, 0, 1)
+    const ledger = await loadRevenueLedger()
 
-    // ── 1. Fees received in the period, per currency (both sources) ──
-    const manualByCurrency = includeManual ? await FeePayment.aggregate([
-      { $match: { paidAt: { $gte: periodStart, $lt: periodEnd } } },
-      { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-    ]) : []
+    // ── 1. The selected period ──
+    const startIdx = monthIdx(year, fromMonth)
+    const endIdx = monthIdx(year, toMonth)
+    const span = endIdx - startIdx + 1
+    const p = sumLedger(ledger, startIdx, endIdx)
 
-    const gatewayByCurrency = includeGateway ? await Payment.aggregate([
-      { $match: { status: 'completed', createdAt: { $gte: periodStart, $lt: periodEnd } } },
-      { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-    ]) : []
+    const totalReceivedPKR = p.manual + p.gateway
+    const paymentCount = p.manualCount + p.gatewayCount
+    const salaryPKR = salaryTotal(p)
+    const totalExpensePKR = salaryPKR + p.otherExpense
+    const netProfitPKR = totalReceivedPKR - totalExpensePKR
 
-    const manualMap = Object.fromEntries(manualByCurrency.map(r => [r._id || 'PKR', r]))
-    const gatewayMap = Object.fromEntries(gatewayByCurrency.map(r => [r._id || 'PKR', r]))
-
+    // Gateway receipts per currency, in that currency (see the note above).
     const receivedByCurrency = REVENUE_CURRENCIES.map(c => {
-      const manual = manualMap[c]?.total || 0
-      const gateway = gatewayMap[c]?.total || 0
-      const count = (manualMap[c]?.count || 0) + (gatewayMap[c]?.count || 0)
-      return { currency: c, manual, gateway, total: manual + gateway, count }
+      const g = p.gatewayByCurrency[c] || { total: 0, count: 0, stripe: 0, mastercard: 0 }
+      return {
+        currency: c, total: g.total, count: g.count,
+        stripe: g.stripe, mastercard: g.mastercard,
+        pkrEquiv: round(toPKR(g.total, c)),
+      }
     })
 
-    const manualReceivedPKR = manualByCurrency.reduce((s, r) => s + toPKR(r.total, r._id), 0)
-    const gatewayReceivedPKR = gatewayByCurrency.reduce((s, r) => s + toPKR(r.total, r._id), 0)
-    const totalReceivedPKR = manualReceivedPKR + gatewayReceivedPKR
-    const paymentCount = manualByCurrency.reduce((s, r) => s + r.count, 0)
-      + gatewayByCurrency.reduce((s, r) => s + r.count, 0)
-    const avgReceivedPerPayment = paymentCount > 0 ? totalReceivedPKR / paymentCount : 0
+    const receivedByChannel = Object.entries(p.channels).map(([key, c]) => {
+      const [source, name] = key.split(':')
+      return {
+        key, source,
+        label: source === 'gateway' ? (GATEWAY_LABELS[name] || name) : (METHOD_LABELS[name] || name),
+        total: round(c.pkr), count: c.count,
+      }
+    }).sort((a, b) => b.total - a.total)
 
-    // ── 2. Expenses in the period (operating + paid salaries) ──
-    const expenseByCurrency = await Expense.aggregate([
-      { $match: { type: 'expense', date: { $gte: periodStart, $lt: periodEnd } } },
-      { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-    ])
-    const expenseByCategory = await Expense.aggregate([
-      { $match: { type: 'expense', date: { $gte: periodStart, $lt: periodEnd } } },
-      { $group: { _id: '$category', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-      { $sort: { total: -1 } },
-    ])
+    const expenseByCategory = Object.entries(p.expenseByCategory)
+      .map(([category, c]) => ({ category, total: round(c.pkr), count: c.count }))
+      .sort((a, b) => b.total - a.total)
 
-    // Salaries are a cash outflow in the month AFTER their pay period: July's salary
-    // is handed out in early August, so it counts as an August expense. SalaryRecord
-    // is keyed by (month, year) of the pay period — shift forward one month (Dec →
-    // Jan of the next year) when bucketing into the revenue/expense view. Paid only.
-    const shiftPeriod = (m, y) => (m === 12 ? { month: 1, year: y + 1 } : { month: m + 1, year: y })
-    // Salaries that can pay out within `year`: all of `year` plus the previous
-    // December (which is handed out in January of `year`).
-    const paidSalaries = await SalaryRecord.aggregate([
-      { $match: { status: 'paid', $or: [{ year }, { year: year - 1, month: 12 }] } },
-      { $group: { _id: { month: '$month', year: '$year', currency: '$currency' }, total: { $sum: '$netPayable' } } },
-    ])
-    // Bucket each paid salary into its cash-outflow month within `year`.
-    const salaryByExpenseMonth = {} // month (1-12 of `year`) → PKR
-    for (const r of paidSalaries) {
-      const { month: em, year: ey } = shiftPeriod(r._id.month, r._id.year)
-      if (ey !== year) continue // e.g. December of `year` pays out next January — not this year
-      salaryByExpenseMonth[em] = (salaryByExpenseMonth[em] || 0) + toPKR(r.total, r._id.currency)
+    // ── 2. The same-length period immediately before (for % change) ──
+    const prev = sumLedger(ledger, startIdx - span, startIdx - 1)
+    const prevReceived = prev.manual + prev.gateway
+    const prevSalary = salaryTotal(prev)
+    const prevExpense = prevSalary + prev.otherExpense
+    const prevFrom = idxToYM(startIdx - span), prevTo = idxToYM(startIdx - 1)
+    const previous = {
+      label: span === 1 ? `${MONTH_LABELS[prevFrom.month - 1]} ${prevFrom.year}`
+        : `${MONTH_LABELS[prevFrom.month - 1]} ${prevFrom.year}–${MONTH_LABELS[prevTo.month - 1]} ${prevTo.year}`,
+      receivedPKR: round(prevReceived),
+      salaryPKR: round(prevSalary),
+      expenseOnlyPKR: round(prev.otherExpense),
+      expensePKR: round(prevExpense),
+      netProfitPKR: round(prevReceived - prevExpense),
     }
-    const salaryPKR = Object.entries(salaryByExpenseMonth)
-      .filter(([m]) => Number(m) >= fromMonth && Number(m) <= toMonth)
-      .reduce((s, [, v]) => s + v, 0)
-
-    const expenseOnlyPKR = expenseByCurrency.reduce((s, r) => s + toPKR(r.total, r._id), 0)
-    const totalExpensePKR = expenseOnlyPKR + salaryPKR
-    const netProfitPKR = totalReceivedPKR - totalExpensePKR
 
     // ── 3. Total fee of students (current agreed monthly fee, a snapshot) ──
     // Grouped by each student's EFFECTIVE fee currency (see effectiveFeeCurrency):
@@ -483,80 +629,81 @@ export async function getRevenueStats(req, res) {
     const studentCount = feeStudents.length
     const avgFeePerStudentPKR = studentCount > 0 ? totalFeePKR / studentCount : 0
 
-    // ── 4. 12-month trend for the selected year (PKR-equiv) ──
-    const monthGroup = (dateField) => ([
-      { $group: { _id: { month: { $month: dateField }, currency: '$currency' }, total: { $sum: '$amount' } } },
-    ])
-    const manualMonthlyAgg = includeManual ? await FeePayment.aggregate([
-      { $match: { paidAt: { $gte: yearStart, $lt: yearEnd } } },
-      ...monthGroup('$paidAt'),
-    ]) : []
-    const gatewayMonthlyAgg = includeGateway ? await Payment.aggregate([
-      { $match: { status: 'completed', createdAt: { $gte: yearStart, $lt: yearEnd } } },
-      ...monthGroup('$createdAt'),
-    ]) : []
-    const expenseMonthlyAgg = await Expense.aggregate([
-      { $match: { type: 'expense', date: { $gte: yearStart, $lt: yearEnd } } },
-      ...monthGroup('$date'),
-    ])
-    const sumMonth = (agg, m) => agg.filter(a => a._id.month === m).reduce((s, a) => s + toPKR(a.total, a._id.currency), 0)
-    const monthlyTrend = Array.from({ length: 12 }, (_, i) => {
-      const m = i + 1
-      const manual = sumMonth(manualMonthlyAgg, m)
-      const gateway = sumMonth(gatewayMonthlyAgg, m)
-      // Salaries are shifted to their pay-out month (see salaryByExpenseMonth above).
-      const expense = sumMonth(expenseMonthlyAgg, m) + (salaryByExpenseMonth[m] || 0)
-      return { month: m, label: MONTH_LABELS[i], manual, gateway, received: manual + gateway, expense }
-    })
+    // Collection rate: received vs. what the current roll would bill over the
+    // months of the period that have actually started (a future month expects nothing).
+    const elapsedMonths = Math.max(0, Math.min(endIdx, currentIdx) - startIdx + 1)
+    const expectedFeePKR = totalFeePKR * elapsedMonths
+
+    // ── 4. Series ──
+    const monthlyTrend = Array.from({ length: 12 }, (_, i) => seriesRow(ledger, monthIdx(year, i + 1), currentIdx))
+    // Rolling 24 months ending with the current month — what the forecast reads.
+    const history = Array.from({ length: 24 }, (_, i) => seriesRow(ledger, currentIdx - 23 + i, currentIdx))
 
     // ── 5. Recent payments in the period (combined + tagged) ──
-    const recentManual = includeManual ? await FeePayment.find({ paidAt: { $gte: periodStart, $lt: periodEnd } })
-      .sort({ paidAt: -1 }).limit(12)
-      .select('amount currency method payerName reference paidAt').lean() : []
-    const recentGateway = includeGateway ? await Payment.find({ status: 'completed', createdAt: { $gte: periodStart, $lt: periodEnd } })
-      .sort({ createdAt: -1 }).limit(12)
-      .select('amount currency paymentMethod studentName createdAt').lean() : []
+    // Period bounds as PKT midnights, to match the ledger.
+    const periodStart = new Date(Date.UTC(year, fromMonth - 1, 1) - PK_OFFSET_MS)
+    const periodEnd = new Date(Date.UTC(year, toMonth, 1) - PK_OFFSET_MS)
+    const [recentManual, recentGateway] = await Promise.all([
+      FeePayment.find({ paidAt: { $gte: periodStart, $lt: periodEnd }, linkedPaymentId: null })
+        .sort({ paidAt: -1 }).limit(20)
+        .select('amount currency method payerName reference paidAt').lean(),
+      Payment.find({ status: 'completed', createdAt: { $gte: periodStart, $lt: periodEnd } })
+        .sort({ createdAt: -1 }).limit(20)
+        .select('amount currency paymentMethod gateway studentName createdAt').lean(),
+    ])
     const recentPayments = [
-      ...recentManual.map(p => ({ name: p.payerName || p.reference || '—', amount: p.amount, currency: p.currency, method: p.method, source: 'manual', date: p.paidAt })),
-      ...recentGateway.map(p => ({ name: p.studentName || '—', amount: p.amount, currency: p.currency, method: p.paymentMethod, source: 'gateway', date: p.createdAt })),
-    ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 12)
+      ...recentManual.map(r => ({ name: r.payerName || r.reference || '—', amount: r.amount, currency: r.currency, method: METHOD_LABELS[r.method] || r.method, source: 'manual', date: r.paidAt })),
+      ...recentGateway.map(r => {
+        const gw = r.gateway || (r.paymentMethod === 'STRIPE' ? 'stripe' : 'mastercard')
+        return { name: r.studentName || '—', amount: r.amount, currency: r.currency, method: GATEWAY_LABELS[gw] || gw, source: 'gateway', date: r.createdAt }
+      }),
+    ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 20)
 
     res.json({
       period: {
-        year, fromMonth, toMonth, wholeYear,
+        year, fromMonth, toMonth, wholeYear, months: span, elapsedMonths,
         month: fromMonth === toMonth ? fromMonth : null,
         label: wholeYear ? `${year}`
           : fromMonth === toMonth ? `${MONTH_LABELS[fromMonth - 1]} ${year}`
             : `${MONTH_LABELS[fromMonth - 1]}–${MONTH_LABELS[toMonth - 1]} ${year}`,
       },
-      source,
       conversionRates: PKR_RATES,
       currencies: REVENUE_CURRENCIES,
 
       // Student fees (snapshot)
-      totalFeePKR: Math.round(totalFeePKR),
+      totalFeePKR: round(totalFeePKR),
       totalFeeByCurrency,
       studentCount,
-      avgFeePerStudentPKR: Math.round(avgFeePerStudentPKR),
+      avgFeePerStudentPKR: round(avgFeePerStudentPKR),
+      expectedFeePKR: round(expectedFeePKR),
+      collectionRatePct: pct(totalReceivedPKR, expectedFeePKR),
 
       // Received (manual + gateway)
-      totalReceivedPKR: Math.round(totalReceivedPKR),
-      manualReceivedPKR: Math.round(manualReceivedPKR),
-      gatewayReceivedPKR: Math.round(gatewayReceivedPKR),
+      totalReceivedPKR: round(totalReceivedPKR),
+      manualReceivedPKR: round(p.manual),
+      gatewayReceivedPKR: round(p.gateway),
       paymentCount,
-      avgReceivedPerPayment: Math.round(avgReceivedPerPayment),
+      avgReceivedPerPayment: paymentCount > 0 ? round(totalReceivedPKR / paymentCount) : 0,
       receivedByCurrency,
+      currencyBasis: 'gateway',
+      receivedByChannel,
 
-      // Expenses (incl. paid salaries)
-      totalExpensePKR: Math.round(totalExpensePKR),
-      expenseOnlyPKR: Math.round(expenseOnlyPKR),
-      salaryPKR: Math.round(salaryPKR),
+      // Expenses: paid salaries (by subject type) + logged operating expenses
+      salaryPKR: round(salaryPKR),
+      salaryByType: { tutor: round(p.salary.tutor), staff: round(p.salary.staff), custom: round(p.salary.custom) },
+      salaryCount: p.salaryCount,
+      salaryPendingPKR: round(p.salaryPending),
+      expenseOnlyPKR: round(p.otherExpense),
+      totalExpensePKR: round(totalExpensePKR),
       expenseByCategory,
 
       // Net
-      netProfitPKR: Math.round(netProfitPKR),
+      netProfitPKR: round(netProfitPKR),
+      profitMarginPct: pct(netProfitPKR, totalReceivedPKR),
 
+      previous,
       monthlyTrend,
+      history,
       recentPayments,
     })
   } catch (err) {

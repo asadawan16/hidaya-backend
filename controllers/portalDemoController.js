@@ -6,7 +6,35 @@ import { logActivity } from '../utils/activityLogger.js'
 import { createNotification, notifyRoles } from './portalNotificationController.js'
 import { emitToStaff } from '../config/socket.js'
 
-const STATUSES = ['scheduled', 'sign_up', 'failed', 'no_show', 'start_later']
+const STATUSES = ['scheduled', 'in_process', 'call_back', 'sign_up', 'failed', 'no_show', 'start_later']
+
+// `dateFrom` / `dateTo` (YYYY-MM-DD, inclusive) → a filter on the demo's date.
+// The form posts a bare calendar date, which `new Date()` stores as UTC midnight,
+// so the bounds are UTC midnights too: [from 00:00Z, the day after `to` 00:00Z).
+const YMD = /^\d{4}-\d{2}-\d{2}$/
+function dateRangeFilter({ dateFrom, dateTo } = {}) {
+  const range = {}
+  if (YMD.test(dateFrom || '')) range.$gte = new Date(`${dateFrom}T00:00:00.000Z`)
+  if (YMD.test(dateTo || '')) {
+    const end = new Date(`${dateTo}T00:00:00.000Z`)
+    end.setUTCDate(end.getUTCDate() + 1)
+    range.$lt = end
+  }
+  return Object.keys(range).length ? { date: range } : {}
+}
+
+async function countsFor(match) {
+  const [statusAgg, sourceAgg, total] = await Promise.all([
+    DemoTrial.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+    DemoTrial.aggregate([{ $match: { ...match, source: { $ne: '' } } }, { $group: { _id: '$source', count: { $sum: 1 } } }]),
+    DemoTrial.countDocuments(match),
+  ])
+  const statusCounts = Object.fromEntries(STATUSES.map(s => [s, 0]))
+  statusAgg.forEach(s => { if (s._id) statusCounts[s._id] = s.count })
+  const sourceCounts = {}
+  sourceAgg.forEach(s => { if (s._id) sourceCounts[s._id] = s.count })
+  return { total, statusCounts, sourceCounts }
+}
 
 // Build a display label from a tutor id (denormalized onto the record)
 async function tutorLabel(id) {
@@ -58,7 +86,7 @@ export async function listDemos(req, res) {
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
     const { status, source, search, sort } = req.query
 
-    const filter = {}
+    const filter = { ...dateRangeFilter(req.query) }
     if (status) filter.status = status
     if (source) filter.source = source
     if (search) {
@@ -83,13 +111,9 @@ export async function listDemos(req, res) {
       .limit(lim)
       .lean()
 
-    const statusAgg = await DemoTrial.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }])
-    const statusCounts = Object.fromEntries(STATUSES.map(s => [s, 0]))
-    statusAgg.forEach(s => { if (s._id) statusCounts[s._id] = s.count })
-
-    const sourceAgg = await DemoTrial.aggregate([{ $match: { source: { $ne: '' } } }, { $group: { _id: '$source', count: { $sum: 1 } } }])
-    const sourceCounts = {}
-    sourceAgg.forEach(s => { if (s._id) sourceCounts[s._id] = s.count })
+    // Counts follow the date range (not the status pill), so the pills read
+    // "of the demos in this window, how many are …".
+    const { statusCounts, sourceCounts } = await countsFor(dateRangeFilter(req.query))
 
     res.json({ records, total, page: safePage, pages, statusCounts, sourceCounts })
   } catch (err) {
@@ -101,14 +125,7 @@ export async function listDemos(req, res) {
 // ─── Stats (totals like the sheet) ───
 export async function getDemoStats(req, res) {
   try {
-    const total = await DemoTrial.countDocuments()
-    const statusAgg = await DemoTrial.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }])
-    const statusCounts = Object.fromEntries(STATUSES.map(s => [s, 0]))
-    statusAgg.forEach(s => { if (s._id) statusCounts[s._id] = s.count })
-    const sourceAgg = await DemoTrial.aggregate([{ $match: { source: { $ne: '' } } }, { $group: { _id: '$source', count: { $sum: 1 } } }])
-    const sourceCounts = {}
-    sourceAgg.forEach(s => { if (s._id) sourceCounts[s._id] = s.count })
-    res.json({ total, statusCounts, sourceCounts })
+    res.json(await countsFor(dateRangeFilter(req.query)))
   } catch (err) {
     console.error('Demo stats error:', err)
     res.status(500).json({ error: 'Server error' })

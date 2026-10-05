@@ -18,7 +18,9 @@ const demoTrialSchema = new mongoose.Schema({
   comment: { type: String, trim: true, default: '' },
   status: {
     type: String,
-    enum: ['scheduled', 'sign_up', 'failed', 'no_show', 'start_later'],
+    // in_process = the family is deciding / paperwork under way; call_back = they
+    // asked to be phoned again later. Both are still-open outcomes, like scheduled.
+    enum: ['scheduled', 'in_process', 'call_back', 'sign_up', 'failed', 'no_show', 'start_later'],
     default: 'scheduled',
   },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
