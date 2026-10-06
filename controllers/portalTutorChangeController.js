@@ -187,9 +187,16 @@ export async function listTutorChangeRequests(req, res) {
     const filter = {}
     if (status) filter.status = status
     if (studentId) filter.studentId = studentId
-    // Students see only their own requests, in a family-safe shape.
+    // Students see only the requests THIS account sent, in a family-safe shape.
+    // Filtering on studentId alone also returned the spreadsheet-imported history
+    // (requestedByRole 'import', no requester) and staff-raised requests about the
+    // student — neither is the family's "your requests".
     if (isStudentAccount(req)) {
-      const own = await TutorChangeRequest.find({ studentId: req.user.linkedStudentId })
+      const own = await TutorChangeRequest.find({
+        studentId: req.user.linkedStudentId,
+        requestedBy: req.userId,
+        requestedByRole: { $ne: 'import' },
+      })
         .populate('toTutorId', 'name')
         .sort({ createdAt: -1 }).limit(30).lean()
       return res.json({ records: own.map(shapeFamilyRequest) })
