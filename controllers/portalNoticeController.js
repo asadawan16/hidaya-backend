@@ -1,4 +1,5 @@
 import Notice from '../models/Notice.js'
+import { isStudentAccount } from '../middleware/studentScope.js'
 import Complaint from '../models/Complaint.js'
 import WhatsappReminderLog from '../models/WhatsappReminderLog.js'
 import TutorProfile from '../models/TutorProfile.js'
@@ -195,10 +196,22 @@ export async function getActiveNoticesForUser(req, res) {
 
     // Mark which notices the current user has already acknowledged
     const userId = req.userId.toString()
-    const enriched = filtered.map(n => ({
-      ...n,
-      userAcknowledged: n.acknowledgedBy?.some(a => a.userId?.toString() === userId) || false,
-    }))
+    const student = isStudentAccount(req)
+    const enriched = filtered.map(n => {
+      const out = {
+        ...n,
+        userAcknowledged: n.acknowledgedBy?.some(a => a.userId?.toString() === userId) || false,
+      }
+      // A notice addressed to several students must not tell one of them who the
+      // others are, nor who else has read it.
+      if (student) {
+        delete out.acknowledgedBy
+        delete out.targetStudentIds
+        delete out.targetTutorId
+        delete out.targetRoles
+      }
+      return out
+    })
 
     res.json(enriched)
   } catch (err) {

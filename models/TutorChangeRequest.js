@@ -4,6 +4,12 @@ import mongoose from 'mongoose'
 // A QCM or super_admin/admin reviews it. On approval the current active assignment
 // for that student+track is closed (becomes a past tutor) and the selected new
 // tutor is assigned.
+//
+// A family's request names NO tutor (parents don't know the roster): it says what
+// is lacking (`concerns` + `reason`) and the reviewer picks the new tutor when
+// approving. Tutors hold no assignment.read, so they never see the queue.
+
+export const TUTOR_CHANGE_CONCERNS = ['punctuality', 'teaching', 'progress', 'communication', 'behaviour', 'timing', 'other']
 const tutorChangeRequestSchema = new mongoose.Schema({
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true },
   track: {
@@ -12,8 +18,13 @@ const tutorChangeRequestSchema = new mongoose.Schema({
     required: true,
   },
   fromTutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'TutorProfile' }, // current tutor (may be null)
-  toTutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'TutorProfile', required: true }, // requested new tutor
+  // Requested new tutor. Optional: a family's request leaves it to the reviewer,
+  // who must choose one at approval.
+  toTutorId: { type: mongoose.Schema.Types.ObjectId, ref: 'TutorProfile' },
   reason: { type: String, trim: true, default: '' },
+  // What the family says is lacking with the current tutor.
+  concerns: [{ type: String, enum: TUTOR_CHANGE_CONCERNS }],
+  source: { type: String, enum: ['portal', 'student'], default: 'portal' },
   status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
   requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   requestedByRole: { type: String, trim: true, default: '' }, // 'qci' | 'student' | ...

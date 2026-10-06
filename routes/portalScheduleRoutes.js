@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { denyStudentAccounts } from '../middleware/studentScope.js'
 import { portalAuth, requirePermission, requireRole } from '../middleware/portalAuth.js'
 import {
   listSlots, createSlot, updateSlot, deleteSlot,
@@ -22,9 +23,9 @@ router.patch('/slots/:id', requirePermission('schedule.manage'), updateSlot)
 router.delete('/slots/:id', requirePermission('schedule.manage'), deleteSlot)
 
 // Board view (tutor × time-block grid for a day)
-router.get('/board', requirePermission('schedule.read'), getBoard)
+router.get('/board', requirePermission('schedule.read'), denyStudentAccounts, getBoard)
 // Slot board (tutor × time recurring-slot grid + capacity/spaces for a weekday)
-router.get('/slot-board', requirePermission('schedule.read'), getSlotBoard)
+router.get('/slot-board', requirePermission('schedule.read'), denyStudentAccounts, getSlotBoard)
 
 // Class Sessions
 router.get('/sessions', requirePermission('schedule.read'), listSessions)

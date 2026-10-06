@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { denyStudentAccounts } from '../middleware/studentScope.js'
 import { portalAuth, requirePermission, requireAnyPermission } from '../middleware/portalAuth.js'
 import {
   listNotices, createNotice, updateNotice, deleteNotice,
@@ -14,7 +15,9 @@ router.use(portalAuth)
 router.get('/active', getActiveNoticesForUser)
 
 // Notices
-router.get('/notices', requirePermission('notice.read'), listNotices)
+// The full notice list is staff-facing (teacher notices name other students).
+// Students read their own scoped feed from /active.
+router.get('/notices', requirePermission('notice.read'), denyStudentAccounts, listNotices)
 router.post('/notices', requirePermission('notice.create'), createNotice)
 router.patch('/notices/:id', requirePermission('notice.manage'), updateNotice)
 router.delete('/notices/:id', requirePermission('notice.manage'), deleteNotice)

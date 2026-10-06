@@ -1,4 +1,5 @@
-import TutorChangeRequest from '../models/TutorChangeRequest.js'
+import TutorChangeRequest, { TUTOR_CHANGE_CONCERNS } from '../models/TutorChangeRequest.js'
+import { isStudentAccount } from '../middleware/studentScope.js'
 import Assignment from '../models/Assignment.js'
 import Student from '../models/Student.js'
 import TutorProfile from '../models/TutorProfile.js'
@@ -9,12 +10,15 @@ import { createNotification } from './portalNotificationController.js'
 import { emitToUser, emitToRole } from '../config/socket.js'
 
 const REVIEWER_ROLES = ['super_admin', 'admin', 'qcm']
+// A family's request is a quality matter as much as a staffing one, so the QC
+// inspectors hear about it too (they can read the queue; QCM/admin approve).
+const FAMILY_REQUEST_ROLES = [...REVIEWER_ROLES, 'qci']
 
-async function notifyReviewers({ type, title, body, payload, exceptUserId }) {
+async function notifyReviewers({ type, title, body, payload, exceptUserId, roles = REVIEWER_ROLES }) {
   try {
     const users = await User.find({ status: 'active' }).populate('roles', 'key').select('_id roles').lean()
     const targets = users.filter(u =>
-      u.roles?.some(r => REVIEWER_ROLES.includes(r.key)) && String(u._id) !== String(exceptUserId),
+      u.roles?.some(r => roles.includes(r.key)) && String(u._id) !== String(exceptUserId),
     )
     if (targets.length) {
       const created = await Notification.insertMany(targets.map(u => ({ userId: u._id, type, title, body, payload })))
@@ -28,6 +32,9 @@ const primaryRole = (req) => req.user?.roles?.[0]?.key || ''
 // ─── Create a tutor-change request (QCI or student) ───
 export async function createTutorChangeRequest(req, res) {
   try {
+    // A student account requests for itself and never names a tutor.
+    if (isStudentAccount(req)) return await createFamilyRequest(req, res)
+
     let { studentId, track, toTutorId, reason } = req.body
 
     // Students may only request for themselves.
@@ -91,6 +98,85 @@ export async function createTutorChangeRequest(req, res) {
   }
 }
 
+/**
+ * A family's request: what is lacking, in their words. No tutor is named; the
+ * reviewer chooses one at approval. The track is taken from the student's
+ * current assignment when they have only one, so a parent with one class never
+ * has to know what a "track" is.
+ */
+async function createFamilyRequest(req, res) {
+  const studentId = req.user.linkedStudentId
+  const reason = String(req.body.reason || '').trim()
+  const concerns = (Array.isArray(req.body.concerns) ? req.body.concerns : [])
+    .filter(c => TUTOR_CHANGE_CONCERNS.includes(c))
+  if (!reason && concerns.length === 0) {
+    return res.status(400).json({ error: 'Please tell us what is not working with the current tutor' })
+  }
+  if (reason.length > 3000) return res.status(400).json({ error: 'Message is too long' })
+
+  const student = await Student.findById(studentId).select('name rollNo').lean()
+  if (!student) return res.status(404).json({ error: 'Student not found' })
+
+  const TRACKS = TutorChangeRequest.schema.path('track').enumValues
+  const active = await Assignment.find({ studentId, endDate: null }).select('track tutorId').lean()
+  const activeTracks = [...new Set(active.map(a => a.track).filter(t => TRACKS.includes(t)))]
+  let track = TRACKS.includes(req.body.track) ? req.body.track : null
+  if (!track) {
+    if (activeTracks.length === 1) track = activeTracks[0]
+    else if (activeTracks.length > 1) {
+      return res.status(400).json({ error: 'Please choose which class this is about', tracks: activeTracks })
+    }
+  }
+  if (!track) return res.status(400).json({ error: 'You have no current tutor on record. Please contact the office.' })
+
+  const dup = await TutorChangeRequest.findOne({ studentId, track, status: 'pending' }).lean()
+  if (dup) return res.status(400).json({ error: 'You already have a tutor-change request waiting for review' })
+
+  const current = active.find(a => a.track === track)
+  const request = await TutorChangeRequest.create({
+    studentId, track,
+    fromTutorId: current?.tutorId || null,
+    reason, concerns,
+    status: 'pending',
+    source: 'student',
+    requestedBy: req.userId,
+    requestedByRole: 'student',
+  })
+
+  await logActivity({
+    level: 'info', category: 'assignment', action: 'tutor_change_requested',
+    message: `Tutor change requested by the family of ${student.rollNo || student.name} (${track})`, req,
+    meta: { requestId: request._id, studentId, track },
+  })
+
+  await notifyReviewers({
+    type: 'tutor_change_requested',
+    title: 'Tutor change requested by a family',
+    body: `${student.name}${student.rollNo ? ` (${student.rollNo})` : ''}, ${track}: ${reason ? reason.slice(0, 110) : concerns.join(', ')}`,
+    payload: { requestId: request._id, studentId, track },
+    exceptUserId: req.userId,
+    roles: FAMILY_REQUEST_ROLES,
+  })
+  FAMILY_REQUEST_ROLES.forEach(role => emitToRole(role, 'tutor_change_request', { requestId: request._id }))
+
+  res.status(201).json(shapeFamilyRequest(request.toObject()))
+}
+
+/** What a family sees back about its own request: no reviewer identities. */
+function shapeFamilyRequest(r) {
+  return {
+    _id: r._id,
+    track: r.track,
+    reason: r.reason,
+    concerns: r.concerns || [],
+    status: r.status,
+    reviewNotes: r.status === 'pending' ? '' : (r.reviewNotes || ''),
+    reviewedAt: r.reviewedAt || null,
+    newTutorName: r.status === 'approved' ? (r.toTutorId?.name || '') : '',
+    createdAt: r.createdAt,
+  }
+}
+
 // ─── List requests (queue) ───
 export async function listTutorChangeRequests(req, res) {
   try {
@@ -101,7 +187,13 @@ export async function listTutorChangeRequests(req, res) {
     const filter = {}
     if (status) filter.status = status
     if (studentId) filter.studentId = studentId
-    // Students see only their own requests.
+    // Students see only their own requests, in a family-safe shape.
+    if (isStudentAccount(req)) {
+      const own = await TutorChangeRequest.find({ studentId: req.user.linkedStudentId })
+        .populate('toTutorId', 'name')
+        .sort({ createdAt: -1 }).limit(30).lean()
+      return res.json({ records: own.map(shapeFamilyRequest) })
+    }
     if (req.user.linkedStudentId) filter.studentId = req.user.linkedStudentId
 
     const total = await TutorChangeRequest.countDocuments(filter)
@@ -144,14 +236,26 @@ export async function approveTutorChangeRequest(req, res) {
     if (!request) return res.status(404).json({ error: 'Request not found' })
     if (request.status !== 'pending') return res.status(400).json({ error: 'Only pending requests can be approved' })
 
+    // A family's request names no tutor; the reviewer chooses one now.
+    if (req.body.toTutorId) request.toTutorId = req.body.toTutorId
+    if (!request.toTutorId) return res.status(400).json({ error: 'Choose the new tutor to approve this request' })
+
     const student = await Student.findById(request.studentId).lean()
     const newTutor = await TutorProfile.findById(request.toTutorId).lean()
     if (!student || !newTutor) return res.status(404).json({ error: 'Student or tutor no longer exists' })
+    const alreadyTheirs = await Assignment.findOne({ studentId: request.studentId, track: request.track, endDate: null, tutorId: request.toTutorId }).lean()
+    if (alreadyTheirs) return res.status(400).json({ error: 'That tutor is already assigned for this track' })
+
+    // A family's words are about the outgoing tutor: they stay on the request
+    // (management-only) and are not copied onto assignment records.
+    const assignmentReason = request.source === 'student'
+      ? 'Tutor change requested by the family'
+      : (request.reason || '')
 
     // Close any current active assignment for this student+track (current → past tutor)
     await Assignment.updateMany(
       { studentId: request.studentId, track: request.track, endDate: null },
-      { endDate: new Date(), reason: request.reason ? `Tutor change: ${request.reason}` : 'Tutor change approved' },
+      { endDate: new Date(), reason: assignmentReason ? `Tutor change: ${assignmentReason}` : 'Tutor change approved' },
     )
 
     // Assign the new tutor
@@ -162,7 +266,7 @@ export async function approveTutorChangeRequest(req, res) {
       type: 'permanent',
       startDate: new Date(),
       endDate: null,
-      reason: request.reason || 'Tutor change approved',
+      reason: assignmentReason || 'Tutor change approved',
       assignedBy: req.userId,
       approvalStatus: 'approved',
     })

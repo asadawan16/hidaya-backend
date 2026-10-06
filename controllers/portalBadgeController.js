@@ -1,4 +1,5 @@
 import Badge from '../models/Badge.js'
+import { isStudentAccount, rejectForeignStudent } from '../middleware/studentScope.js'
 import Notification from '../models/Notification.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
@@ -233,6 +234,9 @@ export async function acknowledgeBadge(req, res) {
   try {
     const badge = await Badge.findById(req.params.id)
     if (!badge) return res.status(404).json({ error: 'Badge not found' })
+    if (isStudentAccount(req) && String(badge.studentId) !== String(req.user.linkedStudentId)) {
+      return res.status(404).json({ error: 'Badge not found' })
+    }
 
     badge.acknowledgedAt = new Date()
     await badge.save()
@@ -246,6 +250,7 @@ export async function acknowledgeBadge(req, res) {
 
 export async function getStudentBadges(req, res) {
   try {
+    if (rejectForeignStudent(req, res, req.params.studentId)) return
     const badges = await Badge.find({
       studentId: req.params.studentId,
       status: 'approved',

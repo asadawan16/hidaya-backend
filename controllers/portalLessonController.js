@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import { isStudentAccount, rejectForeignStudent } from '../middleware/studentScope.js'
 import LessonEntry from '../models/LessonEntry.js'
 import PermanentLesson from '../models/PermanentLesson.js'
 import CurriculumItem from '../models/CurriculumItem.js'
@@ -116,6 +117,10 @@ export async function getLesson(req, res) {
       .lean()
 
     if (!entry) return res.status(404).json({ error: 'Lesson not found' })
+    // A student may open only their own lesson (404, not 403, so ids can't be probed).
+    if (isStudentAccount(req) && String(entry.studentId?._id || entry.studentId) !== String(req.user.linkedStudentId)) {
+      return res.status(404).json({ error: 'Lesson not found' })
+    }
     res.json(entry)
   } catch (err) {
     console.error('Get lesson error:', err)
@@ -357,6 +362,7 @@ export async function deletePermanentLesson(req, res) {
 export async function getStudentProgress(req, res) {
   try {
     const { studentId } = req.params
+    if (rejectForeignStudent(req, res, studentId)) return
     const { dateFrom, dateTo } = req.query
     const dateFilter = {}
     if (dateFrom) dateFilter.$gte = new Date(dateFrom)
@@ -393,6 +399,7 @@ export async function getStudentProgress(req, res) {
 export async function getStudentCurriculumView(req, res) {
   try {
     const { studentId } = req.params
+    if (rejectForeignStudent(req, res, studentId)) return
 
     const [allItems, approved] = await Promise.all([
       CurriculumItem.find({ active: { $ne: false } })

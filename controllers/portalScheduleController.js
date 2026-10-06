@@ -1,4 +1,5 @@
 import ClassSlot from '../models/ClassSlot.js'
+import { isStudentAccount } from '../middleware/studentScope.js'
 import ClassSession from '../models/ClassSession.js'
 import ScheduleConfig from '../models/ScheduleConfig.js'
 import Student from '../models/Student.js'
@@ -205,8 +206,10 @@ export async function listSlots(req, res) {
     if (dayOfWeek !== undefined) filter.dayOfWeek = Number(dayOfWeek)
     if (active !== undefined) filter.active = active === 'true'
 
+    // Staff labels (risk tags, fresh/old) are not for the student to read about themselves.
+    const studentSel = isStudentAccount(req) ? 'name rollNo status' : 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
     const query = () => ClassSlot.find(filter)
-      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
+      .populate('studentId', studentSel)
       .populate('tutorId', 'name tutorId meetLink')
       .sort({ dayOfWeek: 1, startTime: 1 })
 
@@ -491,7 +494,7 @@ export async function listSessions(req, res) {
     if (sort === 'date') sortObj = { date: 1, scheduledStart: 1 }
     if (sort === 'status') sortObj = { status: 1, date: -1 }
 
-    const studentSel = 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
+    const studentSel = isStudentAccount(req) ? 'name rollNo status' : 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
 
     if (wraps) {
       // Unpaginated night view: the day's sessions + next-day early tail.

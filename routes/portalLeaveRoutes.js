@@ -1,9 +1,12 @@
 import { Router } from 'express'
+import { denyStudentAccounts } from '../middleware/studentScope.js'
 import { portalAuth, requireAnyPermission } from '../middleware/portalAuth.js'
 import { listLeaves, createLeave, reviewLeave, getLeaveStats } from '../controllers/portalLeaveController.js'
 
 const router = Router()
 router.use(portalAuth)
+// Staff leave (reasons, reviewer notes) is never a student's to read or file.
+router.use(denyStudentAccounts)
 
 router.get('/', listLeaves)
 router.get('/stats', getLeaveStats)

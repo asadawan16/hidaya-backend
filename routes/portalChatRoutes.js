@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { denyStudentAccounts } from '../middleware/studentScope.js'
 import { portalAuth } from '../middleware/portalAuth.js'
 import {
   listThreads, createChannel, updateChannel, getOrCreateDM,
@@ -12,9 +13,14 @@ import {
 const router = Router()
 router.use(portalAuth)
 
+// Polled by every portal layout, students included; answers for the caller only.
+router.get('/unread-total', getUnreadTotal)
+// Chat is a staff tool: the directory endpoints below list every user and every
+// student, and DM/channel creation reaches anyone. Students have no chat.
+router.use(denyStudentAccounts)
+
 // Threads / Channels
 router.get('/threads', listThreads)
-router.get('/unread-total', getUnreadTotal)
 router.post('/channels', createChannel)
 router.patch('/channels/:id', updateChannel)
 router.post('/channels/:id/leave', leaveChannel)
