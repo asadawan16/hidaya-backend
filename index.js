@@ -56,6 +56,7 @@ import portalClassLinkRoutes from './routes/portalClassLinkRoutes.js'
 import publicClassLinkRoutes from './routes/publicClassLinkRoutes.js'
 import publicCheckoutRoutes from './routes/publicCheckoutRoutes.js'
 import { stripeWebhook } from './controllers/stripeWebhookController.js'
+import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js'
 import { isAllowedOrigin } from './config/sites.js'
 import { initSocket } from './config/socket.js'
 // import requestLogger from './middleware/requestLogger.js' // disabled 2026-08-02 — see app.use note below
@@ -121,6 +122,11 @@ app.use(cors({
 // Buffer; a parsed-and-re-serialized body never verifies. Server-to-server,
 // so it is deliberately outside CORS/auth and authenticated by signature only.
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhook)
+
+// WhatsApp Cloud API webhook — same rule: the POST is signed (X-Hub-Signature-256)
+// over the raw bytes, so the router's express.raw() must run before express.json().
+// GET is Meta's one-off verify handshake (WHATSAPP_VERIFY_TOKEN).
+app.use('/api/whatsapp/webhook', whatsappWebhookRoutes)
 
 app.use(express.json({ limit: '5mb' }))
 

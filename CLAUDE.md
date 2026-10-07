@@ -65,6 +65,7 @@ There is no `.env.example`; the running `.env` is the source of truth. Keys cons
 - **Mastercard gateway:** `MC_API_USERNAME`, `MC_API_PASSWORD`, `MC_GATEWAY_URL`, `MC_MERCHANT_ID`
 - **Stripe gateway:** `STRIPE_SECRET_KEY` (absence disables Stripe checkout entirely — the API returns 503), `STRIPE_WEBHOOK_SECRET` (`whsec_…` for the endpoint registered at `POST /api/stripe/webhook`; locally `stripe listen --forward-to localhost:5000/api/stripe/webhook` prints one)
 - **AWS S3 (blog images / uploads):** `AWS_REGION`, `AWS_S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `PRESIGN_EXPIRES`
+- **WhatsApp Cloud API:** `WHATSAPP_APP_SECRET` (Meta App settings → Basic → App secret; signs every webhook POST), `WHATSAPP_VERIFY_TOKEN` (a string WE choose and type into Meta's webhook "Verify token" box)
 - **Misc:** `CSP_ENABLED` (toggles Helmet CSP), `STUDENTS_XLSX` (import scripts), `PAY_SITE_URL` (optional — where `/pay/:token` lives when it differs from `FRONTEND_URL`; falls back to `FRONTEND_URL`, then the literal `https://hidaya.online`)
 
 > CORS is **not** driven by env — it's the hardcoded allow-list in `config/sites.js`. See Satellite marketing sites.
@@ -120,6 +121,7 @@ All prefixed with `/api`:
 - `/logs` — system logs
 - `/class-links` — PUBLIC (no auth): `GET /public` (active links, optional `?code=`) + `POST /:id/click`
 - `/stripe/webhook` — PUBLIC, **raw body**, signature-authenticated (see Payment gateways). Mounted directly in `index.js`, not via a router, because it must precede `express.json()`.
+- `/whatsapp/webhook` — PUBLIC, **raw body**, signature-authenticated (`X-Hub-Signature-256` HMAC with `WHATSAPP_APP_SECRET`). `GET` = Meta's verify handshake (echoes `hub.challenge` when `hub.verify_token` matches), `POST` = incoming messages + status updates on messages we sent. Mounted in `index.js` before `express.json()` like Stripe. See WhatsApp below.
 - `/public` — PUBLIC (no auth), for satellite marketing sites: `GET /offers/:channel` (price book), `POST /checkout` (mint a Stripe link, get back a hidaya.online pay URL), `POST /trial` (free-trial enquiry → Leads board). See Satellite sites below.
 
 **Portal routes** (auth via `middleware/portalAuth.js` + permission checks). Mount path ≠ route filename in several cases — the mounts below are authoritative (`index.js` lines ~135-166):
@@ -181,7 +183,7 @@ Core: `Admin`, `User` (portal), `Role`, `Student`, `StudentStatusHistory`, `Tuto
 Academic: `ClassSlot`, `ClassSession`, `PermanentLesson`, `LessonEntry`, `CurriculumItem`, `Assignment`, `TutorChangeRequest`, `Assessment`, `AssessmentTemplate`, `TutorAttendance`, `ScheduleConfig`, `ShiftConfig`
 Business: `Payment`, `PaymentLink`, `Plan`, `DiscountCode`, `Invoice`, `FeePayment`, `StudentFeeRecord`, `SalaryRecord`, `SalaryIncrement`, `Advance`, `Expense`, `Enrollment`, `AdmissionApplication`, `DemoTrial`
 HR/recognition: `LeaveRequest`, `EmployeeOfMonth`, `Badge`, `Certificate`
-Communication: `ChatThread`, `Message`, `Notice`, `Complaint`, `Notification`, `WhatsappReminderLog`, `ClassLink`, `ClassLinkSettings`
+Communication: `ChatThread`, `Message`, `Notice`, `Complaint`, `Notification`, `WhatsappReminderLog`, `WhatsappMessage`, `ClassLink`, `ClassLinkSettings`
 Content: `BlogPost`, `Subscriber`, `Log`
 Infrastructure: `StripeEvent` (webhook idempotency ledger, 30-day TTL), `PaymentSettings` (singleton — which gateway the fee page uses)
 
@@ -207,6 +209,16 @@ A payment link picks its processor at creation time (`PaymentLink.gateway`: `mas
 - A fee-page Stripe session has **no `paymentLinkId` in its metadata** (it carries `kind: 'plan'` instead). `stripeWebhookController.onCheckoutCompleted` treats a session with no link behind it as a plan purchase rather than dropping it — that branch is the only thing that records the money if the payer closes the tab on Stripe's page.
 - `/payment/callback` posts `{ sessionId }` for Stripe and `{ orderId }` for Mastercard/PayPal to the same `POST /api/payments/callback`.
 - Verify with `node scripts/smoke-fee-gateway.mjs` — Mongo only; the Stripe-disabled assertions self-skip when a real key is in `.env`.
+
+### WhatsApp Cloud API (Meta)
+Meta app "HidayaOnlineApp" (WhatsApp use case). Callback URL registered with Meta: `https://hidaya-backend-4dsl.onrender.com/api/whatsapp/webhook`, subscribed to the `messages` field.
+
+- `controllers/whatsappWebhookController.js` acks with 200 first, then processes (Meta retries anything slow). Every message lands in `WhatsappMessage` — `direction: in|out`, unique `wamid`, so a redelivered webhook is a no-op.
+- Inbound messages are matched to a `Student` by phone (`findStudentIdByPhone`: last 10 digits, any formatting, across `whatsappNumber` / `phone` / `guardians.phone`); unknown numbers keep `studentId: null`. Socket events `whatsapp_message` / `whatsapp_status` go to `super_admin` + `admin` rooms (no dedicated permission yet).
+- Statuses only move forward (`sent → delivered → read`, or `failed` with Meta's error code). A status for a wamid we never stored is ignored — outbound sends must create the `out` row with Meta's returned wamid for statuses to attach.
+- Media is not downloaded at ingest; only the Meta media id is kept.
+- While the Meta app is **Unpublished**, only dashboard test webhooks arrive — real student messages need the app published.
+- Verify with `node scripts/smoke-whatsapp-webhook.mjs` — runs against a throwaway `hidaya_whatsapp_smoke` database and drops it; no Meta account or running server needed.
 
 ### Satellite marketing sites (qurantutornow.com)
 A second front end — `qurantutornow.com`, a Google Ads landing site living in a **separate repo** at `E:\CALCITE PROJECTS\quranTutor` (`asadawan16/QuranTutorFrontend`) — talks to this API. It has no backend, no portal and no checkout of its own.
