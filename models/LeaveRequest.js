@@ -1,10 +1,18 @@
 import mongoose from 'mongoose'
 
+// A leave request belongs to a tutor (tutorId → TutorProfile) or to a management /
+// support staff member (userId → User), mirroring Advance and TutorAttendance.
+// Exactly one subject ref is set. Requests filed before staff leave existed have
+// no subjectType stored — treat a missing value as 'tutor'.
 const leaveRequestSchema = new mongoose.Schema({
+  subjectType: { type: String, enum: ['tutor', 'staff'], default: 'tutor' },
   tutorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'TutorProfile',
-    required: true,
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
   },
   requestedBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -34,7 +42,22 @@ const leaveRequestSchema = new mongoose.Schema({
 }, { timestamps: true })
 
 leaveRequestSchema.index({ tutorId: 1, status: 1 })
+leaveRequestSchema.index({ userId: 1, status: 1 })
 leaveRequestSchema.index({ status: 1, createdAt: -1 })
+
+leaveRequestSchema.pre('validate', function(next) {
+  // Keep subjectType and the subject ref in lockstep — a request with neither (or
+  // both) would slip past every scoped query and show up in nobody's list.
+  if (this.subjectType === 'staff') {
+    if (!this.userId) return next(new Error('A staff leave request requires userId'))
+    this.tutorId = undefined
+  } else {
+    this.subjectType = 'tutor'
+    if (!this.tutorId) return next(new Error('A tutor leave request requires tutorId'))
+    this.userId = undefined
+  }
+  next()
+})
 
 leaveRequestSchema.pre('save', function(next) {
   if (this.startDate && this.endDate) {

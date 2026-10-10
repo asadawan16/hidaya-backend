@@ -5,6 +5,7 @@ import StaffSalaryIncrement from '../models/StaffSalaryIncrement.js'
 import TutorProfile from '../models/TutorProfile.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification } from './portalNotificationController.js'
+import { ensureEmployeeIds, normalizeEmployeeId, isValidEmployeeId } from '../utils/employeeId.js'
 
 const CURRENCIES = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
 
@@ -37,9 +38,12 @@ export async function listStaff(req, res) {
     if (status) extra.status = status
     if (search) {
       const regex = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
-      extra.$or = [{ displayName: regex }, { email: regex }, { phone: regex }]
+      extra.$or = [{ displayName: regex }, { email: regex }, { phone: regex }, { employeeId: regex }]
     }
-    const filter = await buildStaffFilter(extra)
+    const base = await buildStaffFilter()
+    // Number any staff member who has no Employee ID yet (no-op once all have one).
+    await ensureEmployeeIds(base)
+    const filter = { ...base, ...extra }
 
     const total = await User.countDocuments(filter)
     const pages = Math.ceil(total / lim) || 1
@@ -47,7 +51,7 @@ export async function listStaff(req, res) {
 
     const users = await User.find(filter)
       .populate('roles', 'key name')
-      .select('displayName email phone status roles createdAt')
+      .select('displayName email phone status roles createdAt employeeId')
       .sort({ displayName: 1 })
       .skip((safePage - 1) * lim)
       .limit(lim)
@@ -88,9 +92,10 @@ export async function listStaff(req, res) {
 export async function getStaff(req, res) {
   try {
     const { userId } = req.params
+    await ensureEmployeeIds({ $and: [await buildStaffFilter(), { _id: userId }] })
     const user = await User.findById(userId)
       .populate('roles', 'key name')
-      .select('displayName email phone status roles createdAt')
+      .select('displayName email phone status roles createdAt employeeId')
       .lean()
     if (!user) return res.status(404).json({ error: 'Staff member not found' })
 
@@ -107,13 +112,25 @@ export async function getStaff(req, res) {
 }
 
 // PATCH /portal/staff/:userId — upsert the HR profile (joining date, designation,
-// department, base salary + currency, notes). Base salary here is the default the
+// department, base salary + currency, notes) and, optionally, the Employee ID
+// (which lives on the User, not the profile). Base salary here is the default the
 // Salary tab picks up as "Monthly".
 export async function updateStaffProfile(req, res) {
   try {
     const { userId } = req.params
-    const user = await User.findById(userId).select('_id displayName').lean()
+    const user = await User.findById(userId).select('_id displayName employeeId').lean()
     if (!user) return res.status(404).json({ error: 'Staff member not found' })
+
+    // A blank Employee ID is ignored rather than cleared — every staff member keeps one.
+    const employeeId = normalizeEmployeeId(req.body.employeeId)
+    if (employeeId && employeeId !== user.employeeId) {
+      if (!isValidEmployeeId(employeeId)) {
+        return res.status(400).json({ error: 'Employee ID may only contain letters, numbers and dashes (max 20 characters)' })
+      }
+      const taken = await User.findOne({ employeeId, _id: { $ne: userId } }).select('displayName').lean()
+      if (taken) return res.status(400).json({ error: `Employee ID ${employeeId} is already used by ${taken.displayName}` })
+      await User.updateOne({ _id: userId }, { $set: { employeeId } })
+    }
 
     const set = {}
     if (req.body.title !== undefined) set.title = String(req.body.title).trim()
@@ -132,8 +149,11 @@ export async function updateStaffProfile(req, res) {
     ).lean()
 
     await logActivity({ level: 'info', category: 'salary', action: 'staff_profile_updated', message: `Staff profile updated for ${user.displayName}`, req })
-    res.json(profile)
+    res.json({ ...profile, employeeId: employeeId || user.employeeId || '' })
   } catch (err) {
+    if (err?.code === 11000 && err.keyPattern?.employeeId) {
+      return res.status(400).json({ error: 'That Employee ID is already in use' })
+    }
     console.error('Update staff profile error:', err)
     res.status(500).json({ error: 'Server error' })
   }
@@ -218,7 +238,7 @@ export async function pickerStaff(req, res) {
     }
     if (!ids && q) {
       const regex = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
-      extra.$or = [{ displayName: regex }, { email: regex }]
+      extra.$or = [{ displayName: regex }, { email: regex }, { employeeId: regex }]
     }
 
     // buildStaffFilter already sets `_id: { $nin: tutorOwnerIds }`, so an explicit
@@ -227,7 +247,7 @@ export async function pickerStaff(req, res) {
     const filter = extra._id ? { $and: [base, extra] } : { ...base, ...extra }
 
     const records = await User.find(filter)
-      .select('displayName email status')
+      .select('displayName email status employeeId')
       .sort({ displayName: 1 })
       .limit(ids ? 50 : lim)
       .lean()

@@ -10,6 +10,7 @@ import Student from '../models/Student.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification } from './portalNotificationController.js'
+import { ensureEmployeeIds } from '../utils/employeeId.js'
 
 // Resolve the portal user linked to a student / tutor profile (null-safe)
 async function studentUser(studentId) {
@@ -29,7 +30,7 @@ async function getStaffSubjects() {
     status: 'active',
     linkedTutorId: { $in: [null, undefined] },
     linkedStudentId: { $in: [null, undefined] },
-  }).populate('roles', 'key').select('displayName email roles').lean()
+  }).populate('roles', 'key').select('displayName email employeeId roles').lean()
 
   // Exclude anyone who actually OWNS a tutor profile — they belong in the Tutor
   // scope, not Staff. Catches placeholder/system accounts (e.g. the import
@@ -209,7 +210,7 @@ export async function listSalaryRecords(req, res) {
 
     const query = () => SalaryRecord.find(filter)
       .populate('tutorId', 'name tutorId salary')
-      .populate('userId', 'displayName email')
+      .populate('userId', 'displayName email employeeId')
       .sort({ year: -1, month: -1 })
 
     // Legacy callers (no ?page) get a flat array; paginated callers get an envelope
@@ -468,7 +469,7 @@ export async function getSalaryReceipt(req, res) {
   try {
     const record = await SalaryRecord.findById(req.params.id)
       .populate('tutorId', 'name tutorId salary')
-      .populate('userId', 'displayName email')
+      .populate('userId', 'displayName email employeeId')
       .populate('generatedBy', 'displayName')
       .lean()
 
@@ -666,9 +667,16 @@ async function customRosterRows(month, year) {
 
 // ── Staff roster: management/staff users on payroll ──
 async function staffRosterRows(month, year) {
-  const [subjects, records, activeAdvances] = await Promise.all([
-    getStaffSubjects(),
-    SalaryRecord.find({ month, year, subjectType: 'staff' }).populate('userId', 'displayName email').lean(),
+  // Number anyone on payroll who has no Employee ID yet, so the sheet never
+  // falls back to showing an email where the ID belongs.
+  let subjects = await getStaffSubjects()
+  if (subjects.some(u => !u.employeeId)) {
+    await ensureEmployeeIds({ _id: { $in: subjects.map(u => u._id) } })
+    subjects = await getStaffSubjects()
+  }
+
+  const [records, activeAdvances] = await Promise.all([
+    SalaryRecord.find({ month, year, subjectType: 'staff' }).populate('userId', 'displayName email employeeId').lean(),
     Advance.find({ subjectType: 'staff', status: 'active' }).select('userId remainingBalance currency').lean(),
   ])
   const profiles = await StaffProfile.find({ userId: { $in: subjects.map(s => s._id) } }).lean()
@@ -680,19 +688,35 @@ async function staffRosterRows(month, year) {
     advByUser.set(k, (advByUser.get(k) || 0) + (a.remainingBalance || 0))
   }
 
-  return subjects
+  const rows = subjects
     .sort((a, b) => String(a.displayName || a.email).localeCompare(String(b.displayName || b.email)))
     .map(u => {
       const prof = profByUser.get(String(u._id))
       return {
         subjectType: 'staff',
-        userId: { _id: u._id, displayName: u.displayName, email: u.email },
+        userId: { _id: u._id, displayName: u.displayName, email: u.email, employeeId: u.employeeId || '' },
         baseAmount: prof?.baseSalary || 0,
         currency: prof?.salaryCurrency || 'PKR',
         outstandingAdvance: advByUser.get(String(u._id)) || 0,
         record: recByUser.get(String(u._id)) || null,
       }
     })
+
+  // A salary already generated for someone who has since left the active list
+  // (suspended, role changed) is still money for this period — keep the row.
+  const listed = new Set(subjects.map(u => String(u._id)))
+  for (const r of records) {
+    if (listed.has(String(r.userId?._id || r.userId))) continue
+    rows.push({
+      subjectType: 'staff',
+      userId: r.userId || null,
+      baseAmount: r.baseAmount || 0,
+      currency: r.currency || 'PKR',
+      outstandingAdvance: 0,
+      record: r,
+    })
+  }
+  return rows
 }
 
 // ── Tutor roster (default scope) ──
@@ -710,7 +734,7 @@ async function tutorRosterRows(month, year) {
     advByTutor.set(k, (advByTutor.get(k) || 0) + (a.remainingBalance || 0))
   }
 
-  return tutors.map(t => ({
+  const rows = tutors.map(t => ({
     subjectType: 'tutor',
     tutorId: { _id: t._id, name: t.name, tutorId: t.tutorId },
     baseAmount: t.salary?.baseAmount || 0,
@@ -718,6 +742,52 @@ async function tutorRosterRows(month, year) {
     outstandingAdvance: advByTutor.get(String(t._id)) || 0,
     record: recByTutor.get(String(t._id)) || null,
   }))
+
+  // Same as staff: a tutor who is no longer active keeps the row for any month
+  // their salary was already generated in.
+  const listed = new Set(tutors.map(t => String(t._id)))
+  for (const r of records) {
+    if (listed.has(String(r.tutorId?._id || r.tutorId))) continue
+    rows.push({
+      subjectType: 'tutor',
+      tutorId: r.tutorId || null,
+      baseAmount: r.baseAmount || 0,
+      currency: r.currency || 'PKR',
+      outstandingAdvance: 0,
+      record: r,
+    })
+  }
+  return rows
+}
+
+// Org-wide payroll totals for a period — everyone on payroll, whatever scope the
+// sheet is showing. A salary that hasn't been generated yet is counted at the
+// person's base salary, so Total = Paid + Remaining always holds. Money is kept
+// per currency; salaries are never summed across currencies.
+function summarizePayroll(rows) {
+  const employees = { total: rows.length, tutors: 0, staff: 0, other: 0 }
+  const byCurrency = {}
+  let paidCount = 0, notGenerated = 0
+
+  for (const r of rows) {
+    if (r.subjectType === 'staff') employees.staff++
+    else if (r.subjectType === 'custom') employees.other++
+    else employees.tutors++
+
+    const rec = r.record
+    const amount = rec
+      ? (typeof rec.netPayable === 'number' ? rec.netPayable : computeSalaryNet(rec))
+      : (Number(r.baseAmount) || 0)
+    const currency = rec?.currency || r.currency || 'PKR'
+    const bucket = byCurrency[currency] || (byCurrency[currency] = { total: 0, paid: 0, remaining: 0 })
+
+    bucket.total += amount
+    if (rec?.status === 'paid') { bucket.paid += amount; paidCount++ }
+    else bucket.remaining += amount
+    if (!rec) notGenerated++
+  }
+
+  return { employees, byCurrency, paidCount, remainingCount: rows.length - paidCount, notGenerated }
 }
 
 export async function getSalaryRoster(req, res) {
@@ -728,18 +798,20 @@ export async function getSalaryRoster(req, res) {
 
     const scope = ['staff', 'custom', 'all'].includes(req.query.scope) ? req.query.scope : 'tutor'
 
-    let roster
-    if (scope === 'custom') roster = await customRosterRows(month, year)
-    else if (scope === 'staff') roster = await staffRosterRows(month, year)
-    else if (scope === 'all') {
-      // Everyone on payroll for the period: tutors → staff → off-portal people.
-      const parts = await Promise.all([
-        tutorRosterRows(month, year),
-        staffRosterRows(month, year),
-        customRosterRows(month, year),
-      ])
-      roster = parts.flat()
-    } else roster = await tutorRosterRows(month, year)
+    // Everyone on payroll for the period: tutors → staff → off-portal people.
+    // All three are always loaded — the summary boxes are org-wide even when the
+    // sheet below them is narrowed to one scope.
+    const [tutorRows, staffRows, customRows] = await Promise.all([
+      tutorRosterRows(month, year),
+      staffRosterRows(month, year),
+      customRosterRows(month, year),
+    ])
+    const everyone = [...tutorRows, ...staffRows, ...customRows]
+
+    const roster = scope === 'all' ? everyone
+      : scope === 'custom' ? customRows
+        : scope === 'staff' ? staffRows
+          : tutorRows
 
     const generated = roster.filter(r => r.record).length
 
@@ -751,6 +823,7 @@ export async function getSalaryRoster(req, res) {
       total: roster.length,
       generated,
       pending: roster.length - generated,
+      summary: summarizePayroll(everyone),
     })
   } catch (err) {
     console.error('Salary roster error:', err)

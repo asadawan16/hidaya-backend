@@ -28,7 +28,7 @@ const subjectName = (advance) =>
 // Populate both subject refs — only one is ever set, so the unused one is null.
 const withSubject = (query) => query
   .populate('tutorId', 'name tutorId')
-  .populate('userId', 'displayName email')
+  .populate('userId', 'displayName email employeeId')
 
 // Mongo filter selecting only the caller's OWN advances. Tutors are matched by
 // their linked tutor profile, everyone else by their user id. Returns null when

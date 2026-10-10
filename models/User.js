@@ -76,6 +76,15 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     sparse: true,
   },
+  // Employee ID for management/support staff (E01, E02, …) — the staff
+  // counterpart of TutorProfile.tutorId. Assigned by utils/employeeId.js and
+  // editable from the Staff page. Must stay ABSENT when unset (never ''): the
+  // unique index below is partial on the field being a string.
+  employeeId: {
+    type: String,
+    trim: true,
+    uppercase: true,
+  },
   // Registered mobile push tokens (Expo push tokens). Populated by the mobile
   // app via /portal/notifications/register-device. Used by services/push.js.
   pushTokens: [{
@@ -88,6 +97,10 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true })
 
 userSchema.index({ status: 1 })
+userSchema.index(
+  { employeeId: 1 },
+  { unique: true, partialFilterExpression: { employeeId: { $type: 'string' } } },
+)
 
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next()

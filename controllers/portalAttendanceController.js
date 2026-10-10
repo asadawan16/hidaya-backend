@@ -64,7 +64,7 @@ export async function listAttendance(req, res) {
 
     const records = await TutorAttendance.find(filter)
       .populate('tutorId', 'name tutorId')
-      .populate('userId', 'displayName email')
+      .populate('userId', 'displayName email employeeId')
       .sort(sort === 'date' ? { date: 1 } : { date: -1 })
       .skip((safePage - 1) * lim)
       .limit(lim)
