@@ -233,6 +233,66 @@ export async function listSalaryRecords(req, res) {
   }
 }
 
+// The caller's own payroll filter — tutor profile and/or staff account. Tutors
+// whose linkedTutorId was never backfilled are found through TutorProfile.userId.
+async function ownSalaryFilter(req) {
+  const tutorId = req.user?.linkedTutorId
+    || (await TutorProfile.findOne({ userId: req.userId }).select('_id').lean())?._id
+  const or = [{ userId: req.userId }]
+  if (tutorId) or.push({ tutorId })
+  return { $or: or }
+}
+
+// GET /salary/mine — an employee's own salary history (the My Salary page).
+// Guarded by portalAuth only: every tutor and staff member reads their own rows,
+// nobody else's, so it needs no salary.read. Drafts are listed (the employee was
+// already notified when one was generated) but the page offers no slip for them.
+export async function getMySalary(req, res) {
+  try {
+    const filter = await ownSalaryFilter(req)
+
+    const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const lim = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 12))
+    const all = await SalaryRecord.find(filter)
+      .select('month year currency netPayable status paidAt')
+      .sort({ year: -1, month: -1 })
+      .lean()
+    const total = all.length
+    const pages = Math.ceil(total / lim) || 1
+    const safePage = Math.min(pg, pages)
+
+    const records = await SalaryRecord.find(filter)
+      .populate('tutorId', 'name tutorId')
+      .populate('userId', 'displayName email employeeId')
+      .select('-generatedBy -advanceRepaymentApplied')
+      .sort({ year: -1, month: -1 })
+      .skip((safePage - 1) * lim).limit(lim)
+      .lean()
+
+    // Per-currency totals — never summed across currencies.
+    const thisYear = new Date().getFullYear()
+    const byCurrency = {}
+    for (const r of all) {
+      if (r.status !== 'paid') continue
+      const cur = r.currency || 'PKR'
+      const c = (byCurrency[cur] ||= { currency: cur, paidTotal: 0, paidCount: 0, paidThisYear: 0 })
+      c.paidTotal += r.netPayable || 0
+      c.paidCount += 1
+      if (r.year === thisYear) c.paidThisYear += r.netPayable || 0
+    }
+    const latestPaid = all.find(r => r.status === 'paid') || null
+    const awaiting = all.filter(r => r.status === 'finalized').length
+
+    res.json({
+      records, total, page: safePage, pages,
+      summary: { year: thisYear, byCurrency: Object.values(byCurrency), latestPaid, awaiting },
+    })
+  } catch (err) {
+    console.error('My salary error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // Mongo filter for a payroll subject's advance ledger. Tutors and staff each own
 // their own advances; custom (off-portal) people have no ledger at all.
 function advanceSubjectFilter({ subjectType, tutorId, userId }) {
