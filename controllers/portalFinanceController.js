@@ -199,12 +199,23 @@ export async function deleteInvoice(req, res) {
 
 // ─── Salary Records ───
 
+// A tutor account (tutor/student roles only) never sees payroll beyond its own
+// rows, whatever its role is granted. In production the tutor role was once
+// given salary.read so tutors could see their pay, which opened every tutor's and
+// staff member's salary to all of them through these endpoints. Own pay now
+// lives on /salary/mine; this keeps the rest closed even if the box is re-ticked.
+function isTutorAccount(req) {
+  const keys = (req.user?.roles || []).map(r => r?.key).filter(Boolean)
+  return keys.includes('tutor') && keys.every(k => k === 'tutor' || k === 'student')
+}
+
 export async function listSalaryRecords(req, res) {
   try {
     const { tutorId, userId, month, year } = req.query
-    const filter = {}
-    if (tutorId) filter.tutorId = tutorId
-    if (userId) filter.userId = userId
+    const tutorAccount = isTutorAccount(req)
+    const filter = tutorAccount ? await ownSalaryFilter(req) : {}
+    if (!tutorAccount && tutorId) filter.tutorId = tutorId
+    if (!tutorAccount && userId) filter.userId = userId
     if (month) filter.month = Number(month)
     if (year) filter.year = Number(year)
 
@@ -235,9 +246,14 @@ export async function listSalaryRecords(req, res) {
 
 // The caller's own payroll filter — tutor profile and/or staff account. Tutors
 // whose linkedTutorId was never backfilled are found through TutorProfile.userId.
-async function ownSalaryFilter(req) {
-  const tutorId = req.user?.linkedTutorId
+async function ownTutorId(req) {
+  return req.user?.linkedTutorId
     || (await TutorProfile.findOne({ userId: req.userId }).select('_id').lean())?._id
+    || null
+}
+
+async function ownSalaryFilter(req) {
+  const tutorId = await ownTutorId(req)
   const or = [{ userId: req.userId }]
   if (tutorId) or.push({ tutorId })
   return { $or: or }
@@ -527,7 +543,8 @@ export async function updateSalaryStatus(req, res) {
 
 export async function getSalaryReceipt(req, res) {
   try {
-    const record = await SalaryRecord.findById(req.params.id)
+    const scope = isTutorAccount(req) ? await ownSalaryFilter(req) : {}
+    const record = await SalaryRecord.findOne({ _id: req.params.id, ...scope })
       .populate('tutorId', 'name tutorId salary')
       .populate('userId', 'displayName email employeeId')
       .populate('generatedBy', 'displayName')
@@ -547,7 +564,8 @@ export async function getSalaryReceipt(req, res) {
 export async function listSalaryIncrements(req, res) {
   try {
     const filter = {}
-    if (req.query.tutorId) filter.tutorId = req.query.tutorId
+    if (isTutorAccount(req)) filter.tutorId = (await ownTutorId(req)) || null // no profile → no rows
+    else if (req.query.tutorId) filter.tutorId = req.query.tutorId
 
     const query = () => SalaryIncrement.find(filter)
       .populate('tutorId', 'name tutorId salary')
@@ -638,7 +656,7 @@ export async function createSalaryIncrement(req, res) {
 
 export async function getSalaryTimeline(req, res) {
   try {
-    const { tutorId } = req.query
+    const tutorId = isTutorAccount(req) ? await ownTutorId(req) : req.query.tutorId
     if (!tutorId) return res.status(400).json({ error: 'tutorId is required' })
 
     const [salaryRecords, increments] = await Promise.all([
@@ -852,6 +870,8 @@ function summarizePayroll(rows) {
 
 export async function getSalaryRoster(req, res) {
   try {
+    // The roster is the whole organisation's payroll — never a tutor account's.
+    if (isTutorAccount(req)) return res.status(403).json({ error: 'Insufficient permissions' })
     const month = Number(req.query.month)
     const year = Number(req.query.year)
     if (!month || !year) return res.status(400).json({ error: 'month and year are required' })

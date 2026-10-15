@@ -20,6 +20,7 @@ import User from '../models/User.js'
 import Role from '../models/Role.js'
 import TutorProfile from '../models/TutorProfile.js'
 import SalaryRecord from '../models/SalaryRecord.js'
+import SalaryIncrement from '../models/SalaryIncrement.js'
 import { DEFAULT_ROLE_PERMISSIONS } from '../config/permissions.js'
 import portalFinanceRoutes from '../routes/portalFinanceRoutes.js'
 
@@ -106,6 +107,42 @@ try {
 
   r = await get(tutorUser, '/salary')
   ok(r.status === 403, 'the org-wide salary list stays closed to tutors')
+
+  console.log('\nTutor role granted salary.read (as in production)')
+  await Role.updateOne({ _id: roles.tutor._id }, { $addToSet: { permissions: 'salary.read' } })
+  const tutorIds = (rows) => [...new Set((rows || []).map(x => String(x.tutorId?._id || x.tutorId || x.userId?._id || x.userId || x.personName)))]
+  r = await get(tutorUser, '/salary')
+  ok(r.status === 200 && r.data.length === 16 && tutorIds(r.data).join() === String(tutor._id), 'org-wide list is narrowed to their own rows', JSON.stringify(tutorIds(r.data)))
+  r = await get(tutorUser, `/salary?tutorId=${legacy._id}`)
+  ok(r.status === 200 && !r.data.some(x => String(x.tutorId?._id) === String(legacy._id)), 'asking for another tutor by id still returns only their own')
+  r = await get(tutorUser, `/salary?userId=${coord._id}&page=1`)
+  ok(r.status === 200 && r.data.records.every(x => String(x.tutorId?._id) === String(tutor._id)), 'asking for a staff member by id returns only their own')
+  r = await get(tutorUser, `/salary/roster?month=1&year=${YEAR}`)
+  ok(r.status === 403, 'payroll roster refused')
+  const othersRow = await SalaryRecord.findOne({ tutorId: legacy._id }).lean()
+  const staffRow = await SalaryRecord.findOne({ userId: coord._id }).lean()
+  const ownRow = await SalaryRecord.findOne({ tutorId: tutor._id }).lean()
+  ok((await get(tutorUser, `/salary/${othersRow._id}/receipt`)).status === 404, "another tutor's receipt → 404")
+  ok((await get(tutorUser, `/salary/${staffRow._id}/receipt`)).status === 404, "a staff member's receipt → 404")
+  ok((await get(tutorUser, `/salary/${ownRow._id}/receipt`)).status === 200, 'own receipt still opens')
+  await SalaryIncrement.create({ tutorId: legacy._id, previousAmount: 20000, newAmount: 25000, incrementAmount: 5000, incrementPercentage: 25, effectiveDate: new Date(), currency: 'PKR' })
+  await SalaryIncrement.create({ tutorId: tutor._id, previousAmount: 28000, newAmount: 30000, incrementAmount: 2000, incrementPercentage: 7, effectiveDate: new Date(), currency: 'PKR' })
+  r = await get(tutorUser, `/increments?tutorId=${legacy._id}`)
+  ok(r.status === 200 && r.data.length === 1 && String(r.data[0].tutorId?._id) === String(tutor._id), 'increments narrowed to their own', JSON.stringify(r.data?.map(i => i.tutorId?._id)))
+  r = await get(tutorUser, `/salary-timeline?tutorId=${legacy._id}`)
+  ok(r.status === 200 && r.data.salaryRecords.every(x => String(x.tutorId) === String(tutor._id)) && r.data.increments.length === 1, "timeline for another tutor returns their own instead")
+  r = await get(legacyUser, '/increments')
+  ok(r.status === 200 && r.data.length === 1 && String(r.data[0].tutorId?._id) === String(legacy._id), 'tutor without linkedTutorId: own increments only')
+
+  console.log('\nPayroll staff unaffected')
+  const accountantRole = await Role.create({ key: 'accountant', name: 'accountant', permissions: ['salary.read', 'salary.manage'] })
+  const accountant = await User.create({ email: 'acc@smoke.test', password: 'Smoke@12345', displayName: 'Accountant', roles: [accountantRole._id] })
+  r = await get(accountant, '/salary')
+  ok(r.status === 200 && r.data.length === 19, 'accountant still sees every row', r.data?.length)
+  r = await get(accountant, `/salary/roster?month=1&year=${YEAR}`)
+  ok(r.status === 200, 'accountant still gets the roster')
+  ok((await get(accountant, `/salary/${othersRow._id}/receipt`)).status === 200, "accountant opens any receipt")
+  await Role.updateOne({ _id: roles.tutor._id }, { $pull: { permissions: 'salary.read' } })
 
   console.log('\nTutor with no linkedTutorId')
   r = await get(legacyUser, '/salary/mine')
