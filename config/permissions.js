@@ -137,6 +137,11 @@ export const PERMISSIONS = {
   // Super-admin only by default (see the admin exclusion list below); publishing
   // a link exposes a join URL to anyone the page is forwarded to.
   classLink: ['class_link.read', 'class_link.manage'],
+
+  // Bulk "Data Export" — every portal collection as CSV in one ZIP (the
+  // disaster-recovery backup, /portal/data-export) plus its weekly reminder.
+  // Super-admin only by default: the file holds every student, salary and fee.
+  dataExport: ['data.export'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
@@ -154,7 +159,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   // Admin gets everything except role deletion, the super-admin-only Fee
   // receivables view/KPIs, and the public class-links board (and never the
   // opt-in restriction permissions).
-  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', ...RESTRICTION_PERMISSIONS].includes(p)),
+  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', 'data.export', ...RESTRICTION_PERMISSIONS].includes(p)),
 
   principal: [
     'student.read', 'student.approve', 'enrollment.read', 'enrollment.update',

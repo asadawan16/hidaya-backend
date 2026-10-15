@@ -53,6 +53,7 @@ import portalBadgeRoutes from './routes/portalBadgeRoutes.js'
 import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js'
 import portalFeeRoutes from './routes/portalFeeRoutes.js'
 import portalClassLinkRoutes from './routes/portalClassLinkRoutes.js'
+import portalDataExportRoutes from './routes/portalDataExportRoutes.js'
 import publicClassLinkRoutes from './routes/publicClassLinkRoutes.js'
 import publicCheckoutRoutes from './routes/publicCheckoutRoutes.js'
 import { stripeWebhook } from './controllers/stripeWebhookController.js'
@@ -209,6 +210,7 @@ app.use('/api/portal/badges', portalBadgeRoutes)
 app.use('/api/portal/student-progress', portalStudentProgressRoutes)
 app.use('/api/portal/fees', portalFeeRoutes)
 app.use('/api/portal/class-links', portalClassLinkRoutes)
+app.use('/api/portal/data-export', portalDataExportRoutes)
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))
