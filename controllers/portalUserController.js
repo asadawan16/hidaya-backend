@@ -167,7 +167,7 @@ export async function createUser(req, res) {
     await createNotification({
       userId: user._id,
       type: 'user_account',
-      title: 'Welcome to Hidaya Online',
+      title: 'Welcome to My Future Campus',
       body: `Assalamu Alaikum ${user.displayName}! Your portal account has been created.`,
       payload: { roles: keys },
     })

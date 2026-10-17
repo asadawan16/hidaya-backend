@@ -12,7 +12,7 @@ async function seed() {
     await Admin.create({
       email: process.env.ADMIN_EMAIL,
       password: process.env.ADMIN_PASSWORD,
-      name: 'Hidaya Admin',
+      name: 'Admin',
     })
     console.log('Admin created:', process.env.ADMIN_EMAIL)
   }

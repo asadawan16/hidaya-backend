@@ -107,13 +107,13 @@ export async function exportDatabase(req, res) {
     const timestamp = new Date().toISOString().slice(0, 10)
 
     res.setHeader('Content-Type', 'application/zip')
-    res.setHeader('Content-Disposition', `attachment; filename="hidaya-export-${timestamp}.zip"`)
+    res.setHeader('Content-Disposition', `attachment; filename="myfuturecampus-export-${timestamp}.zip"`)
 
     const archive = new ZipArchive({ zlib: { level: 6 } })
     archive.pipe(res)
 
     // Add Excel file
-    archive.append(excelBuffer, { name: `hidaya-database-${timestamp}.xlsx` })
+    archive.append(excelBuffer, { name: `myfuturecampus-database-${timestamp}.xlsx` })
 
     // Add individual JSON files per collection
     for (const col of collections) {

@@ -8,7 +8,7 @@ const blogPostSchema = new mongoose.Schema({
     heading: { type: String, trim: true },
     text: { type: String, trim: true },
   }],
-  author: { type: String, default: 'Hidaya Online', trim: true },
+  author: { type: String, default: 'My Future Campus', trim: true },
   coverImageKey: { type: String, default: '' },
   published: { type: Boolean, default: true },
   publishedAt: { type: Date, default: () => new Date() },

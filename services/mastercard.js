@@ -23,7 +23,7 @@ export async function createCheckoutSession({ orderId, amount, currency, plan, r
         operation: 'PURCHASE',
         returnUrl,
         cancelUrl,
-        merchant: { name: 'Hidaya Online' },
+        merchant: { name: 'My Future Campus' },
         displayControl: {
           billingAddress: 'MANDATORY',
         },
@@ -32,7 +32,7 @@ export async function createCheckoutSession({ orderId, amount, currency, plan, r
         id: orderId,
         amount: String(amount),
         currency: currency || 'PKR',
-        description: `Hidaya Online - ${plan}`,
+        description: `My Future Campus - ${plan}`,
       },
       ...(Object.keys(customer).length > 0 && { customer }),
     }),
@@ -59,7 +59,7 @@ export async function initiateBrowserPayment({ orderId, transactionId, amount, c
       order: {
         amount: String(amount),
         currency,
-        description: `Hidaya Online - ${plan}`,
+        description: `My Future Campus - ${plan}`,
       },
     }),
   })

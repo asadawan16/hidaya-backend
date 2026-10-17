@@ -88,7 +88,7 @@ const cursorOf = (model) => model.find().sort({ _id: 1 }).lean().cursor({ batchS
 async function* collectionCsv(spec, onDone) {
   const omit = spec.omit || []
   const columns = new Set(['_id', ...schemaColumns(spec.model, omit)])
-  const tmp = path.join(os.tmpdir(), `hidaya-export-${process.pid}-${Date.now()}-${spec.file}.jsonl`)
+  const tmp = path.join(os.tmpdir(), `myfuturecampus-export-${process.pid}-${Date.now()}-${spec.file}.jsonl`)
   const stage = fs.createWriteStream(tmp)
   let count = 0
   try {
@@ -128,7 +128,7 @@ const csvPath = (spec) => `${spec.folder}/${spec.file}.csv`
 function readme({ exportedAt, by, rows }) {
   const total = rows.reduce((s, r) => s + r.count, 0)
   return [
-    'HIDAYA PORTAL — DATA EXPORT (disaster-recovery backup)',
+    'MY FUTURE CAMPUS PORTAL — DATA EXPORT (disaster-recovery backup)',
     '======================================================',
     '',
     `Exported:     ${exportedAt.toISOString()}`,
@@ -166,7 +166,7 @@ export async function downloadExport(req, res) {
   const started = Date.now()
   const exportedAt = new Date()
   const stamp = exportedAt.toISOString().slice(0, 16).replace('T', '_').replace(':', '-')
-  const fileName = `hidaya-portal-backup-${stamp}.zip`
+  const fileName = `myfuturecampus-portal-backup-${stamp}.zip`
   const total = EXPORT_COLLECTIONS.length
   const rows = []
   let aborted = false

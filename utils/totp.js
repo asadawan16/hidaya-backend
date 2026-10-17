@@ -6,7 +6,7 @@ const { generateSecret: otpGenSecret, generateURI, verifySync } = require('otpli
 const QRCode = require('qrcode')
 
 const ALGORITHM = 'aes-256-gcm'
-const ISSUER = 'Hidaya Online'
+const ISSUER = 'My Future Campus'
 
 function getEncryptionKey() {
   const key = process.env.MFA_ENCRYPTION_KEY

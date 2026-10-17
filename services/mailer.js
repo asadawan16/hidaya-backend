@@ -28,7 +28,7 @@ export async function notifyAdmin({ subject, html }) {
   try {
     const transport = getTransporter()
     await transport.sendMail({
-      from: `"Hidaya Online" <${process.env.SMTP_USER}>`,
+      from: `"My Future Campus" <${process.env.SMTP_USER}>`,
       to: process.env.NOTIFY_EMAIL,
       subject,
       html,
@@ -43,7 +43,7 @@ export async function sendToUser({ to, subject, html }) {
   try {
     const transport = getTransporter()
     await transport.sendMail({
-      from: `"Hidaya Online" <${process.env.SMTP_USER}>`,
+      from: `"My Future Campus" <${process.env.SMTP_USER}>`,
       to,
       subject,
       html,
@@ -67,18 +67,18 @@ function adminLayout(content) {
     <tr><td align="center">
       <table role="presentation" width="580" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%">
         <tr><td style="padding:0 0 24px" align="center">
-          <img src="https://bexbucket.s3.eu-north-1.amazonaws.com/Logo/hidayaonlinelogo.jpeg" alt="Hidaya Online" width="140" style="display:block;height:auto;border:0;outline:0;text-decoration:none">
+          <img src="https://myfuturecampus.com/logo-512.png" alt="My Future Campus" width="140" style="display:block;height:auto;border:0;outline:0;text-decoration:none">
         </td></tr>
         <tr><td>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(12,59,46,0.06),0 8px 24px -8px rgba(12,59,46,0.08)">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,78,49,0.06),0 8px 24px -8px rgba(0,78,49,0.08)">
             ${content}
           </table>
         </td></tr>
         <tr><td style="padding:32px 0 0" align="center">
-          <span style="display:inline-block;width:32px;height:2px;background:linear-gradient(90deg,#D4A843,#1B6B5A);border-radius:1px"></span>
+          <span style="display:inline-block;width:32px;height:2px;background:linear-gradient(90deg,#F58531,#2F7F6E);border-radius:1px"></span>
           <p style="color:#8AA89C;font-size:11px;line-height:18px;letter-spacing:0.3px;margin:12px 0 0">
-            Hidaya Online<br>
-            <a href="https://hidaya.online" style="color:#1B6B5A;text-decoration:none">hidaya.online</a>
+            My Future Campus<br>
+            <a href="https://myfuturecampus.com" style="color:#2F7F6E;text-decoration:none">myfuturecampus.com</a>
           </p>
         </td></tr>
       </table>
@@ -105,12 +105,12 @@ function userLayout(content) {
 
         <!-- Logo -->
         <tr><td style="padding:0 0 24px" align="center">
-          <img src="https://bexbucket.s3.eu-north-1.amazonaws.com/Logo/hidayaonlinelogo.jpeg" alt="Hidaya Online" width="140" style="display:block;height:auto;border:0;outline:0;text-decoration:none">
+          <img src="https://myfuturecampus.com/logo-512.png" alt="My Future Campus" width="140" style="display:block;height:auto;border:0;outline:0;text-decoration:none">
         </td></tr>
 
         <!-- Main card -->
         <tr><td>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 1px 3px rgba(12,59,46,0.06),0 12px 32px -8px rgba(12,59,46,0.10)">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 1px 3px rgba(0,78,49,0.06),0 12px 32px -8px rgba(0,78,49,0.10)">
             ${content}
           </table>
         </td></tr>
@@ -118,15 +118,15 @@ function userLayout(content) {
         <!-- Islamic star divider -->
         <tr><td style="padding:28px 0 0" align="center">
           <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-            <td style="width:60px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
-            <td style="padding:0 12px"><span style="color:#D4A843;font-size:16px">✦</span></td>
-            <td style="width:60px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+            <td style="width:60px;height:1px;background:linear-gradient(90deg,transparent,#F58531)"></td>
+            <td style="padding:0 12px"><span style="color:#F58531;font-size:16px">✦</span></td>
+            <td style="width:60px;height:1px;background:linear-gradient(90deg,#F58531,transparent)"></td>
           </tr></table>
         </td></tr>
 
         <!-- Arabic blessing -->
         <tr><td style="padding:16px 0 4px" align="center">
-          <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:22px;color:#0C3B2E;line-height:1.6">
+          <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:22px;color:#004E31;line-height:1.6">
             بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ
           </p>
         </td></tr>
@@ -134,17 +134,17 @@ function userLayout(content) {
         <!-- Footer -->
         <tr><td style="padding:8px 0 0" align="center">
           <p style="color:#8AA89C;font-size:11px;line-height:20px;letter-spacing:0.3px;margin:0">
-            Hidaya Online
+            My Future Campus
           </p>
           <p style="margin:10px 0 0">
-            <a href="https://hidaya.online" style="color:#1B6B5A;text-decoration:none;font-size:12px;font-weight:600">hidaya.online</a>
-            <span style="color:#D4A843;margin:0 8px">&middot;</span>
-            <a href="https://wa.me/16313558368" style="color:#1B6B5A;text-decoration:none;font-size:12px;font-weight:600">WhatsApp</a>
-            <span style="color:#D4A843;margin:0 8px">&middot;</span>
-            <a href="tel:+16313558368" style="color:#1B6B5A;text-decoration:none;font-size:12px;font-weight:600">+1 631 355 8368</a>
+            <a href="https://myfuturecampus.com" style="color:#2F7F6E;text-decoration:none;font-size:12px;font-weight:600">myfuturecampus.com</a>
+            <span style="color:#F58531;margin:0 8px">&middot;</span>
+            <a href="https://wa.me/16318991010" style="color:#2F7F6E;text-decoration:none;font-size:12px;font-weight:600">WhatsApp</a>
+            <span style="color:#F58531;margin:0 8px">&middot;</span>
+            <a href="tel:+16318991010" style="color:#2F7F6E;text-decoration:none;font-size:12px;font-weight:600">+1 631 899 1010</a>
           </p>
           <p style="color:#b0c4b8;font-size:10px;letter-spacing:0.5px;margin:14px 0 0">
-            &copy; ${new Date().getFullYear()} Hidaya Online. All rights reserved.
+            &copy; ${new Date().getFullYear()} My Future Campus. All rights reserved.
           </p>
         </td></tr>
 
@@ -159,10 +159,10 @@ function userLayout(content) {
 function row(label, value, opts = {}) {
   if (!value) return ''
   const valueStyle = opts.bold
-    ? 'font-size:22px;font-weight:700;color:#0C3B2E;letter-spacing:-0.3px'
+    ? 'font-size:22px;font-weight:700;color:#004E31;letter-spacing:-0.3px'
     : opts.mono
       ? 'font-family:SFMono-Regular,Menlo,monospace;font-size:12px;color:#6B8F7F;letter-spacing:0.3px'
-      : 'font-size:14px;color:#0C3B2E;font-weight:500'
+      : 'font-size:14px;color:#004E31;font-weight:500'
   const link = opts.link ? `<a href="${opts.link}" style="${valueStyle};text-decoration:none">${value}</a>` : `<span style="${valueStyle}">${value}</span>`
   return `
     <tr>
@@ -194,11 +194,11 @@ export function admissionDecisionEmail({ studentName, approved, rollNo, reviewNo
     ? '<span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#ECFDF5;color:#059669;text-transform:uppercase">Approved</span>'
     : '<span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#FEF2F2;color:#DC2626;text-transform:uppercase">Not Approved</span>'
   const lead = approved
-    ? `Assalamu Alaikum! We are delighted to let you know that the admission application for <b style="color:#0C3B2E">${studentName}</b> has been approved. Welcome to the Hidaya Online family!`
-    : `Assalamu Alaikum. Thank you for applying to Hidaya Online. After careful review, we are unable to approve the admission application for <b style="color:#0C3B2E">${studentName}</b> at this time.`
+    ? `Assalamu Alaikum! We are delighted to let you know that the admission application for <b style="color:#004E31">${studentName}</b> has been approved. Welcome to the My Future Campus family!`
+    : `Assalamu Alaikum. Thank you for applying to My Future Campus. After careful review, we are unable to approve the admission application for <b style="color:#004E31">${studentName}</b> at this time.`
 
   const content = `
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
     <tr><td style="padding:32px 36px 0">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
         <td>${badge}</td>
@@ -206,7 +206,7 @@ export function admissionDecisionEmail({ studentName, approved, rollNo, reviewNo
       </tr></table>
     </td></tr>
     <tr><td style="padding:20px 36px 4px">
-      <h1 style="margin:0;font-size:24px;font-weight:700;color:#0C3B2E">${headline}</h1>
+      <h1 style="margin:0;font-size:24px;font-weight:700;color:#004E31">${headline}</h1>
       <p style="margin:10px 0 0;font-size:14px;line-height:1.7;color:#4B6357">${lead}</p>
     </td></tr>
     ${approved && rollNo ? `
@@ -214,7 +214,7 @@ export function admissionDecisionEmail({ studentName, approved, rollNo, reviewNo
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5FAF7;border:1px solid #DBEDE3;border-radius:12px">
         <tr><td style="padding:16px 20px">
           <span style="font-size:11px;font-weight:700;letter-spacing:1px;color:#6B8F7F;text-transform:uppercase">Student Roll Number</span><br>
-          <span style="font-size:20px;font-weight:700;color:#0C3B2E;font-family:SFMono-Regular,Menlo,monospace">${rollNo}</span>
+          <span style="font-size:20px;font-weight:700;color:#004E31;font-family:SFMono-Regular,Menlo,monospace">${rollNo}</span>
         </td></tr>
       </table>
       <p style="margin:14px 0 0;font-size:13px;line-height:1.7;color:#4B6357">Our team will reach out shortly with class schedule details and next steps. Please keep this roll number for your records.</p>
@@ -230,12 +230,12 @@ export function admissionDecisionEmail({ studentName, approved, rollNo, reviewNo
       <p style="margin:14px 0 0;font-size:13px;line-height:1.7;color:#4B6357">You are welcome to apply again or contact us if you have any questions — we would be glad to help.</p>
     </td></tr>` : ''}
     <tr><td style="padding:26px 36px 36px" align="center">
-      <a href="https://hidaya.online" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 12px rgba(12,59,46,0.25)">Visit Hidaya Online</a>
+      <a href="https://myfuturecampus.com" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#004E31,#2F7F6E);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 12px rgba(0,78,49,0.25)">Visit My Future Campus</a>
     </td></tr>`
 
   return {
     subject: approved
-      ? `🎓 Admission Approved — Welcome to Hidaya Online, ${studentName}!`
+      ? `🎓 Admission Approved — Welcome to My Future Campus, ${studentName}!`
       : `Admission Update — ${studentName}`,
     html: userLayout(content),
   }
@@ -246,15 +246,15 @@ export function admissionDecisionEmail({ studentName, approved, rollNo, reviewNo
    ═══════════════════════════════════════════════════════ */
 export function portalWelcomeEmail({ displayName, email, password, rollNo }) {
   const firstName = (displayName || 'Student').split(' ')[0]
-  const loginUrl = `${process.env.FRONTEND_URL || 'https://hidaya.online'}/portal/login`
+  const loginUrl = `${process.env.FRONTEND_URL || 'https://myfuturecampus.com'}/portal/login`
 
   const content = `
     <!-- Accent bar -->
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
 
     <!-- Arabic header -->
     <tr><td style="padding:36px 36px 0" align="center">
-      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#0C3B2E;line-height:1.4">
+      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#004E31;line-height:1.4">
         ٱقْرَأْ بِٱسْمِ رَبِّكَ ٱلَّذِى خَلَقَ
       </p>
       <p style="margin:6px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#8AA89C;font-weight:500">
@@ -265,21 +265,21 @@ export function portalWelcomeEmail({ displayName, email, password, rollNo }) {
     <!-- Divider -->
     <tr><td style="padding:20px 36px 0" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
-        <td style="padding:0 10px"><span style="color:#D4A843;font-size:12px">✦</span></td>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#F58531)"></td>
+        <td style="padding:0 10px"><span style="color:#F58531;font-size:12px">✦</span></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,#F58531,transparent)"></td>
       </tr></table>
     </td></tr>
 
     <!-- Greeting -->
     <tr><td style="padding:24px 36px 0" align="center">
-      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#D4A843;font-weight:700">أهلاً وسهلاً</p>
+      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#F58531;font-weight:700">أهلاً وسهلاً</p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">Welcome</p>
-      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#0C3B2E;letter-spacing:-0.3px;font-family:'Amiri',serif">
+      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#004E31;letter-spacing:-0.3px;font-family:'Amiri',serif">
         Your Student Portal is Ready, ${firstName}
       </h1>
       <p style="margin:12px 0 0;font-size:15px;color:#6B8F7F;line-height:1.6;max-width:420px">
-        A student portal account has been created for you at Hidaya Online. Use the credentials below to sign in and follow your learning journey.
+        A student portal account has been created for you at My Future Campus. Use the credentials below to sign in and follow your learning journey.
       </p>
     </td></tr>
 
@@ -294,7 +294,7 @@ export function portalWelcomeEmail({ displayName, email, password, rollNo }) {
                 <span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Temporary Password</span>
               </td>
               <td style="padding:14px 0;border-bottom:1px solid #f0f4f2;text-align:right;vertical-align:top">
-                <span style="display:inline-block;padding:6px 14px;background:#0C3B2E;color:#fff;border-radius:8px;font-family:SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:700;letter-spacing:0.5px">${password}</span>
+                <span style="display:inline-block;padding:6px 14px;background:#004E31;color:#fff;border-radius:8px;font-family:SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:700;letter-spacing:0.5px">${password}</span>
               </td>
             </tr>
             ${rollNo ? row('Roll Number', rollNo, { mono: true }) : ''}
@@ -314,7 +314,7 @@ export function portalWelcomeEmail({ displayName, email, password, rollNo }) {
 
     <!-- CTA -->
     <tr><td style="padding:24px 36px 16px" align="center">
-      <a href="${loginUrl}" style="display:inline-block;padding:16px 48px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:16px;font-weight:700;text-decoration:none;border-radius:14px;box-shadow:0 4px 20px rgba(12,59,46,0.3);letter-spacing:0.3px">
+      <a href="${loginUrl}" style="display:inline-block;padding:16px 48px;background:linear-gradient(135deg,#004E31,#2F7F6E);color:#fff;font-size:16px;font-weight:700;text-decoration:none;border-radius:14px;box-shadow:0 4px 20px rgba(0,78,49,0.3);letter-spacing:0.3px">
         Log in to Portal
       </a>
     </td></tr>
@@ -323,15 +323,15 @@ export function portalWelcomeEmail({ displayName, email, password, rollNo }) {
     <tr><td style="padding:16px 36px 32px" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
-        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="padding:0 12px"><span style="color:#F58531;font-size:10px">✦</span></td>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
       </tr></table>
-      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">بَارَكَ اللَّهُ فِيكُمْ</p>
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#004E31">بَارَكَ اللَّهُ فِيكُمْ</p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">May Allah bless you</p>
     </td></tr>`
 
   return {
-    subject: `🕌 Your Hidaya Online Student Portal Account`,
+    subject: `🕌 Your My Future Campus Student Portal Account`,
     html: userLayout(content),
   }
 }
@@ -344,16 +344,16 @@ export function passwordResetOtpEmail({ displayName, otp }) {
 
   const content = `
     <!-- Accent bar -->
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
 
     <!-- Header -->
     <tr><td style="padding:36px 36px 0" align="center">
       <span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#EDE9FE;color:#6D28D9;text-transform:uppercase">Password Reset</span>
-      <h1 style="margin:18px 0 0;font-size:26px;font-weight:700;color:#0C3B2E;font-family:'Amiri',serif">
+      <h1 style="margin:18px 0 0;font-size:26px;font-weight:700;color:#004E31;font-family:'Amiri',serif">
         Reset Your Password, ${firstName}
       </h1>
       <p style="margin:12px 0 0;font-size:15px;color:#6B8F7F;line-height:1.6;max-width:420px">
-        Use the one-time code below to reset your Hidaya Online portal password. This code expires in 10 minutes.
+        Use the one-time code below to reset your My Future Campus portal password. This code expires in 10 minutes.
       </p>
     </td></tr>
 
@@ -362,7 +362,7 @@ export function passwordResetOtpEmail({ displayName, otp }) {
       <table role="presentation" cellpadding="0" cellspacing="0" style="background:linear-gradient(135deg,#F8FAF9,#F0F7F4);border-radius:16px;border:1px solid #E7F2EC">
         <tr><td style="padding:24px 40px" align="center">
           <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#8AA89C;font-weight:600;margin-bottom:10px">Your Code</span>
-          <span style="font-size:40px;font-weight:800;color:#0C3B2E;letter-spacing:10px;font-family:SFMono-Regular,Menlo,monospace">${otp}</span>
+          <span style="font-size:40px;font-weight:800;color:#004E31;letter-spacing:10px;font-family:SFMono-Regular,Menlo,monospace">${otp}</span>
         </td></tr>
       </table>
     </td></tr>
@@ -380,15 +380,15 @@ export function passwordResetOtpEmail({ displayName, otp }) {
     <tr><td style="padding:26px 36px 32px" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
-        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="padding:0 12px"><span style="color:#F58531;font-size:10px">✦</span></td>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
       </tr></table>
-      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">بَارَكَ اللَّهُ فِيكُمْ</p>
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#004E31">بَارَكَ اللَّهُ فِيكُمْ</p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">May Allah bless you</p>
     </td></tr>`
 
   return {
-    subject: `🔐 Your Hidaya Online password reset code: ${otp}`,
+    subject: `🔐 Your My Future Campus password reset code: ${otp}`,
     html: userLayout(content),
   }
 }
@@ -398,7 +398,7 @@ export function enrollmentEmail(data) {
   const isContact = data.source === 'contact'
 
   const content = `
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
     <tr><td style="padding:32px 36px 0">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
         <td><span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:${src.bg};color:${src.color};text-transform:uppercase">${src.label}</span></td>
@@ -406,7 +406,7 @@ export function enrollmentEmail(data) {
       </tr></table>
     </td></tr>
     <tr><td style="padding:20px 36px 4px">
-      <h1 style="margin:0;font-size:24px;font-weight:700;color:#0C3B2E">New ${isContact ? 'Message' : 'Enrollment Request'}</h1>
+      <h1 style="margin:0;font-size:24px;font-weight:700;color:#004E31">New ${isContact ? 'Message' : 'Enrollment Request'}</h1>
       <p style="margin:6px 0 0;font-size:14px;color:#6B8F7F">A new submission has been received from the website.</p>
     </td></tr>
     <tr><td style="padding:20px 36px 0"><div style="height:1px;background:linear-gradient(90deg,transparent,#e5e7eb,transparent)"></div></td></tr>
@@ -419,7 +419,7 @@ export function enrollmentEmail(data) {
       </table>
     </td></tr>
     <tr><td style="padding:0 36px 36px" align="center">
-      <a href="mailto:${data.email}" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 12px rgba(12,59,46,0.25)">Reply to ${data.name.split(' ')[0]}</a>
+      <a href="mailto:${data.email}" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#004E31,#2F7F6E);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 12px rgba(0,78,49,0.25)">Reply to ${data.name.split(' ')[0]}</a>
     </td></tr>`
 
   return {
@@ -468,7 +468,7 @@ export function enrollmentConfirmationEmail(data) {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F8FAF9;border-radius:12px;border:1px solid #E7F2EC">
         <tr><td style="padding:20px 16px;text-align:center">
           <span style="font-size:24px;display:block;margin-bottom:10px">${w.icon}</span>
-          <span style="font-size:13px;font-weight:700;color:#0C3B2E;display:block;margin-bottom:6px">${w.title}</span>
+          <span style="font-size:13px;font-weight:700;color:#004E31;display:block;margin-bottom:6px">${w.title}</span>
           <span style="font-size:12px;color:#6B8F7F;line-height:1.5">${w.desc}</span>
         </td></tr>
       </table>
@@ -476,11 +476,11 @@ export function enrollmentConfirmationEmail(data) {
 
   const content = `
     <!-- Accent bar -->
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
 
     <!-- Arabic calligraphy header -->
     <tr><td style="padding:36px 36px 0" align="center">
-      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#0C3B2E;line-height:1.4">
+      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#004E31;line-height:1.4">
         ٱقْرَأْ بِٱسْمِ رَبِّكَ ٱلَّذِى خَلَقَ
       </p>
       <p style="margin:6px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#8AA89C;font-weight:500">
@@ -491,19 +491,19 @@ export function enrollmentConfirmationEmail(data) {
     <!-- Decorative divider -->
     <tr><td style="padding:20px 36px 0" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
-        <td style="padding:0 10px"><span style="color:#D4A843;font-size:12px">✦</span></td>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#F58531)"></td>
+        <td style="padding:0 10px"><span style="color:#F58531;font-size:12px">✦</span></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,#F58531,transparent)"></td>
       </tr></table>
     </td></tr>
 
     <!-- Greeting -->
     <tr><td style="padding:24px 36px 0" align="center">
-      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#D4A843;font-weight:700">
+      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#F58531;font-weight:700">
         أهلاً وسهلاً
       </p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">Welcome</p>
-      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#0C3B2E;letter-spacing:-0.3px;font-family:'Amiri',serif">
+      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#004E31;letter-spacing:-0.3px;font-family:'Amiri',serif">
         ${heading}, ${firstName}
       </h1>
       <p style="margin:12px 0 0;font-size:15px;color:#6B8F7F;line-height:1.6;max-width:420px">
@@ -521,7 +521,7 @@ export function enrollmentConfirmationEmail(data) {
                 <span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Name</span>
               </td>
               <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right">
-                <span style="font-size:14px;color:#0C3B2E;font-weight:600">${data.name}</span>
+                <span style="font-size:14px;color:#004E31;font-weight:600">${data.name}</span>
               </td>
             </tr>
             <tr>
@@ -529,7 +529,7 @@ export function enrollmentConfirmationEmail(data) {
                 <span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Email</span>
               </td>
               <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right">
-                <span style="font-size:14px;color:#0C3B2E;font-weight:500">${data.email}</span>
+                <span style="font-size:14px;color:#004E31;font-weight:500">${data.email}</span>
               </td>
             </tr>
             ${data.phone ? `<tr>
@@ -537,7 +537,7 @@ export function enrollmentConfirmationEmail(data) {
                 <span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Phone</span>
               </td>
               <td style="padding:8px 0;text-align:right">
-                <span style="font-size:14px;color:#0C3B2E;font-weight:500">${data.phone}</span>
+                <span style="font-size:14px;color:#004E31;font-weight:500">${data.phone}</span>
               </td>
             </tr>` : ''}
           </table>
@@ -555,7 +555,7 @@ export function enrollmentConfirmationEmail(data) {
 
     <!-- CTA -->
     <tr><td style="padding:0 36px 16px" align="center">
-      <a href="https://wa.me/16313558368" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(12,59,46,0.25);letter-spacing:0.2px">
+      <a href="https://wa.me/16318991010" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#004E31,#2F7F6E);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(0,78,49,0.25);letter-spacing:0.2px">
         Contact Us on WhatsApp
       </a>
     </td></tr>
@@ -564,10 +564,10 @@ export function enrollmentConfirmationEmail(data) {
     <tr><td style="padding:16px 36px 32px" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
-        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="padding:0 12px"><span style="color:#F58531;font-size:10px">✦</span></td>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
       </tr></table>
-      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E;line-height:1.5">
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#004E31;line-height:1.5">
         بَارَكَ اللَّهُ فِيكُمْ
       </p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">
@@ -602,7 +602,7 @@ export function paymentEmail(data) {
       </tr></table>
     </td></tr>
     <tr><td style="padding:20px 36px 4px">
-      <h1 style="margin:0;font-size:24px;font-weight:700;color:#0C3B2E">Payment ${isSuccess ? 'Received' : 'Failed'}</h1>
+      <h1 style="margin:0;font-size:24px;font-weight:700;color:#004E31">Payment ${isSuccess ? 'Received' : 'Failed'}</h1>
       <p style="margin:6px 0 0;font-size:14px;color:#6B8F7F">${isSuccess ? 'A payment has been successfully processed.' : 'A payment attempt was unsuccessful.'}</p>
     </td></tr>
     <tr><td style="padding:24px 36px">
@@ -628,7 +628,7 @@ export function paymentEmail(data) {
     <tr><td style="padding:0 36px 36px" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
         <td style="padding-right:8px">
-          <a href="mailto:${data.studentEmail}" style="display:inline-block;padding:14px 32px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:13px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 12px rgba(12,59,46,0.25)">Email Student</a>
+          <a href="mailto:${data.studentEmail}" style="display:inline-block;padding:14px 32px;background:linear-gradient(135deg,#004E31,#2F7F6E);color:#fff;font-size:13px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 12px rgba(0,78,49,0.25)">Email Student</a>
         </td>
         ${data.studentPhone ? `<td>
           <a href="https://wa.me/${data.studentPhone.replace(/[^0-9]/g, '')}" style="display:inline-block;padding:14px 32px;background:#25D366;color:#fff;font-size:13px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 12px rgba(37,211,102,0.25)">WhatsApp</a>
@@ -652,11 +652,11 @@ export function paymentConfirmationEmail(data) {
 
   const content = `
     <!-- Accent bar -->
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
 
     <!-- Arabic header -->
     <tr><td style="padding:36px 36px 0" align="center">
-      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#0C3B2E;line-height:1.4">
+      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#004E31;line-height:1.4">
         ٱقْرَأْ بِٱسْمِ رَبِّكَ ٱلَّذِى خَلَقَ
       </p>
       <p style="margin:6px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#8AA89C;font-weight:500">
@@ -667,19 +667,19 @@ export function paymentConfirmationEmail(data) {
     <!-- Divider -->
     <tr><td style="padding:20px 36px 0" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
-        <td style="padding:0 10px"><span style="color:#D4A843;font-size:12px">✦</span></td>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#F58531)"></td>
+        <td style="padding:0 10px"><span style="color:#F58531;font-size:12px">✦</span></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,#F58531,transparent)"></td>
       </tr></table>
     </td></tr>
 
     <!-- Greeting -->
     <tr><td style="padding:24px 36px 0" align="center">
-      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#D4A843;font-weight:700">
+      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#F58531;font-weight:700">
         بَارَكَ اللَّهُ فِيكُمْ
       </p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">May Allah bless you</p>
-      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#0C3B2E;font-family:'Amiri',serif">
+      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#004E31;font-family:'Amiri',serif">
         ${isSuccess ? `Payment Confirmed, ${firstName}` : `Payment Issue, ${firstName}`}
       </h1>
       <p style="margin:12px 0 0;font-size:15px;color:#6B8F7F;line-height:1.6;max-width:420px">
@@ -707,15 +707,15 @@ export function paymentConfirmationEmail(data) {
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr>
               <td style="padding:8px 0;border-bottom:1px solid #E7F2EC"><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Registered By</span></td>
-              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-size:14px;color:#0C3B2E;font-weight:600">${data.studentName}</span></td>
+              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-size:14px;color:#004E31;font-weight:600">${data.studentName}</span></td>
             </tr>
             ${data.quantity > 1 ? `<tr>
               <td style="padding:8px 0;border-bottom:1px solid #E7F2EC"><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Students</span></td>
-              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-size:14px;color:#0C3B2E;font-weight:600">${data.quantity} students</span></td>
+              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-size:14px;color:#004E31;font-weight:600">${data.quantity} students</span></td>
             </tr>` : ''}
             ${data.studentNames?.length > 0 ? `<tr>
               <td style="padding:8px 0;border-bottom:1px solid #E7F2EC"><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Student Names</span></td>
-              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-size:13px;color:#0C3B2E;font-weight:500">${data.studentNames.join(', ')}</span></td>
+              <td style="padding:8px 0;border-bottom:1px solid #E7F2EC;text-align:right"><span style="font-size:13px;color:#004E31;font-weight:500">${data.studentNames.join(', ')}</span></td>
             </tr>` : ''}
             <tr>
               <td style="padding:8px 0;border-bottom:1px solid #E7F2EC"><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Order ID</span></td>
@@ -741,7 +741,7 @@ export function paymentConfirmationEmail(data) {
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F8FAF9;border-radius:12px;border:1px solid #E7F2EC">
             <tr><td style="padding:20px 16px;text-align:center">
               <span style="font-size:24px;display:block;margin-bottom:10px">📅</span>
-              <span style="font-size:13px;font-weight:700;color:#0C3B2E;display:block;margin-bottom:6px">Schedule setup</span>
+              <span style="font-size:13px;font-weight:700;color:#004E31;display:block;margin-bottom:6px">Schedule setup</span>
               <span style="font-size:12px;color:#6B8F7F;line-height:1.5">We'll arrange your class schedule based on your selected plan.</span>
             </td></tr>
           </table>
@@ -750,7 +750,7 @@ export function paymentConfirmationEmail(data) {
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F8FAF9;border-radius:12px;border:1px solid #E7F2EC">
             <tr><td style="padding:20px 16px;text-align:center">
               <span style="font-size:24px;display:block;margin-bottom:10px">🧑‍🏫</span>
-              <span style="font-size:13px;font-weight:700;color:#0C3B2E;display:block;margin-bottom:6px">Teacher assigned</span>
+              <span style="font-size:13px;font-weight:700;color:#004E31;display:block;margin-bottom:6px">Teacher assigned</span>
               <span style="font-size:12px;color:#6B8F7F;line-height:1.5">You'll be matched with an expert Quran tutor, In shaa Allah.</span>
             </td></tr>
           </table>
@@ -759,7 +759,7 @@ export function paymentConfirmationEmail(data) {
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F8FAF9;border-radius:12px;border:1px solid #E7F2EC">
             <tr><td style="padding:20px 16px;text-align:center">
               <span style="font-size:24px;display:block;margin-bottom:10px">🕌</span>
-              <span style="font-size:13px;font-weight:700;color:#0C3B2E;display:block;margin-bottom:6px">Sadaqah Jariyah</span>
+              <span style="font-size:13px;font-weight:700;color:#004E31;display:block;margin-bottom:6px">Sadaqah Jariyah</span>
               <span style="font-size:12px;color:#6B8F7F;line-height:1.5">Learning & teaching the Quran is an ongoing reward.</span>
             </td></tr>
           </table>
@@ -768,22 +768,22 @@ export function paymentConfirmationEmail(data) {
     </td></tr>` : `
     <!-- Retry CTA for failed -->
     <tr><td style="padding:20px 36px" align="center">
-      <a href="${process.env.FRONTEND_URL}/fee" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(12,59,46,0.25)">Try Again</a>
+      <a href="${process.env.FRONTEND_URL}/fee" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#004E31,#2F7F6E);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(0,78,49,0.25)">Try Again</a>
     </td></tr>`}
 
     <!-- WhatsApp CTA -->
     <tr><td style="padding:8px 36px 16px" align="center">
-      <a href="https://wa.me/16313558368" style="display:inline-block;padding:14px 40px;background:#25D366;color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(37,211,102,0.25)">Contact Us on WhatsApp</a>
+      <a href="https://wa.me/16318991010" style="display:inline-block;padding:14px 40px;background:#25D366;color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(37,211,102,0.25)">Contact Us on WhatsApp</a>
     </td></tr>
 
     <!-- Closing -->
     <tr><td style="padding:16px 36px 32px" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
-        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="padding:0 12px"><span style="color:#F58531;font-size:10px">✦</span></td>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
       </tr></table>
-      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#004E31">
         بَارَكَ اللَّهُ فِيكُمْ
       </p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">
@@ -809,11 +809,11 @@ export function newsletterEmail({ subject, body }) {
 
   const content = `
     <!-- Accent bar -->
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
 
     <!-- Arabic header -->
     <tr><td style="padding:36px 36px 0" align="center">
-      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:24px;color:#0C3B2E;line-height:1.4">
+      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:24px;color:#004E31;line-height:1.4">
         ٱقْرَأْ بِٱسْمِ رَبِّكَ ٱلَّذِى خَلَقَ
       </p>
       <p style="margin:6px 0 0;font-size:10px;text-transform:uppercase;letter-spacing:2px;color:#8AA89C;font-weight:500">
@@ -824,15 +824,15 @@ export function newsletterEmail({ subject, body }) {
     <!-- Divider -->
     <tr><td style="padding:16px 36px 0" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-        <td style="width:60px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
-        <td style="padding:0 10px"><span style="color:#D4A843;font-size:12px">✦</span></td>
-        <td style="width:60px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+        <td style="width:60px;height:1px;background:linear-gradient(90deg,transparent,#F58531)"></td>
+        <td style="padding:0 10px"><span style="color:#F58531;font-size:12px">✦</span></td>
+        <td style="width:60px;height:1px;background:linear-gradient(90deg,#F58531,transparent)"></td>
       </tr></table>
     </td></tr>
 
     <!-- Subject heading -->
     <tr><td style="padding:24px 36px 4px" align="center">
-      <h1 style="margin:0;font-size:26px;font-weight:700;color:#0C3B2E;letter-spacing:-0.3px;font-family:'Amiri',serif">
+      <h1 style="margin:0;font-size:26px;font-weight:700;color:#004E31;letter-spacing:-0.3px;font-family:'Amiri',serif">
         ${subject}
       </h1>
     </td></tr>
@@ -844,8 +844,8 @@ export function newsletterEmail({ subject, body }) {
 
     <!-- CTA -->
     <tr><td style="padding:8px 36px 16px" align="center">
-      <a href="https://hidaya.online" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(12,59,46,0.25)">
-        Visit Hidaya Online
+      <a href="https://myfuturecampus.com" style="display:inline-block;padding:14px 40px;background:linear-gradient(135deg,#004E31,#2F7F6E);color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(0,78,49,0.25)">
+        Visit My Future Campus
       </a>
     </td></tr>
 
@@ -853,17 +853,17 @@ export function newsletterEmail({ subject, body }) {
     <tr><td style="padding:16px 36px 32px" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
-        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="padding:0 12px"><span style="color:#F58531;font-size:10px">✦</span></td>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
       </tr></table>
-      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#004E31">
         بَارَكَ اللَّهُ فِيكُمْ
       </p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">
         May Allah bless you
       </p>
       <p style="margin:16px 0 0;font-size:10px;color:#b0c4b8">
-        <a href="${process.env.FRONTEND_URL || 'https://hidaya.online'}" style="color:#8AA89C;text-decoration:underline">Unsubscribe</a>
+        <a href="${process.env.FRONTEND_URL || 'https://myfuturecampus.com'}" style="color:#8AA89C;text-decoration:underline">Unsubscribe</a>
       </p>
     </td></tr>`
 
@@ -878,15 +878,15 @@ export function newsletterEmail({ subject, body }) {
    ═══════════════════════════════════════════════════════ */
 export function paymentLinkEmail(data) {
   const firstName = data.payeeName.split(' ')[0]
-  const payUrl = `${process.env.FRONTEND_URL || 'https://hidaya.online'}/pay/${data.token}`
+  const payUrl = `${process.env.FRONTEND_URL || 'https://myfuturecampus.com'}/pay/${data.token}`
 
   const content = `
     <!-- Accent bar -->
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
 
     <!-- Arabic header -->
     <tr><td style="padding:36px 36px 0" align="center">
-      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#0C3B2E;line-height:1.4">
+      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#004E31;line-height:1.4">
         ٱقْرَأْ بِٱسْمِ رَبِّكَ ٱلَّذِى خَلَقَ
       </p>
       <p style="margin:6px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#8AA89C;font-weight:500">
@@ -897,23 +897,23 @@ export function paymentLinkEmail(data) {
     <!-- Divider -->
     <tr><td style="padding:20px 36px 0" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
-        <td style="padding:0 10px"><span style="color:#D4A843;font-size:12px">✦</span></td>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#F58531)"></td>
+        <td style="padding:0 10px"><span style="color:#F58531;font-size:12px">✦</span></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,#F58531,transparent)"></td>
       </tr></table>
     </td></tr>
 
     <!-- Greeting -->
     <tr><td style="padding:24px 36px 0" align="center">
-      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#D4A843;font-weight:700">
+      <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#F58531;font-weight:700">
         أهلاً وسهلاً
       </p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">Welcome</p>
-      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#0C3B2E;letter-spacing:-0.3px;font-family:'Amiri',serif">
+      <h1 style="margin:10px 0 0;font-size:28px;font-weight:700;color:#004E31;letter-spacing:-0.3px;font-family:'Amiri',serif">
         Payment Request, ${firstName}
       </h1>
       <p style="margin:12px 0 0;font-size:15px;color:#6B8F7F;line-height:1.6;max-width:420px">
-        You have a pending payment from Hidaya Online. Please complete it at your earliest convenience.
+        You have a pending payment from My Future Campus. Please complete it at your earliest convenience.
       </p>
     </td></tr>
 
@@ -922,7 +922,7 @@ export function paymentLinkEmail(data) {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:linear-gradient(135deg,#F8FAF9,#F0F7F4);border-radius:16px;border:1px solid #E7F2EC">
         <tr><td style="padding:28px" align="center">
           <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#8AA89C;font-weight:600;margin-bottom:8px">Amount Due</span>
-          <span style="font-size:40px;font-weight:800;color:#0C3B2E;letter-spacing:-0.5px">${fmtCurrency(data.amount, data.currency)}</span>
+          <span style="font-size:40px;font-weight:800;color:#004E31;letter-spacing:-0.5px">${fmtCurrency(data.amount, data.currency)}</span>
           <span style="display:block;margin-top:8px;font-size:13px;color:#6B8F7F">${data.description}</span>
         </td></tr>
       </table>
@@ -943,7 +943,7 @@ export function paymentLinkEmail(data) {
 
     <!-- Pay Now CTA -->
     <tr><td style="padding:24px 36px 16px" align="center">
-      <a href="${payUrl}" style="display:inline-block;padding:16px 48px;background:linear-gradient(135deg,#0C3B2E,#1B6B5A);color:#fff;font-size:16px;font-weight:700;text-decoration:none;border-radius:14px;box-shadow:0 4px 20px rgba(12,59,46,0.3);letter-spacing:0.3px">
+      <a href="${payUrl}" style="display:inline-block;padding:16px 48px;background:linear-gradient(135deg,#004E31,#2F7F6E);color:#fff;font-size:16px;font-weight:700;text-decoration:none;border-radius:14px;box-shadow:0 4px 20px rgba(0,78,49,0.3);letter-spacing:0.3px">
         Pay Now — ${fmtCurrency(data.amount, data.currency)}
       </a>
     </td></tr>
@@ -954,17 +954,17 @@ export function paymentLinkEmail(data) {
 
     <!-- WhatsApp CTA -->
     <tr><td style="padding:8px 36px 16px" align="center">
-      <a href="https://wa.me/16313558368" style="display:inline-block;padding:12px 32px;background:#25D366;color:#fff;font-size:13px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(37,211,102,0.25)">Questions? Contact Us</a>
+      <a href="https://wa.me/16318991010" style="display:inline-block;padding:12px 32px;background:#25D366;color:#fff;font-size:13px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(37,211,102,0.25)">Questions? Contact Us</a>
     </td></tr>
 
     <!-- Closing -->
     <tr><td style="padding:16px 36px 32px" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
-        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="padding:0 12px"><span style="color:#F58531;font-size:10px">✦</span></td>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
       </tr></table>
-      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#004E31">
         بَارَكَ اللَّهُ فِيكُمْ
       </p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">
@@ -973,7 +973,7 @@ export function paymentLinkEmail(data) {
     </td></tr>`
 
   return {
-    subject: `💳 Payment Request — ${fmtCurrency(data.amount, data.currency)} — Hidaya Online`,
+    subject: `💳 Payment Request — ${fmtCurrency(data.amount, data.currency)} — My Future Campus`,
     html: userLayout(content),
   }
 }
@@ -982,10 +982,10 @@ export function paymentLinkEmail(data) {
    ADMIN — PAYMENT LINK CREATED NOTIFICATION
    ═══════════════════════════════════════════════════════ */
 export function paymentLinkAdminEmail(data) {
-  const payUrl = `${process.env.FRONTEND_URL || 'https://hidaya.online'}/pay/${data.token}`
+  const payUrl = `${process.env.FRONTEND_URL || 'https://myfuturecampus.com'}/pay/${data.token}`
 
   const content = `
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
     <tr><td style="padding:32px 36px 0">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
         <td><span style="display:inline-block;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.5px;background:#E0F2FE;color:#0369A1;text-transform:uppercase">Payment Link</span></td>
@@ -993,7 +993,7 @@ export function paymentLinkAdminEmail(data) {
       </tr></table>
     </td></tr>
     <tr><td style="padding:20px 36px 4px">
-      <h1 style="margin:0;font-size:24px;font-weight:700;color:#0C3B2E">Payment Link Sent</h1>
+      <h1 style="margin:0;font-size:24px;font-weight:700;color:#004E31">Payment Link Sent</h1>
       <p style="margin:6px 0 0;font-size:14px;color:#6B8F7F">A payment link has been emailed to ${data.payeeName}.</p>
     </td></tr>
     <tr><td style="padding:24px 36px">
@@ -1034,10 +1034,10 @@ export function invoiceEmail({ link, payment }) {
   const itemsHtml = items.length > 0
     ? items.map((item, i) => `
         <tr>
-          <td style="padding:10px 16px;border-bottom:1px solid #f0f4f2;font-size:13px;color:#0C3B2E">
+          <td style="padding:10px 16px;border-bottom:1px solid #f0f4f2;font-size:13px;color:#004E31">
             ${link.listType === 'numbered'
-              ? `<span style="display:inline-block;width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#0C3B2E10,#1B6B5A10);text-align:center;line-height:22px;font-size:11px;font-weight:700;color:#0C3B2E;margin-right:10px">${i + 1}</span>`
-              : `<span style="color:#D4A843;margin-right:10px;font-size:10px">✦</span>`
+              ? `<span style="display:inline-block;width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#004E3110,#2F7F6E10);text-align:center;line-height:22px;font-size:11px;font-weight:700;color:#004E31;margin-right:10px">${i + 1}</span>`
+              : `<span style="color:#F58531;margin-right:10px;font-size:10px">✦</span>`
             }${item}
           </td>
         </tr>`).join('')
@@ -1045,11 +1045,11 @@ export function invoiceEmail({ link, payment }) {
 
   const content = `
     <!-- Accent bar -->
-    <tr><td style="height:4px;background:linear-gradient(90deg,#0C3B2E,#1B6B5A,#D4A843)"></td></tr>
+    <tr><td style="height:4px;background:linear-gradient(90deg,#004E31,#2F7F6E,#F58531)"></td></tr>
 
     <!-- Arabic header -->
     <tr><td style="padding:36px 36px 0" align="center">
-      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#0C3B2E;line-height:1.4">
+      <p dir="rtl" style="margin:0;font-family:'Amiri',serif;font-size:28px;color:#004E31;line-height:1.4">
         ٱقْرَأْ بِٱسْمِ رَبِّكَ ٱلَّذِى خَلَقَ
       </p>
       <p style="margin:6px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#8AA89C;font-weight:500">
@@ -1060,9 +1060,9 @@ export function invoiceEmail({ link, payment }) {
     <!-- Divider -->
     <tr><td style="padding:20px 36px 0" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#D4A843)"></td>
-        <td style="padding:0 10px"><span style="color:#D4A843;font-size:12px">✦</span></td>
-        <td style="width:80px;height:1px;background:linear-gradient(90deg,#D4A843,transparent)"></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#F58531)"></td>
+        <td style="padding:0 10px"><span style="color:#F58531;font-size:12px">✦</span></td>
+        <td style="width:80px;height:1px;background:linear-gradient(90deg,#F58531,transparent)"></td>
       </tr></table>
     </td></tr>
 
@@ -1070,8 +1070,8 @@ export function invoiceEmail({ link, payment }) {
     <tr><td style="padding:24px 36px 0">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
         <td>
-          <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#D4A843;font-weight:700">Invoice</p>
-          <h1 style="margin:6px 0 0;font-size:28px;font-weight:700;color:#0C3B2E;font-family:'Amiri',serif">
+          <p style="margin:0;font-size:11px;text-transform:uppercase;letter-spacing:2.5px;color:#F58531;font-weight:700">Invoice</p>
+          <h1 style="margin:6px 0 0;font-size:28px;font-weight:700;color:#004E31;font-family:'Amiri',serif">
             Payment Receipt
           </h1>
         </td>
@@ -1087,15 +1087,15 @@ export function invoiceEmail({ link, payment }) {
         <tr>
           <td style="padding:16px 20px;border-right:1px solid #E7F2EC" align="center">
             <span style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Invoice No.</span>
-            <span style="display:block;margin-top:4px;font-family:SFMono-Regular,Menlo,monospace;font-size:12px;color:#0C3B2E;font-weight:600">${invoiceNo}</span>
+            <span style="display:block;margin-top:4px;font-family:SFMono-Regular,Menlo,monospace;font-size:12px;color:#004E31;font-weight:600">${invoiceNo}</span>
           </td>
           <td style="padding:16px 20px;border-right:1px solid #E7F2EC" align="center">
             <span style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Date</span>
-            <span style="display:block;margin-top:4px;font-size:12px;color:#0C3B2E;font-weight:600">${paidDate}</span>
+            <span style="display:block;margin-top:4px;font-size:12px;color:#004E31;font-weight:600">${paidDate}</span>
           </td>
           <td style="padding:16px 20px" align="center">
             <span style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Method</span>
-            <span style="display:block;margin-top:4px;font-size:12px;color:#0C3B2E;font-weight:600">Mastercard</span>
+            <span style="display:block;margin-top:4px;font-size:12px;color:#004E31;font-weight:600">Mastercard</span>
           </td>
         </tr>
       </table>
@@ -1106,14 +1106,14 @@ export function invoiceEmail({ link, payment }) {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
         <td style="vertical-align:top;width:50%">
           <span style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">Bill To</span>
-          <p style="margin:8px 0 0;font-size:15px;font-weight:700;color:#0C3B2E">${link.payeeName}</p>
+          <p style="margin:8px 0 0;font-size:15px;font-weight:700;color:#004E31">${link.payeeName}</p>
           <p style="margin:4px 0 0;font-size:13px;color:#6B8F7F">${link.payeeEmail}</p>
           ${link.payeePhone ? `<p style="margin:2px 0 0;font-size:13px;color:#6B8F7F">${link.payeePhone}</p>` : ''}
         </td>
         <td style="vertical-align:top;width:50%" align="right">
           <span style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8AA89C;font-weight:600">From</span>
-          <p style="margin:8px 0 0;font-size:15px;font-weight:700;color:#0C3B2E">Hidaya Online</p>
-          <p style="margin:4px 0 0;font-size:13px;color:#6B8F7F">hidaya.online</p>
+          <p style="margin:8px 0 0;font-size:15px;font-weight:700;color:#004E31">My Future Campus</p>
+          <p style="margin:4px 0 0;font-size:13px;color:#6B8F7F">myfuturecampus.com</p>
         </td>
       </tr></table>
     </td></tr>
@@ -1129,7 +1129,7 @@ export function invoiceEmail({ link, payment }) {
         </tr>
         <!-- Main description -->
         <tr>
-          <td style="padding:14px 16px;border-bottom:1px solid #f0f4f2;font-size:14px;font-weight:600;color:#0C3B2E">${link.description}</td>
+          <td style="padding:14px 16px;border-bottom:1px solid #f0f4f2;font-size:14px;font-weight:600;color:#004E31">${link.description}</td>
         </tr>
         ${itemsHtml}
       </table>
@@ -1144,7 +1144,7 @@ export function invoiceEmail({ link, payment }) {
             <span style="font-size:13px;color:#6B8F7F">Original Amount</span>
           </td>
           <td style="padding:12px 0;border-bottom:1px solid #E7F2EC;text-align:right">
-            <span style="font-size:14px;color:#0C3B2E;font-weight:500">${fmtCurrency(payment.originalAmount, link.currency)}</span>
+            <span style="font-size:14px;color:#004E31;font-weight:500">${fmtCurrency(payment.originalAmount, link.currency)}</span>
           </td>
         </tr>
         <tr>
@@ -1160,7 +1160,7 @@ export function invoiceEmail({ link, payment }) {
             <span style="font-size:13px;color:#6B8F7F">Subtotal</span>
           </td>
           <td style="padding:12px 0;border-bottom:1px solid #E7F2EC;text-align:right">
-            <span style="font-size:14px;color:#0C3B2E;font-weight:500">${fmtCurrency(link.amount, link.currency)}</span>
+            <span style="font-size:14px;color:#004E31;font-weight:500">${fmtCurrency(link.amount, link.currency)}</span>
           </td>
         </tr>`}
         ${payment.taxAmount > 0 ? `
@@ -1169,12 +1169,12 @@ export function invoiceEmail({ link, payment }) {
             <span style="font-size:13px;color:#6B8F7F">Tax${payment.taxType === 'percentage' ? ` (${payment.taxValue}%)` : ''}</span>
           </td>
           <td style="padding:12px 0;border-bottom:1px solid #E7F2EC;text-align:right">
-            <span style="font-size:14px;color:#0C3B2E;font-weight:500">+${fmtCurrency(payment.taxAmount, link.currency)}</span>
+            <span style="font-size:14px;color:#004E31;font-weight:500">+${fmtCurrency(payment.taxAmount, link.currency)}</span>
           </td>
         </tr>` : ''}
         <tr>
           <td style="padding:14px 0">
-            <span style="font-size:15px;font-weight:700;color:#0C3B2E">Total Paid</span>
+            <span style="font-size:15px;font-weight:700;color:#004E31">Total Paid</span>
           </td>
           <td style="padding:14px 0;text-align:right">
             <span style="font-size:24px;font-weight:800;color:#047857;letter-spacing:-0.3px">${fmtCurrency(payment.amount, link.currency)}</span>
@@ -1207,17 +1207,17 @@ export function invoiceEmail({ link, payment }) {
 
     <!-- WhatsApp CTA -->
     <tr><td style="padding:16px 36px 16px" align="center">
-      <a href="https://wa.me/16313558368" style="display:inline-block;padding:12px 32px;background:#25D366;color:#fff;font-size:13px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(37,211,102,0.25)">Questions? Contact Us</a>
+      <a href="https://wa.me/16318991010" style="display:inline-block;padding:12px 32px;background:#25D366;color:#fff;font-size:13px;font-weight:600;text-decoration:none;border-radius:12px;box-shadow:0 4px 16px rgba(37,211,102,0.25)">Questions? Contact Us</a>
     </td></tr>
 
     <!-- Closing -->
     <tr><td style="padding:16px 36px 32px" align="center">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,transparent,#E7F2EC)"></td>
-        <td style="padding:0 12px"><span style="color:#D4A843;font-size:10px">✦</span></td>
+        <td style="padding:0 12px"><span style="color:#F58531;font-size:10px">✦</span></td>
         <td style="width:40px;height:1px;background:linear-gradient(90deg,#E7F2EC,transparent)"></td>
       </tr></table>
-      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#0C3B2E">
+      <p dir="rtl" style="margin:12px 0 0;font-family:'Amiri',serif;font-size:18px;color:#004E31">
         جَزَاكَ اللَّهُ خَيْرًا
       </p>
       <p style="margin:4px 0 0;font-size:11px;color:#8AA89C;letter-spacing:0.5px;font-style:italic">
@@ -1226,7 +1226,7 @@ export function invoiceEmail({ link, payment }) {
     </td></tr>`
 
   return {
-    subject: `🧾 Invoice — ${fmtCurrency(payment.amount, link.currency)} — Hidaya Online (${invoiceNo})`,
+    subject: `🧾 Invoice — ${fmtCurrency(payment.amount, link.currency)} — My Future Campus (${invoiceNo})`,
     html: userLayout(content),
   }
 }

@@ -226,11 +226,11 @@ export async function convertToStudent(req, res) {
       const portalUrl = process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/portal/login` : 'the portal'
       await sendToUser({
         to: lead.email,
-        subject: 'Welcome to Hidaya Online — Your Portal Account',
+        subject: 'Welcome to My Future Campus — Your Portal Account',
         html: `
           <div style="font-family: 'Inter', Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 40px 24px;">
             <div style="text-align: center; margin-bottom: 32px;">
-              <h1 style="font-size: 24px; font-weight: 700; color: #0C3B2E; margin: 0;">Welcome to Hidaya Online</h1>
+              <h1 style="font-size: 24px; font-weight: 700; color: #004E31; margin: 0;">Welcome to My Future Campus</h1>
               <p style="font-size: 14px; color: #536578; margin-top: 8px;">Your student portal account has been created</p>
             </div>
 
@@ -253,7 +253,7 @@ export async function convertToStudent(req, res) {
             </div>
 
             <div style="text-align: center; margin-bottom: 24px;">
-              <a href="${portalUrl}" style="display: inline-block; background: #0C3B2E; color: #fff; text-decoration: none; padding: 12px 32px; border-radius: 8px; font-size: 14px; font-weight: 600;">Sign in to Portal</a>
+              <a href="${portalUrl}" style="display: inline-block; background: #004E31; color: #fff; text-decoration: none; padding: 12px 32px; border-radius: 8px; font-size: 14px; font-weight: 600;">Sign in to Portal</a>
             </div>
 
             <p style="font-size: 13px; color: #536578; text-align: center;">
@@ -261,7 +261,7 @@ export async function convertToStudent(req, res) {
             </p>
 
             <hr style="border: none; border-top: 1px solid #E2E6ED; margin: 24px 0;" />
-            <p style="font-size: 11px; color: #94A8BE; text-align: center;">Hidaya Online Education</p>
+            <p style="font-size: 11px; color: #94A8BE; text-align: center;">My Future Campus</p>
           </div>
         `,
       })

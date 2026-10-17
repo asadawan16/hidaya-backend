@@ -53,6 +53,6 @@ export function isAllowedOrigin(origin) {
  * it wins locally; the literal is the production last resort.
  */
 export function paySiteUrl() {
-  const url = (process.env.PAY_SITE_URL || process.env.FRONTEND_URL || 'https://hidaya.online').trim()
+  const url = (process.env.PAY_SITE_URL || process.env.FRONTEND_URL || 'https://myfuturecampus.com').trim()
   return url.replace(/\/$/, '')
 }

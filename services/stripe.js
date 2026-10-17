@@ -27,7 +27,7 @@ export function stripe() {
   if (!client) {
     client = new Stripe(process.env.STRIPE_SECRET_KEY, {
       // Let the SDK use its pinned API version; only tag the app for Stripe logs.
-      appInfo: { name: 'Hidaya Online', url: process.env.FRONTEND_URL || '' },
+      appInfo: { name: 'My Future Campus', url: process.env.FRONTEND_URL || '' },
       maxNetworkRetries: 2,
     })
   }
@@ -75,7 +75,7 @@ export async function createCheckoutSession({
         currency: String(currency || 'PKR').toLowerCase(),
         unit_amount: toMinorUnits(amount, currency),
         product_data: {
-          name: description || 'Hidaya Online',
+          name: description || 'My Future Campus',
           ...(items.length > 0 && { description: items.join(' · ').slice(0, 500) }),
         },
       },
@@ -88,7 +88,7 @@ export async function createCheckoutSession({
     // Mirrors the Mastercard flow, which collects the billing address.
     billing_address_collection: 'required',
     payment_intent_data: {
-      description: `Hidaya Online — ${description || 'Payment'}`,
+      description: `My Future Campus — ${description || 'Payment'}`,
       metadata,
     },
   })
@@ -114,7 +114,7 @@ export async function createSubscriptionSession({
         unit_amount: toMinorUnits(amount, currency),
         recurring: { interval, interval_count: Math.max(1, Number(intervalCount) || 1) },
         product_data: {
-          name: description || 'Hidaya Online',
+          name: description || 'My Future Campus',
           ...(items.length > 0 && { description: items.join(' · ').slice(0, 500) }),
         },
       },
@@ -127,7 +127,7 @@ export async function createSubscriptionSession({
     metadata,
     billing_address_collection: 'required',
     subscription_data: {
-      description: `Hidaya Online — ${description || 'Subscription'}`,
+      description: `My Future Campus — ${description || 'Subscription'}`,
       ...(Number(trialDays) > 0 ? { trial_period_days: Math.round(Number(trialDays)) } : {}),
       metadata,
     },

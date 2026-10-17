@@ -1,4 +1,4 @@
-// What the Hidaya portal's bulk "Data Export" (disaster-recovery backup) writes.
+// What the portal's bulk "Data Export" (disaster-recovery backup) writes.
 // One CSV per collection, grouped into folders by area. The portal is the system
 // of record now, so this is everything it runs on — and deliberately NOT the
 // legacy admin-portal data (see EXCLUDED below).
