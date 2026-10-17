@@ -220,12 +220,17 @@ function toWaId(raw) {
 export async function listMessages(req, res) {
   try {
     const limit = Math.min(Number(req.query.limit) || 30, 100)
-    const messages = await WhatsappMessage.find({})
-      .sort({ timestamp: -1 }).limit(limit)
-      .select('wamid direction source waId contactName type text templateName status statusErrors timestamp sentBy studentId')
-      .populate('sentBy', 'displayName email').populate('studentId', 'name')
-      .lean()
-    res.json({ messages })
+    const [messages, sent, received, read] = await Promise.all([
+      WhatsappMessage.find({})
+        .sort({ timestamp: -1 }).limit(limit)
+        .select('wamid direction source waId contactName type text templateName status statusErrors timestamp sentBy studentId')
+        .populate('sentBy', 'displayName email').populate('studentId', 'name')
+        .lean(),
+      WhatsappMessage.countDocuments({ direction: 'out' }),
+      WhatsappMessage.countDocuments({ direction: 'in' }),
+      WhatsappMessage.countDocuments({ direction: 'out', status: 'read' }),
+    ])
+    res.json({ messages, stats: { sent, received, read } })
   } catch (err) {
     console.error('List WhatsApp messages error:', err)
     res.status(500).json({ error: 'Server error' })
