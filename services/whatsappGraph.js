@@ -82,3 +82,25 @@ export function requestAppSync(phoneNumberId, token, syncType) {
     method: 'POST', token, body: { messaging_product: 'whatsapp', sync_type: syncType },
   })
 }
+
+// ── Messaging + templates ───────────────────────────────────────────────────
+// Returns Meta's wamid; statuses for it arrive later on the webhook.
+export async function sendMessage(phoneNumberId, token, payload) {
+  const data = await graph(`${phoneNumberId}/messages`, {
+    method: 'POST', token, body: { messaging_product: 'whatsapp', recipient_type: 'individual', ...payload },
+  })
+  const wamid = data?.messages?.[0]?.id
+  if (!wamid) throw new GraphError('Meta accepted the request but returned no message id')
+  return wamid
+}
+
+export async function listTemplates(wabaId, token) {
+  const data = await graph(`${wabaId}/message_templates`, {
+    token, query: { fields: 'id,name,status,category,language,components,rejected_reason', limit: '100' },
+  })
+  return data?.data || []
+}
+
+export function createTemplate(wabaId, token, template) {
+  return graph(`${wabaId}/message_templates`, { method: 'POST', token, body: template })
+}
