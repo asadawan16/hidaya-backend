@@ -14,11 +14,11 @@ function generateTempPassword() {
 
 // Generate next roll number
 async function generateRollNo() {
-  const last = await Student.findOne({ rollNo: { $regex: /^HID\d+$/ } })
+  const last = await Student.findOne({ rollNo: { $regex: /^MFC\d+$/ } })
     .sort({ rollNo: -1 }).select('rollNo').lean()
-  if (!last) return 'HID01'
-  const num = parseInt(last.rollNo.replace('HID', ''), 10) + 1
-  return `HID${String(num).padStart(2, '0')}`
+  if (!last) return 'MFC01'
+  const num = parseInt(last.rollNo.replace('MFC', ''), 10) + 1
+  return `MFC${String(num).padStart(2, '0')}`
 }
 
 // ─── List leads (enrollments) with stats ───
