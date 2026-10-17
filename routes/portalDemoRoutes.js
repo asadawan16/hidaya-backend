@@ -15,8 +15,14 @@ const blockStudents = (req, res, next) => {
   next()
 }
 
+// The App Review account is not staff — it never gets the announcement (student names)
+const blockReviewer = (req, res, next) => {
+  if ((req.user?.roles || []).some(r => r?.key === 'meta_reviewer')) return res.json([])
+  next()
+}
+
 // Announcement popup — available to ALL authenticated staff (no demo perm needed)
-router.get('/pending-announcement', blockStudents, pendingAnnouncement)
+router.get('/pending-announcement', blockStudents, blockReviewer, pendingAnnouncement)
 router.post('/:id/ack', blockStudents, ackAnnouncement)
 
 router.get('/', requirePermission('demo.read'), listDemos)
