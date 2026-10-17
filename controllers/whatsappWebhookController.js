@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import WhatsappMessage from '../models/WhatsappMessage.js'
+import WhatsappConnection from '../models/WhatsappConnection.js'
 import Student from '../models/Student.js'
 import { emitToRole } from '../config/socket.js'
 
@@ -79,43 +80,58 @@ function safeEqual(a, b) {
 
 /*
  * Walk a webhook body. Exported so smoke tests can drive it without HTTP.
- * Shape: { object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value }] }] }
+ * Shape: { object: 'whatsapp_business_account', entry: [{ changes: [{ field, value }] }] }
+ *
+ *   messages            inbound messages + statuses on messages we sent
+ *   smb_message_echoes  coexistence: a message typed in the WhatsApp Business
+ *                       app on the office phone (stored as `out`, source 'app')
+ *   history             coexistence: the phone's past chats, replayed once after
+ *                       onboarding (source 'history', no live socket events)
  */
 export async function processWebhookPayload(payload) {
   if (payload?.object !== 'whatsapp_business_account') return
   for (const entry of payload.entry || []) {
     for (const change of entry.changes || []) {
-      if (change.field !== 'messages' || !change.value) continue
       const value = change.value
+      if (!value) continue
       const phoneNumberId = value.metadata?.phone_number_id || ''
-      const names = new Map((value.contacts || []).map(c => [c.wa_id, c.profile?.name || '']))
 
-      for (const msg of value.messages || []) {
-        await recordInbound(msg, { phoneNumberId, contactName: names.get(msg.from) || '' })
-      }
-      for (const st of value.statuses || []) {
-        await applyStatus(st)
+      if (change.field === 'messages') {
+        const names = new Map((value.contacts || []).map(c => [c.wa_id, c.profile?.name || '']))
+        for (const msg of value.messages || []) {
+          await recordMessage(msg, { direction: 'in', waId: msg.from, phoneNumberId, contactName: names.get(msg.from) || '' })
+        }
+        for (const st of value.statuses || []) {
+          await applyStatus(st)
+        }
+      } else if (change.field === 'smb_message_echoes') {
+        for (const msg of value.message_echoes || []) {
+          await recordMessage(msg, { direction: 'out', waId: msg.to, phoneNumberId, source: 'app', status: 'sent' })
+        }
+      } else if (change.field === 'history') {
+        await recordHistory(value.history || [], phoneNumberId)
       }
     }
   }
 }
 
-// ── Inbound ─────────────────────────────────────────────────────────────────
-async function recordInbound(msg, { phoneNumberId, contactName }) {
-  if (!msg?.id || !msg.from) return
+// ── Messages (inbound, phone-app echoes, history) ───────────────────────────
+async function recordMessage(msg, { direction, waId, phoneNumberId, contactName = '', source = 'live', status = 'received', emit = true }) {
+  if (!msg?.id || !waId) return
   const { text, media } = describeMessage(msg)
-  const studentId = await findStudentIdByPhone(msg.from)
+  const studentId = await findStudentIdByPhone(waId)
 
   const doc = {
     wamid: msg.id,
-    direction: 'in',
-    waId: msg.from,
+    direction,
+    source,
+    waId,
     contactName,
     phoneNumberId,
     type: msg.type || 'unsupported',
     text,
     contextWamid: msg.context?.id || msg.reaction?.message_id || '',
-    status: 'received',
+    status,
     timestamp: toDate(msg.timestamp),
     studentId,
   }
@@ -128,10 +144,13 @@ async function recordInbound(msg, { phoneNumberId, contactName }) {
     if (err?.code === 11000) return // redelivery — already stored
     throw err
   }
+  if (!emit) return
 
   const event = {
     _id: saved._id,
     wamid: saved.wamid,
+    direction: saved.direction,
+    source: saved.source,
     waId: saved.waId,
     contactName: saved.contactName,
     type: saved.type,
@@ -140,6 +159,50 @@ async function recordInbound(msg, { phoneNumberId, contactName }) {
     studentId: saved.studentId,
   }
   for (const role of NOTIFY_ROLES) emitToRole(role, 'whatsapp_message', event)
+}
+
+/*
+ * history[] chunks: { metadata: { phase, chunk_order, progress }, threads: [{ id: <customer waId>,
+ * messages: [...] }] } — or { errors: [...] } when the phone owner declined to share.
+ * In a thread, a message whose `from` is the customer is inbound; anything else
+ * was sent by the business. `history_context.status` is the business message's
+ * last delivery state.
+ */
+const HISTORY_DECLINED = 2593109
+const HISTORY_STATUS = { PENDING: 'sent', SENT: 'sent', DELIVERED: 'delivered', READ: 'read', PLAYED: 'read', ERROR: 'failed' }
+
+async function recordHistory(chunks, phoneNumberId) {
+  for (const chunk of chunks) {
+    if (chunk.errors?.length) {
+      if (chunk.errors.some(e => Number(e.code) === HISTORY_DECLINED)) {
+        await WhatsappConnection.updateOne({ key: 'default' }, { $set: { historyDeclined: true } })
+      } else {
+        console.error('WhatsApp history sync error:', JSON.stringify(chunk.errors))
+      }
+      continue
+    }
+    for (const thread of chunk.threads || []) {
+      const customer = thread.id
+      for (const msg of thread.messages || []) {
+        const inbound = msg.from === customer
+        await recordMessage(msg, {
+          direction: inbound ? 'in' : 'out',
+          waId: customer,
+          phoneNumberId,
+          source: 'history',
+          status: inbound ? 'received' : (HISTORY_STATUS[String(msg.history_context?.status || '').toUpperCase()] || 'sent'),
+          emit: false,
+        })
+      }
+    }
+    const progress = Number(chunk.metadata?.progress)
+    if (Number.isFinite(progress)) {
+      await WhatsappConnection.updateOne(
+        { key: 'default', $or: [{ historyProgress: null }, { historyProgress: { $lt: progress } }] },
+        { $set: { historyProgress: Math.min(100, Math.max(0, progress)) } },
+      )
+    }
+  }
 }
 
 // Staff who see WhatsApp traffic live until a dedicated permission exists

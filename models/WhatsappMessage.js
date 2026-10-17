@@ -5,7 +5,8 @@ import mongoose from 'mongoose'
  *
  *   in   — a student/guardian wrote to the academy number. Arrives on the
  *          webhook (value.messages[]). status stays 'received'.
- *   out  — the portal sent it (template reminder or a chat reply). Its status
+ *   out  — the portal sent it (template reminder or a chat reply), or staff
+ *          typed it on the office phone (source 'app', coexistence). Its status
  *          walks sent → delivered → read (or failed) as value.statuses[]
  *          arrive on the webhook, matched on wamid.
  *
@@ -18,6 +19,10 @@ import mongoose from 'mongoose'
 const whatsappMessageSchema = new mongoose.Schema({
   wamid: { type: String, required: true, unique: true },
   direction: { type: String, enum: ['in', 'out'], required: true },
+  // How it reached us: live Cloud API traffic, an echo of a message typed in
+  // the WhatsApp Business app on the office phone (coexistence), or the phone's
+  // past chats replayed once at onboarding
+  source: { type: String, enum: ['live', 'app', 'history'], default: 'live' },
 
   // The other party's WhatsApp id — international digits, no '+' (e.g. 923001234567)
   waId: { type: String, required: true, index: true },

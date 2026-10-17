@@ -8,6 +8,10 @@
 //   - inbound media from an unknown number: media id kept, studentId null
 //   - outbound status walks forward only (a late 'delivered' can't undo 'read')
 //   - 'failed' status records Meta's error details
+//   - coexistence: a message typed on the phone app (smb_message_echoes) is
+//     stored as outbound, source 'app', and later statuses attach to it
+//   - coexistence: history chunks backfill both directions, keep delivery
+//     state, record progress, and a "declined" error flags the connection
 //
 // Mounts the real router on an in-process Express app. Runs against a
 // THROWAWAY database (dbName hidaya_whatsapp_smoke) on the same cluster and
@@ -20,6 +24,7 @@ import express from 'express'
 import mongoose from 'mongoose'
 import Student from '../models/Student.js'
 import WhatsappMessage from '../models/WhatsappMessage.js'
+import WhatsappConnection from '../models/WhatsappConnection.js'
 import whatsappWebhookRoutes from '../routes/whatsappWebhookRoutes.js'
 
 process.env.WHATSAPP_VERIFY_TOKEN = 'smoke-verify-token'
@@ -42,10 +47,10 @@ async function waitFor(fn, ms = 3000) {
 const sign = (body, secret = process.env.WHATSAPP_APP_SECRET) =>
   'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex')
 
-function envelope(value) {
+function envelope(value, field = 'messages') {
   return {
     object: 'whatsapp_business_account',
-    entry: [{ id: 'WABA_ID', changes: [{ field: 'messages', value: {
+    entry: [{ id: 'WABA_ID', changes: [{ field, value: {
       messaging_product: 'whatsapp',
       metadata: { display_phone_number: '15550000000', phone_number_id: 'PNID_SMOKE' },
       ...value,
@@ -142,10 +147,56 @@ try {
   await post(envelope({ statuses: [{ id: 'wamid.NEVER_SENT', status: 'delivered', timestamp: '1760000400' }] }))
   await sleep(500)
   ok(await WhatsappMessage.countDocuments({ wamid: 'wamid.NEVER_SENT' }) === 0, 'status for an unknown message creates nothing')
+
+  console.log('\nCoexistence: phone-app echoes')
+  await post(envelope({ message_echoes: [{ from: '15550000000', to: '923001234567', id: 'wamid.SMOKE_ECHO_1',
+    timestamp: '1760000500', type: 'text', text: { body: 'Class at 8 tonight' } }] }, 'smb_message_echoes'))
+  const echo = await waitFor(() => WhatsappMessage.findOne({ wamid: 'wamid.SMOKE_ECHO_1' }).lean())
+  ok(echo?.direction === 'out' && echo?.source === 'app' && echo?.status === 'sent', 'echo stored as outbound, source app, status sent')
+  ok(echo?.waId === '923001234567' && String(echo?.studentId) === String(student._id), 'echo keyed on the recipient and matched to the student')
+  await post(envelope({ statuses: [{ id: 'wamid.SMOKE_ECHO_1', status: 'delivered', timestamp: '1760000510' }] }))
+  const echoed = await waitFor(async () => {
+    const d = await WhatsappMessage.findOne({ wamid: 'wamid.SMOKE_ECHO_1' }).lean()
+    return d?.status === 'delivered' ? d : null
+  })
+  ok(echoed?.status === 'delivered', 'status update attaches to a phone-app message')
+  ok(inDoc && (await WhatsappMessage.findOne({ wamid: 'wamid.SMOKE_IN_1' }).lean())?.source === 'live', 'live inbound defaults to source live')
+
+  console.log('\nCoexistence: history sync')
+  await WhatsappConnection.create({ key: 'default', status: 'connected', coexistence: true, wabaId: 'WABA_ID', phoneNumberId: 'PNID_SMOKE' })
+  await post(envelope({ history: [{
+    metadata: { phase: 0, chunk_order: 1, progress: 40 },
+    threads: [{ id: '923001234567', messages: [
+      { from: '923001234567', id: 'wamid.SMOKE_H_1', timestamp: '1750000000', type: 'text', text: { body: 'old question' }, history_context: { status: 'READ' } },
+      { from: '15550000000', to: '923001234567', id: 'wamid.SMOKE_H_2', timestamp: '1750000100', type: 'text', text: { body: 'old answer' }, history_context: { status: 'DELIVERED' } },
+      { from: '923001234567', id: 'wamid.SMOKE_IN_1', timestamp: '1760000000', type: 'text', text: { body: 'Assalamu alaikum' } },
+    ] }],
+  }] }, 'history'))
+  const h2 = await waitFor(() => WhatsappMessage.findOne({ wamid: 'wamid.SMOKE_H_2' }).lean())
+  const h1 = await WhatsappMessage.findOne({ wamid: 'wamid.SMOKE_H_1' }).lean()
+  ok(h1?.direction === 'in' && h1?.source === 'history' && h1?.status === 'received', 'customer history message stored inbound')
+  ok(h2?.direction === 'out' && h2?.status === 'delivered' && h2?.waId === '923001234567', 'business history message stored outbound with its delivery state')
+  ok(await WhatsappMessage.countDocuments({ wamid: 'wamid.SMOKE_IN_1' }) === 1, 'history overlapping a live message stores nothing new')
+  let conn = await waitFor(async () => {
+    const c = await WhatsappConnection.findOne({ key: 'default' }).lean()
+    return c?.historyProgress === 40 ? c : null
+  })
+  ok(conn?.historyProgress === 40, 'history progress recorded')
+  await post(envelope({ history: [{ metadata: { progress: 20 }, threads: [] }] }, 'history'))
+  await sleep(500)
+  conn = await WhatsappConnection.findOne({ key: 'default' }).lean()
+  ok(conn?.historyProgress === 40, 'an out-of-order chunk does not move progress backwards')
+  await post(envelope({ history: [{ errors: [{ code: 2593109, title: 'History sync declined' }] }] }, 'history'))
+  conn = await waitFor(async () => {
+    const c = await WhatsappConnection.findOne({ key: 'default' }).lean()
+    return c?.historyDeclined ? c : null
+  })
+  ok(conn?.historyDeclined === true, 'declined history flags the connection')
 } finally {
   server.close()
   if (mongoose.connection.name === SMOKE_DB) await mongoose.connection.dropDatabase().catch(async () => {
     await WhatsappMessage.deleteMany({})
+    await WhatsappConnection.deleteMany({})
     await Student.deleteMany({ name: 'Smoke Student' })
   })
   await mongoose.disconnect()

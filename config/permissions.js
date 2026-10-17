@@ -102,8 +102,9 @@ export const PERMISSIONS = {
   // Family management
   family: ['family.read', 'family.create', 'family.update', 'family.delete'],
 
-  // WhatsApp reminders
-  whatsapp: ['whatsapp.send'],
+  // WhatsApp reminders. whatsapp.manage connects/disconnects the academy's
+  // WhatsApp Business number (/portal/whatsapp) — super-admin only by default.
+  whatsapp: ['whatsapp.send', 'whatsapp.manage'],
 
   // Expense management
   expense: ['expense.read', 'expense.manage'],
@@ -159,7 +160,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   // Admin gets everything except role deletion, the super-admin-only Fee
   // receivables view/KPIs, and the public class-links board (and never the
   // opt-in restriction permissions).
-  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', 'data.export', ...RESTRICTION_PERMISSIONS].includes(p)),
+  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', 'data.export', 'whatsapp.manage', ...RESTRICTION_PERMISSIONS].includes(p)),
 
   principal: [
     'student.read', 'student.approve', 'enrollment.read', 'enrollment.update',

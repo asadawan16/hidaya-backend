@@ -58,6 +58,7 @@ import publicClassLinkRoutes from './routes/publicClassLinkRoutes.js'
 import publicCheckoutRoutes from './routes/publicCheckoutRoutes.js'
 import { stripeWebhook } from './controllers/stripeWebhookController.js'
 import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js'
+import portalWhatsappRoutes from './routes/portalWhatsappRoutes.js'
 import { isAllowedOrigin } from './config/sites.js'
 import { initSocket } from './config/socket.js'
 // import requestLogger from './middleware/requestLogger.js' // disabled 2026-08-02 — see app.use note below
@@ -211,6 +212,7 @@ app.use('/api/portal/student-progress', portalStudentProgressRoutes)
 app.use('/api/portal/fees', portalFeeRoutes)
 app.use('/api/portal/class-links', portalClassLinkRoutes)
 app.use('/api/portal/data-export', portalDataExportRoutes)
+app.use('/api/portal/whatsapp', portalWhatsappRoutes)
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))
