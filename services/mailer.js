@@ -415,6 +415,16 @@ export function enrollmentEmail(data) {
         ${row('Name', data.name)}
         ${row('Email', data.email, { link: `mailto:${data.email}` })}
         ${row('Phone', data.phone, { link: `tel:${data.phone}` })}
+        ${row('Programme', { academic: 'Academic tutoring', quran: 'Quran classes', both: 'Academic + Quran' }[data.program])}
+        ${row('Subject', data.subject)}
+        ${row('Grade', data.grade)}
+        ${row('Curriculum', data.curriculum)}
+        ${row('Quran course', data.quranCourse)}
+        ${row('Quran level', data.quranLevel)}
+        ${row('Age group', data.ageGroup)}
+        ${row('Students', data.studentCount)}
+        ${row('Preferred time', data.preferredTime)}
+        ${row('Tutor', data.tutorPreference)}
         ${data.message ? row('Message', data.message) : ''}
       </table>
     </td></tr>

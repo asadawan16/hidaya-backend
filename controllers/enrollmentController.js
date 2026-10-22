@@ -2,6 +2,25 @@ import Enrollment from '../models/Enrollment.js'
 import { notifyAdmin, sendToUser, enrollmentEmail, enrollmentConfirmationEmail } from '../services/mailer.js'
 import { logActivity } from '../utils/activityLogger.js'
 
+// The demo form's structured answers (frontend src/data/demoOptions.js).
+// Stored as the labels the visitor picked; anything that isn't a short
+// string is dropped rather than rejected, so an older form still submits.
+const DEMO_FIELDS = [
+  'subject', 'grade', 'curriculum', 'quranCourse', 'quranLevel', 'ageGroup',
+  'preferredTime', 'tutorPreference', 'studentCount',
+]
+const PROGRAMS = ['academic', 'quran', 'both']
+
+function demoDetails(body) {
+  const out = {}
+  if (PROGRAMS.includes(body.program)) out.program = body.program
+  for (const key of DEMO_FIELDS) {
+    const v = body[key]
+    if (typeof v === 'string' && v.trim()) out[key] = v.trim().slice(0, 120)
+  }
+  return out
+}
+
 export async function create(req, res) {
   try {
     const { name, email, phone, message, source } = req.body
@@ -15,6 +34,7 @@ export async function create(req, res) {
       phone: phone?.trim(),
       message: message?.trim(),
       source: source || 'hero_form',
+      ...demoDetails(req.body),
     })
 
     const enrollmentData = enrollment.toObject()

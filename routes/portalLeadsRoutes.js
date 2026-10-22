@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
-  listLeads, createLead, getLead, updateLeadStatus, convertToStudent, getLeadStats,
+  listLeads, createLead, getLead, updateLeadStatus, convertToStudent, getLeadStats, addLeadLog,
 } from '../controllers/portalLeadsController.js'
 
 const router = Router()
@@ -13,6 +13,8 @@ router.post('/', requirePermission('student.create'), createLead)
 router.get('/stats', requirePermission('student.create'), getLeadStats)
 router.get('/:id', requirePermission('student.create'), getLead)
 router.patch('/:id/status', requirePermission('student.create'), updateLeadStatus)
+// Call log entry: { note, outcome?, nextCallbackAt?, status?, clearCallback? }
+router.post('/:id/log', requirePermission('student.create'), addLeadLog)
 router.post('/:id/convert', requirePermission('student.create'), convertToStudent)
 
 export default router
