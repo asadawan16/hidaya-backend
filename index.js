@@ -15,6 +15,7 @@ import blogRoutes from './routes/blogRoutes.js'
 import uploadRoutes from './routes/uploadRoutes.js'
 import paymentLinkRoutes from './routes/paymentLinkRoutes.js'
 import planRoutes from './routes/planRoutes.js'
+import academicFeeRoutes from './routes/academicFeeRoutes.js'
 import studentRoutes from './routes/studentRoutes.js'
 import exportRoutes from './routes/exportRoutes.js'
 import discountCodeRoutes from './routes/discountCodeRoutes.js'
@@ -149,6 +150,7 @@ app.use('/api/subscribers/subscribe', rl(50))
 app.use('/api/payment-links/t', rl(60))
 app.use('/api/discount-codes/validate', rl(100))
 app.use('/api/class-links', rl(300))
+app.use('/api/academic-fees', rl(120))
 // Satellite marketing sites (qurantutornow.com): price book + self-serve
 // checkout + trial form. Generous enough for a shared office IP, tight enough
 // that nobody can farm payment links.
@@ -166,6 +168,7 @@ app.use('/api/blogs', blogRoutes)
 app.use('/api/uploads', uploadRoutes)
 app.use('/api/payment-links', paymentLinkRoutes)
 app.use('/api/plans', planRoutes)
+app.use('/api/academic-fees', academicFeeRoutes)
 app.use('/api/students', studentRoutes)
 app.use('/api/export', exportRoutes)
 app.use('/api/discount-codes', discountCodeRoutes)

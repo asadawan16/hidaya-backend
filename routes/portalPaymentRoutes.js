@@ -18,6 +18,7 @@ import {
   listAllPlans,
   updatePlan,
 } from '../controllers/portalPaymentController.js'
+import { getSettings as getAcademicFees, updateSettings as updateAcademicFees } from '../controllers/academicFeeController.js'
 
 const router = Router()
 router.use(portalAuth)
@@ -48,5 +49,9 @@ router.delete('/discount-codes/:id', requirePermission('discount_code.delete'), 
 // Plans
 router.get('/plans', requirePermission('plan.read'), listAllPlans)
 router.patch('/plans/:id', requirePermission('plan.update'), updatePlan)
+
+// Academic fees shown on the public Fee page (singleton)
+router.get('/academic-fees', requirePermission('plan.read'), getAcademicFees)
+router.put('/academic-fees', requirePermission('plan.update'), updateAcademicFees)
 
 export default router
