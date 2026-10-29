@@ -27,6 +27,13 @@ const clampMonth = (m) => Math.min(12, Math.max(1, parseInt(m, 10)))
 // amount is set; using it made a fully paid $45 month read as 12000 due.
 const monthlyFee = (s) => (s?.billing?.amount > 0 ? s.billing.amount : (s?.billing?.fee || 0))
 
+// Months are billed automatically (from the monthly fee) only from the month
+// the academy started keeping fees in the portal. Earlier months show only
+// what was recorded by hand, so years of history before the portal don't read
+// as owed (client's request, 2026-10-30). Change this to move the start.
+const AUTO_BILL_FROM = { year: 2026, month: 10 }
+const AUTO_BILL_KEY = AUTO_BILL_FROM.year * 12 + (AUTO_BILL_FROM.month - 1)
+
 // GET /portal/fees/grid — per-student fee grid scoped to a time period
 // (a single month, a calendar quarter, or a whole year within `year`).
 export async function getFeeGrid(req, res) {
@@ -106,7 +113,7 @@ export async function getFeeGrid(req, res) {
     // in UTC to avoid a timezone shifting the month. Older records without joiningDate
     // fall back to createdAt; if both are missing, don't restrict (month 1).
     // Returns 13 for a student who joins in a later year (nothing billable this year).
-    function firstBillableMonth(s) {
+    function joinMonthOf(s) {
       const jd = s.joiningDate || s.createdAt
       if (!jd) return 1
       const d = new Date(jd)
@@ -116,6 +123,9 @@ export async function getFeeGrid(req, res) {
       if (jy > year) return 13
       return d.getUTCMonth() + 1
     }
+    // ...and never before AUTO_BILL_FROM.
+    const autoStartMonth = year < AUTO_BILL_FROM.year ? 13 : (year === AUTO_BILL_FROM.year ? AUTO_BILL_FROM.month : 1)
+    const firstBillableMonth = (s) => Math.max(autoStartMonth, joinMonthOf(s))
 
     // Per-student figures for the selected period. Auto-fills months without a manual
     // record from the student's base fee (active students, months from joining up to today).
@@ -648,8 +658,8 @@ async function buildStudentFeeHistory(studentId) {
         auto: false,
         payments: paymentsForMonth(y, m),
       })
-    } else if (isDueYet && autoBillable) {
-      // No manual record and the month is on/after joining → auto-billed as pending.
+    } else if (isDueYet && autoBillable && y * 12 + (m - 1) >= AUTO_BILL_KEY) {
+      // No manual record, on/after joining and AUTO_BILL_FROM → auto-billed as pending.
       months.push({
         year: y, month: m,
         amount: baseFee,
