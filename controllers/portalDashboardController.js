@@ -375,6 +375,9 @@ const tzMonth = (field) => ({ $month: { date: field, timezone: REVENUE_TZ } })
 const GATEWAY_OF = { $ifNull: ['$gateway', { $cond: [{ $eq: ['$paymentMethod', 'STRIPE'] }, 'stripe', 'mastercard'] }] }
 const GATEWAY_LABELS = { stripe: 'Stripe', mastercard: 'Mastercard' }
 const METHOD_LABELS = {
+  website: 'Website (Stripe)', western_union: 'Western Union', moneygram: 'MoneyGram', ria: 'Ria',
+  remitly: 'Remitly', wise: 'Wise', taptap_send: 'Taptap Send', paypal: 'PayPal', zelle: 'Zelle',
+  online_transfer: 'Online transfer',
   bank_transfer: 'Bank transfer', cash: 'Cash', card: 'Card (manual)', jazzcash: 'JazzCash',
   easypaisa: 'Easypaisa', cheque: 'Cheque', other: 'Other',
 }

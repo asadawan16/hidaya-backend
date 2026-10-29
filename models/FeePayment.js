@@ -14,9 +14,16 @@ const allocationSchema = new mongoose.Schema({
 const feePaymentSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   currency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'], default: 'PKR' },
+  // International families pay through the website (Stripe) or a money-transfer
+  // service. jazzcash / easypaisa stay valid for older records but are no longer
+  // offered in the form.
   method: {
     type: String,
-    enum: ['bank_transfer', 'cash', 'card', 'jazzcash', 'easypaisa', 'cheque', 'other'],
+    enum: [
+      'website', 'western_union', 'moneygram', 'ria', 'remitly', 'wise', 'taptap_send',
+      'paypal', 'zelle', 'online_transfer',
+      'bank_transfer', 'cash', 'card', 'jazzcash', 'easypaisa', 'cheque', 'other',
+    ],
     default: 'bank_transfer',
   },
   reference: { type: String, trim: true, default: '' }, // bank ref / txn id / cheque no

@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { denyStudentAccounts } from '../middleware/studentScope.js'
 import { portalAuth, requirePermission, requireRole } from '../middleware/portalAuth.js'
 import {
-  listSlots, createSlot, updateSlot, deleteSlot,
+  listSlots, createSlot, updateSlot, deleteSlot, saveStudentWeek, bulkUpdateSlotTimes,
   listSessions, createSession, updateSession, deleteSession,
   startSession, completeSession, markSessionMissed, resetSession, updateSessionStatus, forceCompleteSession,
   getLiveBoard, getMyLiveSessions, getMyUnloggedSessions, generateSessionsForDate, getBoard, getSlotBoard,
@@ -19,6 +19,8 @@ router.put('/config', requirePermission('schedule.manage'), updateScheduleConfig
 // Class Slots
 router.get('/slots', requirePermission('schedule.read'), listSlots)
 router.post('/slots', requirePermission('schedule.manage'), createSlot)
+router.post('/slots/bulk-time', requirePermission('schedule.manage'), bulkUpdateSlotTimes)
+router.put('/students/:studentId/week', requirePermission('schedule.manage'), saveStudentWeek)
 router.patch('/slots/:id', requirePermission('schedule.manage'), updateSlot)
 router.delete('/slots/:id', requirePermission('schedule.manage'), deleteSlot)
 

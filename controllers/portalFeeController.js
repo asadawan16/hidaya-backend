@@ -20,6 +20,13 @@ function computeStatus(rec) {
 
 const clampMonth = (m) => Math.min(12, Math.max(1, parseInt(m, 10)))
 
+// The monthly fee the grid bills, in the student's billing currency. This
+// academy bills its families in USD and records payments in USD, so the
+// "Billed amount" (billing.amount, in billing.currency) is the fee. "Fee
+// (local)" (billing.fee) is a rupee reference and is used only when no billed
+// amount is set; using it made a fully paid $45 month read as 12000 due.
+const monthlyFee = (s) => (s?.billing?.amount > 0 ? s.billing.amount : (s?.billing?.fee || 0))
+
 // GET /portal/fees/grid — per-student fee grid scoped to a time period
 // (a single month, a calendar quarter, or a whole year within `year`).
 export async function getFeeGrid(req, res) {
@@ -64,7 +71,7 @@ export async function getFeeGrid(req, res) {
     // across the whole filtered set so they stay accurate regardless of pagination;
     // the visible page is a slice of this list.
     const allStudents = await Student.find(filter)
-      .select('name rollNo status familyId billing.fee billing.currency billing.cycle joiningDate createdAt')
+      .select('name rollNo status familyId billing.fee billing.amount billing.currency billing.cycle joiningDate createdAt')
       .populate('familyId', 'familyCode primaryGuardian')
       // Group family members next to each other (incl. on-leave siblings), then
       // alphabetical within the family. familyId null (solo students) sorts first.
@@ -114,7 +121,7 @@ export async function getFeeGrid(req, res) {
     // record from the student's base fee (active students, months from joining up to today).
     function computeStudent(s) {
       const studentCells = byStudent[s._id.toString()] || {}
-      const baseFee = s.billing?.fee || 0
+      const baseFee = monthlyFee(s)
       const isActive = s.status !== 'left'
       const joinMonth = firstBillableMonth(s)
       let periodDue = 0, periodCollected = 0, periodReceivable = 0
@@ -264,17 +271,82 @@ export async function bulkUpsertReceivables(req, res) {
   }
 }
 
+// POST /portal/fees/reset — undo manual edits to a student's months and rebuild
+// them from the Payments Log. Body: { studentId, year, months: [1-12] }.
+// For each month, the amount paid is re-added from the payments still in the
+// log, the expected fee goes back to the monthly fee, and any manual status,
+// waiver or note is cleared. A month with no payments goes back to being
+// billed automatically (its cell is removed).
+export async function resetFeeMonths(req, res) {
+  try {
+    const { studentId, year, months } = req.body
+    if (!studentId || !year || !Array.isArray(months) || months.length === 0) {
+      return res.status(400).json({ error: 'studentId, year and months[] are required' })
+    }
+    const student = await Student.findById(studentId).select('name familyId billing').lean()
+    if (!student) return res.status(404).json({ error: 'Student not found' })
+    const y = parseInt(year, 10)
+    const monthList = [...new Set(months.map(clampMonth))]
+    const isMine = (a, month) => String(a.studentId) === String(studentId) && a.year === y && a.month === month
+
+    const payments = await FeePayment.find({ allocations: { $elemMatch: { studentId, year: y, month: { $in: monthList } } } })
+      .sort({ paidAt: 1 }).lean()
+    let reset = 0
+    for (const month of monthList) {
+      const mine = payments.filter(p => p.allocations.some(a => isMine(a, month)))
+      const paid = mine.reduce((sum, p) => sum + p.allocations
+        .filter(a => isMine(a, month)).reduce((t, a) => t + (a.amount || 0), 0), 0)
+      const rec = await StudentFeeRecord.findOne({ studentId, year: y, month })
+      if (!mine.length) {
+        if (rec) { await StudentFeeRecord.deleteOne({ _id: rec._id }); reset++ }
+        continue
+      }
+      const cell = rec || new StudentFeeRecord({ studentId, year: y, month, familyId: student.familyId })
+      const last = mine[mine.length - 1]
+      cell.amount = monthlyFee(student)
+      cell.amountPaid = paid
+      cell.currency = student.billing?.currency || last.currency
+      cell.payments = mine.map(p => p._id)
+      cell.method = last.method
+      cell.paidAt = last.paidAt
+      cell.note = ''
+      cell.status = 'pending' // drop a manual override or waiver, then recompute
+      cell.status = computeStatus(cell)
+      cell.recordedBy = req.userId
+      await cell.save()
+      reset++
+    }
+
+    await logActivity({
+      level: 'warning', category: 'finance', action: 'fee_months_reset',
+      message: `Fee months reset for ${student.name}: ${monthList.join(', ')}/${y}`,
+      req, meta: { studentId, year: y, months: monthList },
+    })
+    res.json({ ok: true, reset })
+  } catch (err) {
+    console.error('Reset fee months error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // Apply a FeePayment's allocations to the corresponding month cells
+// Allocation amounts are in each student's billing currency (a family can send
+// one PKR transfer that covers $45 + $40), so a new month cell takes the
+// student's monthly fee and currency, not the payment's. Without the fee a
+// new cell had amount 0: a part payment read as fully received, and after the
+// payment was deleted the empty cell stopped the month being billed at all.
 async function applyAllocations(payment, userId) {
   for (const alloc of payment.allocations) {
-    const student = await Student.findById(alloc.studentId).select('familyId').lean()
+    const student = await Student.findById(alloc.studentId).select('familyId billing').lean()
     const month = clampMonth(alloc.month)
     let rec = await StudentFeeRecord.findOne({ studentId: alloc.studentId, year: alloc.year, month })
     if (!rec) {
-      rec = new StudentFeeRecord({ studentId: alloc.studentId, year: alloc.year, month, familyId: student?.familyId, currency: payment.currency })
+      rec = new StudentFeeRecord({
+        studentId: alloc.studentId, year: alloc.year, month, familyId: student?.familyId,
+        amount: monthlyFee(student), currency: student?.billing?.currency || payment.currency,
+      })
     }
     rec.amountPaid = Math.max(0, (rec.amountPaid || 0) + (alloc.amount || 0))
-    rec.currency = payment.currency
     rec.method = payment.method
     rec.paidAt = payment.paidAt
     rec.recordedBy = userId
@@ -376,22 +448,80 @@ export async function listFeePayments(req, res) {
   }
 }
 
+// Take a payment's allocations back out of its month cells (delete and edit).
+// A cell that only existed because of this payment goes away, so the month is
+// billed from the monthly fee again (unpaid) instead of reading "clear". A
+// receivable set by hand, a note or a waiver keeps the cell.
+async function rollbackAllocations(payment) {
+  for (const alloc of payment.allocations) {
+    const rec = await StudentFeeRecord.findOne({ studentId: alloc.studentId, year: alloc.year, month: clampMonth(alloc.month) })
+    if (!rec) continue
+    rec.amountPaid = Math.max(0, (rec.amountPaid || 0) - (alloc.amount || 0))
+    rec.payments = (rec.payments || []).filter(p => p.toString() !== payment._id.toString())
+    rec.status = computeStatus(rec)
+    if (rec.status === 'pending') rec.paidAt = undefined
+    const student = await Student.findById(alloc.studentId).select('billing').lean()
+    const untouched = !rec.payments.length && !rec.amountPaid && rec.status !== 'waived' && !rec.note
+      && (!rec.amount || rec.amount === monthlyFee(student))
+    if (untouched) await StudentFeeRecord.deleteOne({ _id: rec._id })
+    else await rec.save()
+  }
+}
+
+// PATCH /portal/fees/payments/:id — correct a logged payment (amount, method,
+// date, students, months...). Its old allocations come out of the month cells
+// and the corrected ones go in, so every tab follows the edit.
+export async function updateFeePayment(req, res) {
+  try {
+    const payment = await FeePayment.findById(req.params.id)
+    if (!payment) return res.status(404).json({ error: 'Fee payment not found' })
+    const { amount, currency, method, reference, payerName, paidAt, allocations, note } = req.body
+    if (amount !== undefined && !(Number(amount) > 0)) return res.status(400).json({ error: 'A positive amount is required' })
+
+    let cleanAllocations
+    if (allocations !== undefined) {
+      if (!Array.isArray(allocations)) return res.status(400).json({ error: 'allocations must be a list' })
+      cleanAllocations = allocations
+        .filter(a => a.studentId && a.month && a.year)
+        .map(a => ({ studentId: a.studentId, year: parseInt(a.year, 10), month: clampMonth(a.month), amount: Math.max(0, Number(a.amount) || 0) }))
+      if (cleanAllocations.length === 0) return res.status(400).json({ error: 'At least one allocation (student + month) is required' })
+    }
+
+    await rollbackAllocations(payment)
+    if (amount !== undefined) payment.amount = Number(amount)
+    if (currency) payment.currency = currency
+    if (method) payment.method = method
+    if (reference !== undefined) payment.reference = reference || ''
+    if (payerName !== undefined) payment.payerName = payerName || ''
+    if (note !== undefined) payment.note = note || ''
+    if (paidAt) payment.paidAt = new Date(paidAt)
+    if (cleanAllocations) payment.allocations = cleanAllocations
+    await payment.save()
+    await applyAllocations(payment, req.userId)
+
+    await logActivity({
+      level: 'warning', category: 'finance', action: 'fee_payment_updated',
+      message: `Fee payment edited: ${payment.currency} ${payment.amount} across ${payment.allocations.length} month(s)`,
+      req, meta: { feePaymentId: payment._id },
+    })
+    const populated = await FeePayment.findById(payment._id)
+      .populate('allocations.studentId', 'name rollNo')
+      .populate('familyId', 'familyCode')
+      .lean()
+    res.json(populated)
+  } catch (err) {
+    console.error('Update fee payment error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // DELETE /portal/fees/payments/:id — remove a payment and roll back its cells
 export async function deleteFeePayment(req, res) {
   try {
     const payment = await FeePayment.findById(req.params.id)
     if (!payment) return res.status(404).json({ error: 'Fee payment not found' })
 
-    for (const alloc of payment.allocations) {
-      const rec = await StudentFeeRecord.findOne({ studentId: alloc.studentId, year: alloc.year, month: clampMonth(alloc.month) })
-      if (!rec) continue
-      rec.amountPaid = Math.max(0, (rec.amountPaid || 0) - (alloc.amount || 0))
-      rec.payments = (rec.payments || []).filter(p => p.toString() !== payment._id.toString())
-      rec.status = computeStatus(rec)
-      if (rec.status === 'pending') rec.paidAt = undefined
-      await rec.save()
-    }
-
+    await rollbackAllocations(payment)
     await FeePayment.deleteOne({ _id: payment._id })
     await logActivity({
       level: 'warning', category: 'finance', action: 'fee_payment_deleted',
@@ -459,7 +589,7 @@ async function buildStudentFeeHistory(studentId) {
   ])
 
   const now = karachiNow()
-  const baseFee = student.billing?.fee || 0
+  const baseFee = monthlyFee(student)
   const currency = student.billing?.currency || 'PKR'
   const autoBillable = student.status !== 'left' && baseFee > 0
 
@@ -567,10 +697,8 @@ async function buildStudentFeeHistory(studentId) {
       rollNo: student.rollNo,
       status: student.status,
       baseFee,
-      // The fee grid is kept in local PKR (`baseFee` is "Fee (local)"); what the
-      // family is actually charged is `billing.amount` in `currency` ("Billed
-      // amount" on the student detail page). The student app converts dues
-      // with the ratio between the two.
+      // `baseFee` is the billed amount in `currency` (see monthlyFee), so the
+      // ledger and the family's own My Fees page read in the currency they pay.
       billedAmount: student.billing?.amount || 0,
       currency,
       cycle: student.billing?.cycle || 'monthly',

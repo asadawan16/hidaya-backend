@@ -390,6 +390,209 @@ export async function deleteSlot(req, res) {
   }
 }
 
+// ─── Many slots at once ───
+// A student's week is one ClassSlot per day, so changing "Mon–Fri at 4:00"
+// used to mean five edits. These two endpoints change a whole week, or many
+// students' weeks, in one request, and validate the final timetable as a
+// whole: every tutor/student clash and tutor capacity is checked against the
+// schedule as it will be after the change, and nothing is saved if any check
+// fails. Sessions already generated for the current shift keep their time
+// (same as a single-slot edit); the new time applies from the next shift.
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
+const fromMinutes = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+
+// Move a slot by `delta` minutes along the overnight shift-day model. A shift
+// runs 07:00 → 06:59 the next morning and keeps its starting dayOfWeek, so
+// 23:30 + 60 is 00:30 on the SAME shift-day, while 06:30 + 60 rolls over to
+// 07:30 on the next one.
+function shiftSlotTime(dayOfWeek, startTime, delta) {
+  const wrap = SHIFT_WRAP_HOUR * 60
+  let m = toMinutes(startTime)
+  if (m < wrap) m += 1440 // after-midnight tail sits at the end of the shift
+  m += Number(delta) || 0
+  let dow = Number(dayOfWeek)
+  while (m >= wrap + 1440) { m -= 1440; dow = (dow + 1) % 7 }
+  while (m < wrap) { m += 1440; dow = (dow + 6) % 7 }
+  return { dayOfWeek: dow, startTime: fromMinutes(m % 1440) }
+}
+
+// Validate a set of slot changes against the rest of the active timetable.
+// `changes` are { slot?, dayOfWeek, startTime, durationMinutes, tutorId, studentId }
+// (slot is the existing document for an update; absent for a new slot).
+// `removedIds` are slots that will be deactivated. Returns an error string or null.
+async function validateSlotChanges(changes, removedIds = []) {
+  const changedIds = new Set(changes.filter(c => c.slot).map(c => String(c.slot._id)))
+  for (const id of removedIds) changedIds.add(String(id))
+  const tutorIds = [...new Set(changes.map(c => String(c.tutorId)))]
+  const studentIds = [...new Set(changes.map(c => String(c.studentId)))]
+
+  const others = await ClassSlot.find({
+    active: true,
+    _id: { $nin: [...changedIds] },
+    $or: [{ tutorId: { $in: tutorIds } }, { studentId: { $in: studentIds } }],
+  }).select('tutorId studentId dayOfWeek startTime durationMinutes').populate('studentId', 'name').lean()
+
+  const after = [
+    ...others.map(s => ({ ...s, tutorId: String(s.tutorId), studentName: s.studentId?.name, studentId: String(s.studentId?._id || s.studentId), moved: false })),
+    ...changes.map(c => ({ ...c, tutorId: String(c.tutorId), studentId: String(c.studentId), moved: true })),
+  ]
+  const overlaps = (a, b) => {
+    const as = toMinutes(a.startTime), bs = toMinutes(b.startTime)
+    return as < bs + (b.durationMinutes || 30) && bs < as + (a.durationMinutes || 30)
+  }
+  const moved = after.filter(s => s.moved)
+  for (let i = 0; i < moved.length; i++) {
+    const a = moved[i]
+    for (const b of after) {
+      if (a === b || a.dayOfWeek !== b.dayOfWeek || !overlaps(a, b)) continue
+      if (b.moved && after.indexOf(b) < after.indexOf(a)) continue // report each pair once
+      if (a.tutorId === b.tutorId) return `Tutor would have two classes at ${a.startTime} / ${b.startTime} on ${DAY_NAMES[a.dayOfWeek]}${a.studentName ? ` (${a.studentName})` : ''}`
+      if (a.studentId === b.studentId) return `${a.studentName || 'Student'} would have two classes at ${a.startTime} / ${b.startTime} on ${DAY_NAMES[a.dayOfWeek]}`
+    }
+  }
+
+  // Tutor capacity: only days that gain classes need checking.
+  const cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
+  const skillCap = resolveSkillCapacity(cfg)
+  const tutors = await TutorProfile.find({ _id: { $in: tutorIds } }).select('name skillLevel capacityOverride').lean()
+  for (const t of tutors) {
+    const cap = effectiveCapacity(t, skillCap)
+    for (let dow = 0; dow < 7; dow++) {
+      const count = after.filter(s => s.tutorId === String(t._id) && s.dayOfWeek === dow).length
+      const before = await ClassSlot.countDocuments({ tutorId: t._id, dayOfWeek: dow, active: true })
+      if (count > before && count > cap) return `${t.name || 'Tutor'} would be over capacity (${count}/${cap} classes) on ${DAY_NAMES[dow]}`
+    }
+  }
+  return null
+}
+
+// PUT /portal/schedule/students/:studentId/week — replace one student's weekly
+// slots with one tutor. Body: { tutorId, tracks, durationMinutes, meetLink,
+// slots: [{ _id?, dayOfWeek, startTime }] }. Listed slots with an _id are
+// updated, new ones created, and the student's other active slots with this
+// tutor are deactivated (like a delete).
+export async function saveStudentWeek(req, res) {
+  try {
+    const { studentId } = req.params
+    const { tutorId, tracks, durationMinutes, meetLink } = req.body
+    const rows = Array.isArray(req.body.slots) ? req.body.slots : []
+    if (!tutorId) return res.status(400).json({ error: 'tutorId is required' })
+    if (rows.length === 0) return res.status(400).json({ error: 'Pick at least one day' })
+    for (const r of rows) {
+      if (!(Number(r.dayOfWeek) >= 0 && Number(r.dayOfWeek) <= 6)) return res.status(400).json({ error: 'Invalid day' })
+      if (!HHMM.test(String(r.startTime))) return res.status(400).json({ error: `Invalid time on ${DAY_NAMES[r.dayOfWeek] || 'a day'}` })
+    }
+
+    const student = await Student.findById(studentId).select('name').lean()
+    if (!student) return res.status(404).json({ error: 'Student not found' })
+    const existing = await ClassSlot.find({ studentId, tutorId, active: true })
+    const byId = new Map(existing.map(s => [String(s._id), s]))
+    const dur = Number(durationMinutes) || existing[0]?.durationMinutes || 30
+    const trackList = (Array.isArray(tracks) && tracks.length ? tracks : (existing[0]?.tracks?.length ? existing[0].tracks : ['nazra']))
+      .filter((t, i, a) => t && a.indexOf(t) === i)
+
+    const changes = rows.map(r => ({
+      slot: r._id ? byId.get(String(r._id)) : undefined,
+      dayOfWeek: Number(r.dayOfWeek), startTime: r.startTime, durationMinutes: dur,
+      tutorId, studentId, studentName: student.name,
+    }))
+    if (changes.some((c, i) => rows[i]._id && !c.slot)) return res.status(400).json({ error: 'A slot in this week no longer exists. Reopen the editor.' })
+    const keptIds = new Set(changes.filter(c => c.slot).map(c => String(c.slot._id)))
+    const removed = existing.filter(s => !keptIds.has(String(s._id)))
+
+    const problem = await validateSlotChanges(changes, removed.map(s => s._id))
+    if (problem) return res.status(409).json({ error: problem })
+
+    for (const c of changes) {
+      const fields = {
+        dayOfWeek: c.dayOfWeek, startTime: c.startTime, durationMinutes: dur,
+        tracks: trackList, track: trackList[0] || 'nazra',
+        ...(meetLink !== undefined ? { meetLink: String(meetLink || '').trim() } : {}),
+      }
+      if (c.slot) {
+        Object.assign(c.slot, fields)
+        await c.slot.save()
+      } else {
+        await ClassSlot.create({ studentId, tutorId, timezone: 'Asia/Karachi', active: true, meetLink: '', ...fields })
+      }
+    }
+    for (const s of removed) { s.active = false; await s.save() }
+
+    await logActivity({
+      level: 'info', category: 'schedule', action: 'student_week_saved',
+      message: `Weekly schedule saved for ${student.name}: ${changes.map(c => `${DAY_NAMES[c.dayOfWeek].slice(0, 3)} ${c.startTime}`).join(', ')}${removed.length ? ` (${removed.length} day(s) removed)` : ''}`,
+      req, meta: { studentId, tutorId },
+    })
+    res.json({ ok: true, saved: changes.length, removed: removed.length })
+  } catch (err) {
+    console.error('Save student week error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// POST /portal/schedule/slots/bulk-time — change many students' class times at
+// once. Body: { studentIds?: [], allStudents?: bool, days?: [0-6],
+// mode: 'set' | 'shift', startTime?: 'HH:MM', shiftMinutes?: number, dryRun?: bool }.
+// 'set' gives every matched slot the same start time; 'shift' moves each by
+// ±minutes (e.g. +60 when US clocks go back), rolling over the shift-day
+// boundary when needed. dryRun returns the before/after list without saving.
+export async function bulkUpdateSlotTimes(req, res) {
+  try {
+    const { studentIds, allStudents, days, mode, startTime, shiftMinutes, dryRun } = req.body
+    if (mode !== 'set' && mode !== 'shift') return res.status(400).json({ error: 'mode must be set or shift' })
+    if (mode === 'set' && !HHMM.test(String(startTime))) return res.status(400).json({ error: 'Pick a valid time' })
+    const delta = Math.round(Number(shiftMinutes) || 0)
+    if (mode === 'shift' && (delta === 0 || Math.abs(delta) > 720)) return res.status(400).json({ error: 'Shift must be between -12 and +12 hours, and not zero' })
+
+    const filter = { active: true }
+    if (!allStudents) {
+      if (!Array.isArray(studentIds) || studentIds.length === 0) return res.status(400).json({ error: 'Pick at least one student' })
+      filter.studentId = { $in: studentIds }
+    }
+    if (Array.isArray(days) && days.length) filter.dayOfWeek = { $in: days.map(Number) }
+
+    const slots = await ClassSlot.find(filter).populate('studentId', 'name rollNo').populate('tutorId', 'name')
+    if (slots.length === 0) return res.status(404).json({ error: 'No active class slots match' })
+
+    const changes = slots.map(s => {
+      const next = mode === 'set'
+        ? { dayOfWeek: s.dayOfWeek, startTime }
+        : shiftSlotTime(s.dayOfWeek, s.startTime, delta)
+      return {
+        slot: s, ...next, durationMinutes: s.durationMinutes,
+        tutorId: s.tutorId?._id || s.tutorId, studentId: s.studentId?._id || s.studentId, studentName: s.studentId?.name,
+      }
+    })
+    const preview = changes.map(c => ({
+      slotId: c.slot._id, student: c.slot.studentId?.name, rollNo: c.slot.studentId?.rollNo, tutor: c.slot.tutorId?.name,
+      from: { dayOfWeek: c.slot.dayOfWeek, startTime: c.slot.startTime },
+      to: { dayOfWeek: c.dayOfWeek, startTime: c.startTime },
+    })).sort((a, b) => (a.student || '').localeCompare(b.student || '') || a.from.dayOfWeek - b.from.dayOfWeek)
+
+    const problem = await validateSlotChanges(changes)
+    if (dryRun) return res.json({ count: changes.length, preview, problem })
+    if (problem) return res.status(409).json({ error: problem })
+
+    for (const c of changes) {
+      c.slot.dayOfWeek = c.dayOfWeek
+      c.slot.startTime = c.startTime
+      await c.slot.save()
+    }
+    await logActivity({
+      level: 'info', category: 'schedule', action: 'slots_bulk_time',
+      message: mode === 'set'
+        ? `${changes.length} class slot(s) set to ${startTime}`
+        : `${changes.length} class slot(s) shifted by ${delta > 0 ? '+' : ''}${delta} min`,
+      req, meta: { slotIds: changes.map(c => c.slot._id) },
+    })
+    res.json({ ok: true, count: changes.length })
+  } catch (err) {
+    console.error('Bulk slot time error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // GET /portal/schedule/slot-board?dayOfWeek= — tutor × time slot board for one
 // weekday, with per-tutor capacity and an overall "spaces available" summary.
 export async function getSlotBoard(req, res) {
