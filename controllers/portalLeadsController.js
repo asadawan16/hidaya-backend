@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import Enrollment from '../models/Enrollment.js'
+import Enrollment, { LEAD_STATUSES } from '../models/Enrollment.js'
 import Student from '../models/Student.js'
 import User from '../models/User.js'
 import Role from '../models/Role.js'
@@ -21,12 +21,29 @@ async function generateRollNo() {
   return `HID${String(num).padStart(2, '0')}`
 }
 
+// Statuses that end the pipeline: a scheduled callback no longer applies.
+const TERMINAL_STATUSES = ['enrolled', 'closed']
+
+function parseDate(v) {
+  if (!v) return null
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+// The latest call-log entry, flattened for list rows (the full log stays on getLead)
+function withLastNote(lead) {
+  const { callLog, ...rest } = lead
+  const last = Array.isArray(callLog) && callLog.length ? callLog[callLog.length - 1] : null
+  rest.lastNote = last ? { note: last.note, at: last.at, byName: last.byName || '' } : null
+  return rest
+}
+
 // ─── List leads (enrollments) with stats ───
 export async function listLeads(req, res) {
   try {
     const pg = Math.max(1, parseInt(req.query.page, 10) || 1)
     const lim = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20))
-    const { status, search, source, sort } = req.query
+    const { status, search, source, sort, callbackFrom, callbackTo, scheduled } = req.query
 
     const filter = {}
     if (status) filter.status = status
@@ -36,6 +53,18 @@ export async function listLeads(req, res) {
       filter.$or = [{ name: regex }, { email: regex }, { phone: regex }]
     }
 
+    // Callback filters: a range on nextCallbackAt and/or "anything scheduled"
+    const from = parseDate(callbackFrom)
+    const to = parseDate(callbackTo)
+    const callbackFilter = !!(from || to || scheduled === '1' || scheduled === 'true')
+    if (callbackFilter) {
+      filter.nextCallbackAt = { $exists: true, $ne: null }
+      if (from) filter.nextCallbackAt.$gte = from
+      if (to) filter.nextCallbackAt.$lte = to
+      // A finished lead with a stale callback isn't a call to make
+      if (!status) filter.status = { $nin: TERMINAL_STATUSES }
+    }
+
     const total = await Enrollment.countDocuments(filter)
     const pages = Math.ceil(total / lim) || 1
     const safePage = Math.min(pg, pages)
@@ -43,20 +72,24 @@ export async function listLeads(req, res) {
     let sortObj = { createdAt: -1 }
     if (sort === 'name') sortObj = { name: 1 }
     if (sort === 'status') sortObj = { status: 1, createdAt: -1 }
+    if (callbackFilter) sortObj = { nextCallbackAt: 1, _id: 1 }
 
-    const records = await Enrollment.find(filter)
+    const rows = await Enrollment.find(filter)
+      // Only the latest call-log entry, to keep list payloads small
+      .select({ callLog: { $slice: -1 } })
       .populate('referredByStudent', 'name rollNo')
       .sort(sortObj)
       .skip((safePage - 1) * lim)
       .limit(lim)
       .lean()
+    const records = rows.map(withLastNote)
 
     // Stats
     const stats = await Enrollment.aggregate([
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ])
-    const statusCounts = { new: 0, contacted: 0, enrolled: 0, closed: 0 }
-    stats.forEach(s => { statusCounts[s._id] = s.count })
+    const statusCounts = Object.fromEntries(LEAD_STATUSES.map(st => [st, 0]))
+    stats.forEach(st => { statusCounts[st._id] = st.count })
 
     const sourceStats = await Enrollment.aggregate([
       { $group: { _id: '$source', count: { $sum: 1 } } },
@@ -75,6 +108,7 @@ export async function createLead(req, res) {
     const { name, email, phone, message, source, status, referralSource, referredByStudent } = req.body
     if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' })
     if (!email || !email.trim()) return res.status(400).json({ error: 'Email is required' })
+    if (status && !LEAD_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' })
 
     const lead = await Enrollment.create({
       name: name.trim(),
@@ -103,7 +137,9 @@ export async function createLead(req, res) {
 // ─── Get single lead ───
 export async function getLead(req, res) {
   try {
-    const lead = await Enrollment.findById(req.params.id).lean()
+    const lead = await Enrollment.findById(req.params.id)
+      .populate('referredByStudent', 'name rollNo')
+      .lean()
     if (!lead) return res.status(404).json({ error: 'Lead not found' })
     res.json(lead)
   } catch (err) {
@@ -119,7 +155,10 @@ export async function updateLeadStatus(req, res) {
     if (!lead) return res.status(404).json({ error: 'Lead not found' })
 
     const { status } = req.body
+    if (status && !LEAD_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' })
     if (status) lead.status = status
+    // Enrolled / closed: any scheduled callback is moot
+    if (TERMINAL_STATUSES.includes(lead.status)) lead.nextCallbackAt = undefined
     await lead.save()
 
     await logActivity({
@@ -130,6 +169,68 @@ export async function updateLeadStatus(req, res) {
     res.json(lead)
   } catch (err) {
     console.error('Update lead error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Add a call-log entry (and schedule / clear a callback) ───
+// Body: { note, outcome?, nextCallbackAt?, status?, clearCallback? }
+export async function addLeadLog(req, res) {
+  try {
+    const lead = await Enrollment.findById(req.params.id)
+    if (!lead) return res.status(404).json({ error: 'Lead not found' })
+
+    const { note, outcome, nextCallbackAt, status, clearCallback } = req.body || {}
+    const text = typeof note === 'string' ? note.trim() : ''
+    if (!text) return res.status(400).json({ error: 'A note is required' })
+    if (text.length > 2000) return res.status(400).json({ error: 'Note is too long (2000 characters max)' })
+    if (status && !LEAD_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' })
+
+    const callbackAt = parseDate(nextCallbackAt)
+    if (nextCallbackAt && !callbackAt) return res.status(400).json({ error: 'Invalid callback date' })
+
+    const prevStatus = lead.status
+    let nextStatus = status || null
+
+    if (callbackAt) {
+      lead.nextCallbackAt = callbackAt
+      if (!nextStatus && !TERMINAL_STATUSES.includes(lead.status)) nextStatus = 'callback'
+    } else if (clearCallback) {
+      lead.nextCallbackAt = undefined
+    }
+
+    if (nextStatus) {
+      lead.status = nextStatus
+      if (TERMINAL_STATUSES.includes(nextStatus)) lead.nextCallbackAt = undefined
+    }
+
+    // The callback this entry actually scheduled (none if a terminal status dropped it)
+    const scheduledAt = callbackAt && lead.nextCallbackAt ? callbackAt : undefined
+    lead.callLog.push({
+      note: text,
+      outcome: typeof outcome === 'string' ? outcome.trim().slice(0, 120) : '',
+      nextCallbackAt: scheduledAt,
+      statusAfter: lead.status !== prevStatus ? lead.status : '',
+      by: req.userId,
+      byName: req.user?.displayName || req.user?.email || '',
+      at: new Date(),
+    })
+    await lead.save()
+
+    await logActivity({
+      level: 'info', category: 'leads', action: 'lead_call_logged',
+      message: `Call logged on lead ${lead.name}`
+        + (lead.status !== prevStatus ? ` (status → ${lead.status})` : '')
+        + (scheduledAt ? `, callback ${scheduledAt.toISOString()}` : ''),
+      req,
+      meta: { leadId: lead._id },
+    })
+
+    await lead.populate('referredByStudent', 'name rollNo')
+    res.json(lead.toObject())
+  } catch (err) {
+    console.error('Add lead log error:', err)
+    if (err.name === 'ValidationError') return res.status(400).json({ error: err.message })
     res.status(500).json({ error: 'Server error' })
   }
 }
@@ -217,8 +318,9 @@ export async function convertToStudent(req, res) {
       changedBy: req.userId,
     })
 
-    // Update lead status
+    // Update lead status (and drop any scheduled callback)
     lead.status = 'enrolled'
+    lead.nextCallbackAt = undefined
     await lead.save()
 
     // Send welcome email with temporary password
@@ -300,7 +402,7 @@ export async function getLeadStats(req, res) {
       Enrollment.countDocuments({ createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } }),
     ])
 
-    const counts = { new: 0, contacted: 0, enrolled: 0, closed: 0 }
+    const counts = Object.fromEntries(LEAD_STATUSES.map(st => [st, 0]))
     statusStats.forEach(s => { counts[s._id] = s.count })
 
     res.json({ total, statusCounts: counts, sourceStats, thisWeek })
