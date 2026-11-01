@@ -2,3 +2,6 @@ node_modules
 .env
 # Import credential dumps — never commit
 scripts/imported-accounts.csv
+
+# Timetable snapshots (scripts/schedule-times-snapshot.mjs)
+backups/

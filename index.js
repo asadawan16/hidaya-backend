@@ -258,9 +258,11 @@ server.listen(PORT, () => {
   startPaymentCleanupJob()
 
   // Auto-generate today's sessions from recurring slots (Asia/Karachi), if enabled.
-  // Runs on startup and hourly; idempotent so re-runs never duplicate.
+  // Runs on startup and every 10 min; idempotent so re-runs never duplicate. The
+  // short interval means the shift that begins at 7 AM (daytime classes, or night
+  // classes daylight saving pushed past the wrap) has its sessions within minutes.
   runAutoSessionGeneration()
-  setInterval(runAutoSessionGeneration, 60 * 60 * 1000)
+  setInterval(runAutoSessionGeneration, 10 * 60 * 1000)
 
   // Auto-complete classes left running past AUTO_COMPLETE_AFTER_MIN (50 min).
   // Runs on startup and every 5 min; notifies oversight + prompts tutors to log.

@@ -1277,18 +1277,24 @@ export async function updateScheduleConfig(req, res) {
 // the time they ran at. Each row carries dstShifted, so the move is idempotent: a
 // re-run only touches rows not yet moved, and a toggle that failed half-way is
 // finished by simply sending the same value again. The flag is written LAST.
-export async function setDaylightSaving(enable, { userId } = {}) {
+// Works out every write a toggle would make, without making any — shared by the
+// preview (the admin sees exactly what will move before confirming) and the toggle.
+async function planDaylightSaving(enable) {
   const delta = enable ? DST_SHIFT_MINUTES : -DST_SHIFT_MINUTES
   const notYet = enable ? { $ne: true } : true
+  const summary = { slots: 0, activeSlots: 0, sessions: 0, crossMidnight: 0, crossShiftDay: 0 }
 
-  const slots = await ClassSlot.find({ dstShifted: notYet }).select('dayOfWeek startTime').lean()
+  const slots = await ClassSlot.find({ dstShifted: notYet }).select('dayOfWeek startTime active').lean()
   const slotOps = []
   for (const slot of slots) {
     const next = shiftSlotTime(slot.dayOfWeek, slot.startTime, delta)
     if (!next) continue
     slotOps.push({ updateOne: { filter: { _id: slot._id, dstShifted: notYet }, update: { $set: { ...next, dstShifted: enable } } } })
+    summary.slots++
+    if (slot.active) summary.activeSlots++
+    if (next.dayOfWeek !== slot.dayOfWeek) summary.crossShiftDay++
+    else if (isAfterMidnightTail(next.startTime) !== isAfterMidnightTail(slot.startTime)) summary.crossMidnight++
   }
-  const slotRes = slotOps.length ? await ClassSlot.bulkWrite(slotOps, { ordered: false }) : null
 
   const shiftStart = currentShiftDate()
   const sessions = await ClassSession.find({
@@ -1310,7 +1316,22 @@ export async function setDaylightSaving(enable, { userId } = {}) {
         update: { $set: { ...next, dstShifted: enable } },
       },
     })
+    summary.sessions++
   }
+
+  // Classes running right now. Their times are history and never move, but the
+  // not-yet-started classes around them would, mid-shift — so the toggle waits.
+  const liveNow = await ClassSession.countDocuments({
+    status: 'started',
+    date: { $gte: new Date(`${shiftStart}T00:00:00.000Z`) },
+  })
+
+  return { slotOps, sessionOps, summary, liveNow }
+}
+
+export async function setDaylightSaving(enable, { userId } = {}) {
+  const { slotOps, sessionOps } = await planDaylightSaving(enable)
+  const slotRes = slotOps.length ? await ClassSlot.bulkWrite(slotOps, { ordered: false }) : null
   const sessionRes = sessionOps.length ? await ClassSession.bulkWrite(sessionOps, { ordered: false }) : null
 
   const cfg = await ScheduleConfig.findOneAndUpdate(
@@ -1326,11 +1347,30 @@ export async function setDaylightSaving(enable, { userId } = {}) {
   }
 }
 
+// GET /portal/schedule/dst/preview?enabled=true|false — what a toggle would move.
+export async function previewDaylightSaving(req, res) {
+  try {
+    const enable = req.query.enabled === 'true'
+    if (!enable && req.query.enabled !== 'false') return res.status(400).json({ error: 'enabled=true|false is required' })
+    const { summary, liveNow } = await planDaylightSaving(enable)
+    res.json({ enabled: enable, shiftMinutes: DST_SHIFT_MINUTES, ...summary, liveNow })
+  } catch (err) {
+    console.error('Preview daylight saving error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // PUT /portal/schedule/dst { enabled } — admin-only (route guard).
 export async function updateDaylightSaving(req, res) {
   try {
     if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'enabled (boolean) is required' })
     const enable = req.body.enabled
+    const { liveNow } = await planDaylightSaving(enable)
+    if (liveNow > 0) {
+      return res.status(409).json({
+        error: `${liveNow} class${liveNow > 1 ? 'es are' : ' is'} in progress right now. Change the timetable once they have finished.`,
+      })
+    }
     const { cfg, slotsShifted, sessionsShifted } = await setDaylightSaving(enable, { userId: req.userId })
 
     const direction = enable ? 'later' : 'earlier'
