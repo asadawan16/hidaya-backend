@@ -6,7 +6,7 @@ import {
   listSessions, createSession, updateSession, deleteSession,
   startSession, completeSession, markSessionMissed, resetSession, updateSessionStatus, forceCompleteSession,
   getLiveBoard, getMyLiveSessions, getMyUnloggedSessions, generateSessionsForDate, getBoard, getSlotBoard,
-  getScheduleConfig, updateScheduleConfig, updateDaylightSaving, getMyAttendanceSummary,
+  getScheduleConfig, updateScheduleConfig, previewDaylightSaving, updateDaylightSaving, getMyAttendanceSummary,
 } from '../controllers/portalScheduleController.js'
 
 const router = Router()
@@ -17,6 +17,7 @@ router.get('/config', requirePermission('schedule.read'), getScheduleConfig)
 router.put('/config', requirePermission('schedule.manage'), updateScheduleConfig)
 // Daylight saving: moves every class an hour later (on) or back (off). Admins only —
 // it rewrites the whole timetable at once.
+router.get('/dst/preview', requirePermission('schedule.manage'), requireRole('super_admin', 'admin'), previewDaylightSaving)
 router.put('/dst', requirePermission('schedule.manage'), requireRole('super_admin', 'admin'), updateDaylightSaving)
 
 // Class Slots

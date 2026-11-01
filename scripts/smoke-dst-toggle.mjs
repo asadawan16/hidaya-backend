@@ -9,7 +9,8 @@
 //     the original timetable exactly
 //   - slots/sessions created while DST is on are marked, and session generation
 //     never mints a duplicate for a slot whose started session kept the old time
-//   - PUT /portal/schedule/dst is admin-only
+//   - PUT /portal/schedule/dst is admin-only, refuses while a class is live,
+//     and GET /dst/preview reports what would move without moving it
 //
 // Runs against a THROWAWAY database (dbName hidaya_dst_smoke) and drops it.
 // Needs MONGODB_URI and JWT_SECRET only. Run: node scripts/smoke-dst-toggle.mjs
@@ -176,8 +177,20 @@ try {
   ok(r.status === 403, 'QCI (schedule.manage but not admin) is refused', String(r.status))
   r = await call(admin, 'PUT', '/dst', { enabled: 'yes' })
   ok(r.status === 400, 'non-boolean body is refused')
+  r = await call(qci, 'GET', '/dst/preview?enabled=true')
+  ok(r.status === 403, 'QCI cannot preview either')
+  r = await call(admin, 'GET', '/dst/preview?enabled=true')
+  ok(r.status === 200 && r.data.slots === 5 && r.data.activeSlots === 4 && r.data.sessions === 3
+    && r.data.crossShiftDay === 1 && r.data.crossMidnight === 1 && r.data.liveNow === 2,
+  'preview counts slots, sessions, midnight / 7 AM crossings and live classes', JSON.stringify(r.data))
+  ok(await ClassSlot.countDocuments({ dstShifted: true }) === 0 && (await ClassSlot.findById(slotEve._id).lean()).startTime === '21:00',
+    '…and moves nothing')
   r = await call(admin, 'PUT', '/dst', { enabled: true })
-  ok(r.status === 200 && r.data?.dstActive === true && r.data.slotsShifted === 5, 'admin turns it on', JSON.stringify(r.data))
+  ok(r.status === 409 && /in progress/.test(r.data?.error || ''), 'refused while classes are live', JSON.stringify(r.data))
+  ok((await ClassSlot.findById(slotEve._id).lean()).startTime === '21:00', '…and nothing moved')
+  await ClassSession.updateMany({ status: 'started' }, { $set: { status: 'completed' } })
+  r = await call(admin, 'PUT', '/dst', { enabled: true })
+  ok(r.status === 200 && r.data?.dstActive === true && r.data.slotsShifted === 5, 'admin turns it on once the live classes finish', JSON.stringify(r.data))
   r = await call(qci, 'GET', '/config')
   ok(r.status === 200 && r.data?.dstActive === true && r.data.dstShiftMinutes === 60, 'config reports it to schedule readers')
   r = await call(admin, 'PUT', '/dst', { enabled: false })
