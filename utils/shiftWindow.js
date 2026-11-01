@@ -1,3 +1,7 @@
+// Overnight shift-day model: a teaching shift is labelled by the day it STARTS
+// and runs ~8 PM → 7 AM PKT, so 00:00–06:59 is the previous day's overnight tail.
+export const SHIFT_WRAP_HOUR = 7
+
 /**
  * Check if the current time falls within any of the tutor's shift windows.
  * Uses Intl.DateTimeFormat for timezone conversion — no extra packages needed.

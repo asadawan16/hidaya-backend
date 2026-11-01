@@ -7,7 +7,9 @@ import TutorProfile from '../models/TutorProfile.js'
 import User from '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { createNotification, notifyRoles } from './portalNotificationController.js'
-import { emitToLiveBoard } from '../config/socket.js'
+import { emitToLiveBoard, emitToAll } from '../config/socket.js'
+import { SHIFT_WRAP_HOUR } from '../utils/shiftWindow.js'
+import { DST_SHIFT_MINUTES, shiftSlotTime, shiftSessionTime } from '../utils/dstShift.js'
 
 // A started class is auto-completed once it has run this many minutes past its
 // scheduled start (classes are ~30 min, so 50 min means it's clearly over-running
@@ -35,7 +37,9 @@ function dayOfWeekOf(dateStr) {
 // start time is in the after-midnight tail (before SHIFT_WRAP_HOUR) therefore
 // occurs on the *next* calendar day even though it belongs to the starting day's
 // shift. This matches the board's night-window end so the two stay aligned.
-export const SHIFT_WRAP_HOUR = 7 // 00:00–06:59 is the previous day's overnight tail
+// SHIFT_WRAP_HOUR (00:00–06:59 is the previous day's overnight tail) lives in
+// utils/shiftWindow.js so the DST helpers can share it; re-exported here.
+export { SHIFT_WRAP_HOUR }
 
 // Is this 'HH:MM' start time in the after-midnight tail of a shift?
 const isAfterMidnightTail = (startTime) => {
@@ -99,13 +103,21 @@ export async function generateSessionsForDay(dateStr) {
   const existing = await ClassSession.find({
     slotId: { $in: slots.map(s => s._id) },
     date: { $gte: rangeStart, $lte: rangeEnd },
-  }).select('slotId date').lean()
-  const existingKeys = new Set(existing.map(s => `${s.slotId}|${tzDateInfo(s.date).dateStr}`))
+  }).select('slotId date scheduledStart').lean()
+  // Keyed by physical date AND by shift-day: a daylight-saving toggle can move a
+  // slot across midnight or the 7 AM wrap while an already-started session keeps
+  // its old time, and either key alone would then mint a duplicate.
+  const existingKeys = new Set()
+  for (const s of existing) {
+    const physical = tzDateInfo(s.date).dateStr
+    existingKeys.add(`${s.slotId}|${physical}`)
+    existingKeys.add(`${s.slotId}|shift:${isAfterMidnightTail(s.scheduledStart) ? addDaysStr(physical, -1) : physical}`)
+  }
 
   const toCreate = []
   for (const slot of slots) {
     const targetDate = physicalDateForSlot(dateStr, slot.startTime)
-    if (existingKeys.has(`${slot._id}|${targetDate}`)) continue
+    if (existingKeys.has(`${slot._id}|${targetDate}`) || existingKeys.has(`${slot._id}|shift:${dateStr}`)) continue
     const [h, m] = slot.startTime.split(':').map(Number)
     const endMinutes = h * 60 + m + slot.durationMinutes
     const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`
@@ -117,6 +129,7 @@ export async function generateSessionsForDay(dateStr) {
       scheduledStart: slot.startTime,
       scheduledEnd: endTime,
       status: 'scheduled',
+      dstShifted: !!slot.dstShifted,
     })
   }
   if (toCreate.length > 0) await ClassSession.insertMany(toCreate)
@@ -287,6 +300,8 @@ export async function createSlot(req, res) {
         timezone: timezone || 'Asia/Karachi',
         meetLink: meetLink || '',
         active: true,
+        // Entered as today's clock, so it already includes the DST hour if on.
+        dstShifted: !!cfg?.dstActive,
       })
 
       const populated = await ClassSlot.findById(slot._id)
@@ -550,11 +565,13 @@ export async function createSession(req, res) {
       return res.status(400).json({ error: 'studentId, tutorId, date, scheduledStart, and scheduledEnd are required' })
     }
 
+    const cfg = await ScheduleConfig.findOne({ key: 'default' }).select('dstActive').lean()
     const session = await ClassSession.create({
       slotId, studentId, tutorId,
       date: new Date(date),
       scheduledStart, scheduledEnd,
       status: 'scheduled',
+      dstShifted: !!cfg?.dstActive,
     })
 
     res.status(201).json(session)
@@ -1207,11 +1224,19 @@ export async function deleteSession(req, res) {
 }
 
 // ─── Schedule config (auto-generation toggle) ───
+const configResponse = (cfg) => ({
+  autoGenerateSessions: cfg.autoGenerateSessions !== false,
+  skillCapacity: resolveSkillCapacity(cfg),
+  dstActive: !!cfg.dstActive,
+  dstChangedAt: cfg.dstChangedAt || null,
+  dstShiftMinutes: DST_SHIFT_MINUTES,
+})
+
 export async function getScheduleConfig(req, res) {
   try {
     let cfg = await ScheduleConfig.findOne({ key: 'default' }).lean()
     if (!cfg) cfg = (await ScheduleConfig.create({ key: 'default' })).toObject()
-    res.json({ autoGenerateSessions: cfg.autoGenerateSessions !== false, skillCapacity: resolveSkillCapacity(cfg) })
+    res.json(configResponse(cfg))
   } catch (err) {
     console.error('Get schedule config error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -1238,9 +1263,97 @@ export async function updateScheduleConfig(req, res) {
       await generateSessionsForDay(dateStr)
     }
     await logActivity({ level: 'info', category: 'schedule', action: 'schedule_config_updated', message: `Auto-generate sessions: ${cfg.autoGenerateSessions}`, req })
-    res.json({ autoGenerateSessions: cfg.autoGenerateSessions !== false, skillCapacity: resolveSkillCapacity(cfg) })
+    res.json(configResponse(cfg))
   } catch (err) {
     console.error('Update schedule config error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Daylight saving toggle ───
+// Moves every recurring slot (active or not), plus every session not yet started
+// from the shift in progress onward, by DST_SHIFT_MINUTES — later when turned on,
+// back when turned off. Started / completed / missed sessions are history and keep
+// the time they ran at. Each row carries dstShifted, so the move is idempotent: a
+// re-run only touches rows not yet moved, and a toggle that failed half-way is
+// finished by simply sending the same value again. The flag is written LAST.
+export async function setDaylightSaving(enable, { userId } = {}) {
+  const delta = enable ? DST_SHIFT_MINUTES : -DST_SHIFT_MINUTES
+  const notYet = enable ? { $ne: true } : true
+
+  const slots = await ClassSlot.find({ dstShifted: notYet }).select('dayOfWeek startTime').lean()
+  const slotOps = []
+  for (const slot of slots) {
+    const next = shiftSlotTime(slot.dayOfWeek, slot.startTime, delta)
+    if (!next) continue
+    slotOps.push({ updateOne: { filter: { _id: slot._id, dstShifted: notYet }, update: { $set: { ...next, dstShifted: enable } } } })
+  }
+  const slotRes = slotOps.length ? await ClassSlot.bulkWrite(slotOps, { ordered: false }) : null
+
+  const shiftStart = currentShiftDate()
+  const sessions = await ClassSession.find({
+    status: 'scheduled',
+    dstShifted: notYet,
+    date: { $gte: new Date(`${shiftStart}T00:00:00.000Z`) },
+  }).select('date scheduledStart scheduledEnd').lean()
+  const sessionOps = []
+  for (const session of sessions) {
+    // A tail session dated on the shift's first morning belongs to the previous shift.
+    const physical = tzDateInfo(session.date).dateStr
+    const shiftDay = isAfterMidnightTail(session.scheduledStart) ? addDaysStr(physical, -1) : physical
+    if (shiftDay < shiftStart) continue
+    const next = shiftSessionTime(session.date, session.scheduledStart, session.scheduledEnd, delta)
+    if (!next) continue
+    sessionOps.push({
+      updateOne: {
+        filter: { _id: session._id, status: 'scheduled', dstShifted: notYet },
+        update: { $set: { ...next, dstShifted: enable } },
+      },
+    })
+  }
+  const sessionRes = sessionOps.length ? await ClassSession.bulkWrite(sessionOps, { ordered: false }) : null
+
+  const cfg = await ScheduleConfig.findOneAndUpdate(
+    { key: 'default' },
+    { $set: { dstActive: enable, dstChangedAt: new Date(), dstChangedBy: userId || null } },
+    { new: true, upsert: true, setDefaultsOnInsert: true },
+  ).lean()
+
+  return {
+    cfg,
+    slotsShifted: slotRes?.modifiedCount || 0,
+    sessionsShifted: sessionRes?.modifiedCount || 0,
+  }
+}
+
+// PUT /portal/schedule/dst { enabled } — admin-only (route guard).
+export async function updateDaylightSaving(req, res) {
+  try {
+    if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'enabled (boolean) is required' })
+    const enable = req.body.enabled
+    const { cfg, slotsShifted, sessionsShifted } = await setDaylightSaving(enable, { userId: req.userId })
+
+    const direction = enable ? 'later' : 'earlier'
+    await logActivity({
+      level: 'info', category: 'schedule', action: 'schedule_dst_toggled',
+      message: `Daylight saving ${enable ? 'ON' : 'OFF'}: ${slotsShifted} slot(s) and ${sessionsShifted} session(s) moved ${DST_SHIFT_MINUTES} min ${direction}`,
+      req,
+    })
+    // Every open portal refetches; tutors (who teach on the PKT clock) get told.
+    // Students see times in their own zone, where nothing moved, so they are not.
+    try { emitToAll('schedule_updated', { reason: 'dst', dstActive: enable }) } catch {}
+    if (slotsShifted || sessionsShifted) {
+      notifyRoles(['tutor'], {
+        type: 'system',
+        title: enable ? 'Daylight saving: classes 1 hour later' : 'Daylight saving over: classes 1 hour earlier',
+        body: `Every class now starts ${DST_SHIFT_MINUTES / 60} hour ${direction} (Pakistan time). Your schedule already shows the new times.`,
+        payload: { dstActive: enable },
+      }).catch(() => {})
+    }
+
+    res.json({ ...configResponse(cfg), slotsShifted, sessionsShifted })
+  } catch (err) {
+    console.error('Update daylight saving error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

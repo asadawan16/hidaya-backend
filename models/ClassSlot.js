@@ -33,6 +33,9 @@ const classSlotSchema = new mongoose.Schema({
   timezone: { type: String, default: 'Asia/Karachi' },
   meetLink: { type: String, trim: true, default: '' },
   active: { type: Boolean, default: true },
+  // Times currently carry the daylight-saving hour (ScheduleConfig.dstActive).
+  // Per-row so a toggle that fails half-way can simply be re-run.
+  dstShifted: { type: Boolean, default: false },
 }, { timestamps: true })
 
 classSlotSchema.index({ studentId: 1, active: 1 })

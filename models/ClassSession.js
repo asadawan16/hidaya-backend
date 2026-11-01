@@ -42,6 +42,8 @@ const classSessionSchema = new mongoose.Schema({
     ref: 'LessonEntry',
   },
   notes: { type: String, trim: true, default: '' },
+  // Times carry the daylight-saving hour — see ClassSlot.dstShifted.
+  dstShifted: { type: Boolean, default: false },
 }, { timestamps: true })
 
 classSessionSchema.index({ date: 1, tutorId: 1 })

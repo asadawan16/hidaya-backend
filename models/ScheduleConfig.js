@@ -15,6 +15,13 @@ const scheduleConfigSchema = new mongoose.Schema({
     professional: { type: Number, default: 16 },
     expert: { type: Number, default: 16 },
   },
+  // Daylight saving: while on, every class runs DST_SHIFT_MINUTES later on the
+  // PKT clock. Flipping it moves the stored slot + upcoming session times (see
+  // setDaylightSaving), so every reader — portal, mobile, class pages — just
+  // sees the new times.
+  dstActive: { type: Boolean, default: false },
+  dstChangedAt: { type: Date },
+  dstChangedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true })
 
 export default mongoose.model('ScheduleConfig', scheduleConfigSchema)
