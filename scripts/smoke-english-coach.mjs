@@ -114,7 +114,7 @@ globalThis.fetch = async (input, init = {}) => {
   const provider = url.includes('groq.com') ? 'groq' : url.includes('googleapis.com') ? 'gemini' : null
   if (!provider) return json(404, {})
   const body = JSON.parse(init.body)
-  calls[provider].push(body)
+  calls[provider].push({ ...body, _auth: init.headers?.Authorization })
   const next = queues[provider].shift()
   if (next) return next(body)
   const isExaminer = body.messages.some(m => /TRANSCRIPT/.test(m.content))
@@ -213,6 +213,15 @@ try {
   }, said)
   ok(v.scores.grammar === 70 && v.scores.handling === 60, 'answers on a 0–10 scale rescaled to 0–100')
   ok(v.corrections.length === 2, 'invented quote and duplicate dropped (punctuation/case ignored when matching)')
+  const v2 = validateVerdict({
+    scores: { grammar: 70, vocabulary: 70, professionalism: 70, clarity: 70, handling: 70 }, improvements: ['a'],
+    corrections: [
+      { original: 'he is coming since two days', corrected: 'He is coming, since two days.' },
+      { original: 'I am agree with you about this', corrected: 'I agree with you about this' },
+      { original: 'I am agree with you', corrected: 'I agree with you' },
+    ],
+  }, said)
+  ok(v2.corrections.length === 1 && v2.corrections[0].original.startsWith('I am agree with you about'), 'punctuation-only and overlapping corrections dropped')
   ok(v.corrections[1].type === 'grammar', 'unknown correction type → grammar')
   ok(validateVerdict({ scores: { grammar: 70 }, improvements: ['a'] }, said) === null, 'a missing area rejects the answer')
   ok(validateVerdict({ scores: { grammar: 150, vocabulary: '80', professionalism: -5, clarity: 70, handling: 70 }, improvements: ['a'] }, said).scores.grammar === 100, 'scores clamped, numeric strings read')
@@ -220,17 +229,44 @@ try {
   // ── Providers ─────────────────────────────────────────────────────────────
   console.log('\nProviders')
   resetCoachAiHealth()
-  queues.groq.push(() => json(429, { error: { message: 'Rate limit reached on tokens per day (TPD)' } }))
+  const TPD = () => json(429, { error: { message: 'Rate limit reached on tokens per day (TPD)' } })
+  const busy = () => json(503, { error: { message: 'This model is currently experiencing high demand.' } })
+  queues.groq.push(TPD)
   let c = await chat({ purpose: 'actor', messages: [{ role: 'user', content: 'hi' }] })
-  ok(c.provider === 'gemini', 'Groq 429 → the character comes from Gemini')
-  ok(coachAiStatus().providers.groq.coolingDownSec > 1700, 'a daily cap rests Groq for 30 minutes')
+  ok(c.provider === 'groq' && c.model === 'openai/gpt-oss-20b', 'first Groq model out of quota → the next Groq model (quotas are per model)')
+  const lastGroq = calls.groq[calls.groq.length - 1]
+  ok(lastGroq.reasoning_effort === 'low' && lastGroq.max_tokens >= 1300, 'GPT-OSS gets short reasoning and room for it')
+  queues.groq.push(TPD)
+  c = await chat({ purpose: 'actor', messages: [{ role: 'user', content: 'hi' }] })
+  ok(c.provider === 'gemini', 'every Groq model out of quota → the character comes from Gemini')
+  ok(coachAiStatus().providers.groq.coolingDownSec > 1700, 'a daily cap rests those models for 30 minutes')
   const before = calls.groq.length
   c = await chat({ purpose: 'actor', messages: [{ role: 'user', content: 'hi' }] })
   ok(c.provider === 'gemini' && calls.groq.length === before, 'Groq is skipped while it rests')
+  ok(calls.gemini[calls.gemini.length - 1].reasoning_effort === 'minimal', 'Gemini 3 character: minimal thinking')
   resetCoachAiHealth()
-  queues.gemini.push(() => json(503, { error: { message: 'overloaded' } }), () => json(503, { error: { message: 'overloaded' } }))
+  queues.gemini.push(busy, busy)
   c = await chat({ purpose: 'examiner', messages: [{ role: 'user', content: 'x' }] })
-  ok(c.provider === 'groq', 'Gemini down (after one retry) → the examiner falls back to Groq')
+  ok(c.provider === 'groq', 'every Gemini model overloaded → the examiner falls back to Groq')
+  resetCoachAiHealth()
+  queues.gemini.push(() => json(404, { error: { message: 'This model models/gemini-3.6-flash is no longer available to new users.' } }))
+  c = await chat({ purpose: 'examiner', messages: [{ role: 'user', content: 'x' }] })
+  ok(c.provider === 'gemini' && c.model === 'gemini-3.8-flash', 'a retired model is skipped for the next one')
+  const n = calls.gemini.length
+  c = await chat({ purpose: 'examiner', messages: [{ role: 'user', content: 'x' }] })
+  ok(c.model === 'gemini-3.8-flash' && calls.gemini.length === n + 1, '…and not asked again')
+  ok(coachAiStatus().models.geminiExaminer === 'gemini-3.8-flash' && coachAiStatus().models.unavailable.includes('gemini/gemini-3.6-flash'), 'settings show the model in use and the retired one')
+  resetCoachAiHealth()
+  process.env.GROQ_API_KEYS = 'gsk_second, gsk_test'
+  ok(coachAiStatus().providers.groq.keys === 2, 'several keys, duplicates ignored')
+  queues.groq.push(TPD)
+  c = await chat({ purpose: 'actor', messages: [{ role: 'user', content: 'hi' }] })
+  ok(c.model === 'openai/gpt-oss-120b' && calls.groq[calls.groq.length - 2]._auth === 'Bearer gsk_second' && calls.groq[calls.groq.length - 1]._auth === 'Bearer gsk_test', 'first key out of quota → the same model with the next key')
+  queues.groq.push(() => json(401, { error: { message: 'Invalid API Key' } }))
+  resetCoachAiHealth()
+  c = await chat({ purpose: 'actor', messages: [{ role: 'user', content: 'hi' }] })
+  ok(c.provider === 'groq' && calls.groq[calls.groq.length - 1]._auth === 'Bearer gsk_test' && coachAiStatus().providers.groq.keysRejected === 1, 'a rejected key is set aside, the next key carries on')
+  delete process.env.GROQ_API_KEYS
   resetCoachAiHealth()
   queues.gemini.push(() => json(400, { error: { message: 'schema not supported' } }), () => completion('{"ok":1}'))
   c = await chat({ purpose: 'examiner', messages: [{ role: 'user', content: 'x' }], jsonSchema: { type: 'object' } })
@@ -337,8 +373,10 @@ try {
   sttDelayMs = 0
   ok(both.filter(x => x.status === 200).length === 1 && both.filter(x => x.body.code === 'busy').length === 1, 'two answers at once → one lands, the other is told to wait')
 
-  queues.groq.push(() => json(429, { error: { message: 'Rate limit reached on requests per day (RPD)' } }))
-  queues.gemini.push(() => json(429, { error: { message: 'Quota exceeded: GenerateRequestsPerDayPerProjectPerModel' } }))
+  const RPD = () => json(429, { error: { message: 'Rate limit reached on requests per day (RPD)' } })
+  const GQ = () => json(429, { error: { message: 'Quota exceeded: GenerateRequestsPerDayPerProjectPerModel' } })
+  queues.groq.push(RPD, RPD)
+  queues.gemini.push(GQ, GQ, GQ) // the character has three Gemini models to fall back on
   r = await call(addTurn, turnReq(tutor, s1, say('c', 'Okay let me explain the plan we will follow from next week onwards'), { clientTurnId: 'c4' }))
   doc = await CoachSession.findById(s1)
   ok(r.status === 503 && r.body.code === 'ai_busy' && r.body.retryAfterSec > 0, 'both providers out of quota → 503 ai_busy with a wait')
@@ -389,8 +427,9 @@ try {
   const s4 = r.body.session.id
   await call(addTurn, turnReq(tutor2, s4, say('h', GOOD)))
   await call(addTurn, turnReq(tutor2, s4, say('i', GOOD2)))
-  queues.gemini.push(() => json(429, { error: { message: 'quota per day' } }))
-  queues.groq.push(() => json(429, { error: { message: 'tokens per day (TPD)' } }))
+  const q = () => json(429, { error: { message: 'quota per day' } })
+  queues.gemini.push(q, q)
+  queues.groq.push(q, q)
   await call(finishSession, { ...tutor2, params: { id: s4 }, body: { reason: 'time_up' } })
   await waitFor(async () => { const d = await CoachSession.findById(s4); return d.scoringError && !d.scoringLockAt })
   doc = await CoachSession.findById(s4)
