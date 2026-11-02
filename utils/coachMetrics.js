@@ -181,26 +181,33 @@ export function curve(x, points) {
   return points[points.length - 1][1]
 }
 
-// Conversational English: ~110–165 wpm is comfortable; far slower reads as
-// struggling, far faster as hard to follow.
-const WPM = [[40, 15], [70, 50], [100, 88], [115, 100], [165, 100], [190, 85], [220, 65]]
-const PAUSES_PER_MIN = [[0, 100], [1, 100], [2, 85], [4, 60], [6, 35], [9, 15]]
-const FILLERS_PER_MIN = [[0, 100], [2, 100], [4, 80], [7, 55], [10, 30], [15, 10]]
-const RESPONSE_SEC = [[0, 100], [2, 100], [4, 80], [7, 55], [12, 25], [20, 10]]
+// The curves follow how spoken fluency is judged in IELTS / CEFR speaking
+// assessment: natural conversation runs at roughly 120–165 words a minute;
+// noticeable hesitation ("um", "uh") and long pauses mark a speaker as
+// searching for language; one-line answers show no extended speech.
+// They are deliberately strict below the comfortable range and flat inside it,
+// so a fluent speaker is never marked down.
+const WPM = [[60, 10], [80, 35], [100, 65], [115, 85], [125, 100], [170, 100], [190, 85], [215, 60], [240, 35]]
+const FILLERS_PER_MIN = [[0, 100], [1, 100], [2, 90], [3, 75], [4, 60], [6, 40], [8, 25], [12, 10]]
+const PAUSES_PER_MIN = [[0, 100], [1, 95], [2, 80], [3, 62], [4, 48], [6, 28], [9, 10]]
+const RESPONSE_SEC = [[0, 100], [1.5, 100], [3, 82], [5, 60], [8, 35], [12, 15]]
+const TURN_WORDS = [[3, 10], [6, 30], [10, 55], [15, 75], [22, 92], [30, 100]]
 const DIVERSITY = [[0.45, 30], [0.55, 55], [0.65, 78], [0.72, 92], [0.78, 100]]
 
 /**
- * Fluency 0–100 from the measurements, or null when there is too little timed
- * speech to judge (under 20 seconds) — the overall then leaves fluency out
- * rather than marking a number it can't support.
+ * Measured fluency 0–100 (speed, hesitations, pauses, response time, length of
+ * answers), or null when there is too little timed speech to judge (under 20 s).
+ * The examiner's own fluency-and-coherence mark is blended in afterwards
+ * (services/coachExaminer.js) — numbers can't hear rambling or vagueness.
  */
 export function fluencyScore(m) {
   if (!m || !(m.speakingSec >= 20) || m.wpm == null) return null
   const parts = [
-    [curve(m.wpm, WPM), 0.35],
-    [curve(m.longPausesPerMin, PAUSES_PER_MIN), 0.25],
+    [curve(m.wpm, WPM), 0.25],
     [curve(m.fillersPerMin, FILLERS_PER_MIN), 0.25],
-    [curve(m.avgResponseSec, RESPONSE_SEC), 0.15],
+    [curve(m.longPausesPerMin, PAUSES_PER_MIN), 0.2],
+    [curve(m.avgResponseSec, RESPONSE_SEC), 0.1],
+    [curve(m.avgTurnWords, TURN_WORDS), 0.2],
   ].filter(([v]) => v != null)
   const w = parts.reduce((a, [, wt]) => a + wt, 0)
   if (!w) return null
@@ -217,21 +224,35 @@ export const AREA_WEIGHTS = {
   fluency: 0.2, grammar: 0.2, vocabulary: 0.15, professionalism: 0.15, clarity: 0.15, handling: 0.15,
 }
 
-/** Weighted overall from the six areas; an area with no score is left out and the rest re-weighted. */
+/**
+ * The overall, as workplace speaking tests treat it: a weighted average of the
+ * six areas, then two gates —
+ *   - task achievement: you can't score far above how well you handled the call
+ *     (handling + 15)
+ *   - weakest link: one seriously weak area holds the total back (lowest + 30)
+ * A strong call has no weak area and handles the task, so neither gate touches it.
+ * An area with no score is left out and the rest re-weighted.
+ */
 export function overallScore(scores) {
   let total = 0
   let weight = 0
+  const present = []
   for (const [k, w] of Object.entries(AREA_WEIGHTS)) {
     const v = scores?.[k]
-    if (Number.isFinite(v)) { total += v * w; weight += w }
+    if (Number.isFinite(v)) { total += v * w; weight += w; present.push(v) }
   }
-  return weight ? Math.round(total / weight) : null
+  if (!weight) return null
+  let overall = total / weight
+  if (Number.isFinite(scores?.handling)) overall = Math.min(overall, scores.handling + 15)
+  overall = Math.min(overall, Math.min(...present) + 30)
+  return Math.round(overall)
 }
 
+// Roughly: excellent ≈ CEFR C1+, good ≈ B2, developing ≈ B1, needs work ≈ A2 or below
 export function bandFor(score) {
   if (!Number.isFinite(score)) return null
-  if (score >= 80) return 'excellent'
-  if (score >= 65) return 'good'
+  if (score >= 85) return 'excellent'
+  if (score >= 70) return 'good'
   if (score >= 50) return 'developing'
   return 'needs_work'
 }

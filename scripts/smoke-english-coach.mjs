@@ -86,7 +86,8 @@ function verdictFor(prompt, extra = {}) {
   const testerLine = (prompt.match(/\] TESTER: (.+)/) || [])[1] || ''
   const quote = testerLine.split(/\s+/).slice(0, 6).join(' ')
   return JSON.stringify({
-    scores: { grammar: 72, vocabulary: 70, professionalism: 85, clarity: 78, handling: 74 },
+    scores: { fluency: 60, grammar: 72, vocabulary: 70, professionalism: 85, clarity: 78, handling: 74 },
+    cefr: 'B2',
     reasons: { grammar: 'Mostly accurate.', vocabulary: 'Adequate.', professionalism: 'Polite.', clarity: 'Clear.', handling: 'Reassuring.' },
     summary: 'You were calm and polite.',
     strengths: ['Polite greeting'],
@@ -175,8 +176,13 @@ try {
   ok(fluencyScore({ ...sm, wpm: 60, fillersPerMin: 12, longPausesPerMin: 7, avgResponseSec: 9 }) < 40, 'slow, hesitant speech scores low')
   ok(diversityScore({ lexicalDiversity: 0.8, wordCount: 100 }) === 100 && diversityScore({ lexicalDiversity: 0.8, wordCount: 10 }) === null, 'vocabulary variety needs 30+ words')
   ok(overallScore({ fluency: null, grammar: 80, vocabulary: 80, professionalism: 80, clarity: 80, handling: 80 }) === 80, 'a missing area is left out of the overall')
-  ok(overallScore({ fluency: 100, grammar: 0, vocabulary: 0, professionalism: 0, clarity: 0, handling: 0 }) === 20, 'fluency weighs 20%')
-  ok(bandFor(80) === 'excellent' && bandFor(65) === 'good' && bandFor(50) === 'developing' && bandFor(49) === 'needs_work', 'bands at 80 / 65 / 50')
+  ok(overallScore({ fluency: 100, grammar: 80, vocabulary: 80, professionalism: 80, clarity: 80, handling: 80 }) === 84, 'fluency weighs 20%')
+  ok(overallScore({ fluency: 90, grammar: 90, vocabulary: 90, professionalism: 90, clarity: 90, handling: 40 }) === 55, 'task gate: no more than handling + 15')
+  ok(overallScore({ fluency: 90, grammar: 30, vocabulary: 90, professionalism: 90, clarity: 90, handling: 90 }) === 60, 'weakest-link gate: no more than lowest + 30')
+  ok(overallScore({ fluency: 92, grammar: 86, vocabulary: 84, professionalism: 90, clarity: 88, handling: 87 }) === 88, 'a strong call is untouched by the gates')
+  ok(bandFor(85) === 'excellent' && bandFor(84) === 'good' && bandFor(70) === 'good' && bandFor(69) === 'developing' && bandFor(50) === 'developing' && bandFor(49) === 'needs_work', 'bands at 85 / 70 / 50')
+  ok(fluencyScore({ speakingSec: 100, wpm: 95, fillersPerMin: 6.4, longPausesPerMin: 1.7, avgResponseSec: 1.2, avgTurnWords: 16 }) < 70, 'slow speech full of um/uh no longer measures as fluent')
+  ok(fluencyScore({ speakingSec: 200, wpm: 138, fillersPerMin: 1.2, longPausesPerMin: 0.8, avgResponseSec: 1.4, avgTurnWords: 28 }) >= 95, 'natural, extended speech measures near the top')
 
   // ── The character ─────────────────────────────────────────────────────────
   console.log('\nThe character')
@@ -397,7 +403,9 @@ try {
   ok(doc.result.overall > 0 && doc.result.band && doc.result.scores.fluency >= 0, `scored ${doc.result.overall} (${doc.result.band})`)
   ok(doc.result.corrections.length === 1, 'invented and no-op corrections dropped, the real one kept')
   ok(doc.result.examiner.startsWith('gemini/') && doc.result.shortSample === true, 'marked by Gemini; a short sample is flagged')
-  ok(doc.result.scores.vocabulary !== 70, 'vocabulary blends the examiner with measured variety')
+  ok(doc.result.scores.vocabulary > 70 && doc.result.scores.vocabulary <= 75, 'word variety only nudges vocabulary (at most +5)')
+  ok(doc.result.cefr === 'B2' && doc.result.scores.fluency === Math.round(doc.result.fluencyMeasured * 0.5 + 60 * 0.5), 'fluency = half measured, half the examiner; CEFR estimate stored')
+  ok(doc.result.overall <= 60, 'under 80 words: the overall is capped at 60')
   ok(doc.usage.audioSec > 0 && doc.usage.promptTokens > 0, 'usage recorded')
   r = await call(finishSession, { ...tutor, params: { id: s1 }, body: {} })
   ok(r.status === 200 && r.body.session.status === 'scored', 'finishing again is harmless')

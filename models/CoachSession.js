@@ -111,9 +111,11 @@ const coachSessionSchema = new mongoose.Schema({
 
   result: {
     overall: Number,
-    band: { type: String, enum: ['needs_work', 'developing', 'good', 'excellent'] },
+    band: { type: String, enum: ['needs_work', 'developing', 'good', 'excellent'] }, // 85 / 70 / 50 (utils/coachMetrics.js#bandFor)
     scores: scoreBlock,
-    reasons: { grammar: String, vocabulary: String, professionalism: String, clarity: String, handling: String },
+    reasons: { fluency: String, grammar: String, vocabulary: String, professionalism: String, clarity: String, handling: String },
+    cefr: { type: String, enum: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', null] }, // the examiner's estimate
+    fluencyMeasured: Number, // the recording's half of fluency (the examiner's is the other half)
     summary: String,
     strengths: [String],
     improvements: [String],
