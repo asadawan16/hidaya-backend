@@ -38,6 +38,8 @@ import portalAssessmentRoutes from './routes/portalAssessmentRoutes.js'
 import portalNoticeRoutes from './routes/portalNoticeRoutes.js'
 import portalFinanceRoutes from './routes/portalFinanceRoutes.js'
 import portalReportRoutes from './routes/portalReportRoutes.js'
+import portalCoachRoutes from './routes/portalCoachRoutes.js'
+import { sweepCoachSessions } from './controllers/portalCoachController.js'
 import portalFamilyRoutes from './routes/portalFamilyRoutes.js'
 import portalLeadsRoutes from './routes/portalLeadsRoutes.js'
 import portalDemoRoutes from './routes/portalDemoRoutes.js'
@@ -198,6 +200,7 @@ app.use('/api/portal/assessments', portalAssessmentRoutes)
 app.use('/api/portal/notices', portalNoticeRoutes)
 app.use('/api/portal/finance', portalFinanceRoutes)
 app.use('/api/portal/reports', portalReportRoutes)
+app.use('/api/portal/coach', portalCoachRoutes)
 app.use('/api/portal/families', portalFamilyRoutes)
 app.use('/api/portal/leads', portalLeadsRoutes)
 app.use('/api/portal/demos', portalDemoRoutes)
@@ -272,4 +275,9 @@ server.listen(PORT, () => {
   // Runs on startup and every 5 min; notifies oversight + prompts tutors to log.
   autoCompleteOverrunSessions()
   setInterval(autoCompleteOverrunSessions, 5 * 60 * 1000)
+
+  // English Coach: close practice calls whose tab was closed, and resume
+  // marking that a restart interrupted. Runs on startup and every 2 min.
+  sweepCoachSessions()
+  setInterval(sweepCoachSessions, 2 * 60 * 1000)
 })

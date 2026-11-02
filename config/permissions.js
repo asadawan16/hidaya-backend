@@ -152,6 +152,12 @@ export const PERMISSIONS = {
   // disaster-recovery backup, /portal/data-export) plus its weekly reminder.
   // Super-admin only by default: the file holds every student, salary and fee.
   dataExport: ['data.export'],
+
+  // English Coach (/portal/english-coach) — spoken role-play practice with an AI
+  // character, then a scorecard. coach.practice takes tests and sees your own
+  // results; coach.review sees everyone's, the team overview, and adds a human
+  // mark + feedback to a test; coach.manage edits the settings and deletes tests.
+  coach: ['coach.practice', 'coach.review', 'coach.manage'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
@@ -204,6 +210,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read',
     'demo.read', 'demo.manage',
     'whatsapp.chat',
+    'coach.practice', 'coach.review',
   ],
 
   coordinator: [
@@ -230,6 +237,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'leave.read', 'leave.review',
     'student_progress.read',
     'demo.read', 'demo.manage',
+    'coach.practice',
   ],
 
   qci: [
@@ -251,6 +259,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
     'whatsapp.chat',
+    'coach.practice', 'coach.review',
   ],
 
   qcm: [
@@ -267,6 +276,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
     'whatsapp.chat',
+    'coach.practice', 'coach.review',
   ],
 
   tutor: [
@@ -287,6 +297,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read', 'advance.request',
     'leave.read', 'leave.request',
     'student_progress.read',
+    'coach.practice',
   ],
 
   student: [

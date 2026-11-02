@@ -56,6 +56,8 @@ import WhatsappReminderSettings from '../models/WhatsappReminderSettings.js'
 import ClassLink from '../models/ClassLink.js'
 import ClassLinkSettings from '../models/ClassLinkSettings.js'
 import StudentClassLink from '../models/StudentClassLink.js'
+import CoachSession from '../models/CoachSession.js'
+import CoachSettings from '../models/CoachSettings.js'
 
 // `omit` = dotted paths never written to the file. Credentials only — a backup
 // that leaks password hashes or MFA secrets is a second incident, and after a
@@ -116,6 +118,9 @@ export const EXPORT_COLLECTIONS = [
   { folder: 'communication', file: 'class-links', label: 'Class links board', model: ClassLink },
   { folder: 'communication', file: 'class-link-settings', label: 'Class links settings', model: ClassLinkSettings },
   { folder: 'communication', file: 'student-class-links', label: 'Student class pages', model: StudentClassLink },
+
+  { folder: 'training', file: 'english-coach-tests', label: 'English Coach tests', model: CoachSession },
+  { folder: 'training', file: 'english-coach-settings', label: 'English Coach settings', model: CoachSettings },
 ]
 
 // Left out on purpose — listed in the archive's README so nobody wonders.
