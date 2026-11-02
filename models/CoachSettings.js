@@ -11,7 +11,7 @@ const coachSettingsSchema = new mongoose.Schema({
   key: { type: String, default: 'default', unique: true },
   enabled: { type: Boolean, default: true },
   // Call lengths a tester may pick, in minutes
-  durations: { type: [Number], default: [5, 10] },
+  durations: { type: [Number], default: [3, 5, 10] },
   // Tests one person may start in any rolling 24 hours (0 = no limit)
   dailyLimitPerUser: { type: Number, default: 3, min: 0, max: 50 },
   // Tests the whole academy may start in any rolling 24 hours (0 = no limit)
