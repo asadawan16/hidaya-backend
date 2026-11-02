@@ -102,9 +102,14 @@ export const PERMISSIONS = {
   // Family management
   family: ['family.read', 'family.create', 'family.update', 'family.delete'],
 
-  // WhatsApp reminders. whatsapp.manage connects/disconnects the academy's
-  // WhatsApp Business number (/portal/whatsapp) — super-admin only by default.
-  whatsapp: ['whatsapp.send', 'whatsapp.manage'],
+  // WhatsApp. whatsapp.manage connects/disconnects the academy's WhatsApp
+  // Business number and runs /portal/whatsapp — super-admin only by default.
+  // whatsapp.reminder is the tutor's one-tap class reminder (Schedule → Sessions
+  // and the class-time popup). It is granted PER PERSON from the WhatsApp page,
+  // never by a default role — see USER_GRANTABLE_PERMISSIONS below.
+  // whatsapp.send is legacy: it gated the old wa.me link tab on Notices, which
+  // the real reminder replaced. Kept so existing role documents stay valid.
+  whatsapp: ['whatsapp.send', 'whatsapp.manage', 'whatsapp.reminder'],
 
   // Expense management
   expense: ['expense.read', 'expense.manage'],
@@ -153,6 +158,14 @@ export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
 // super_admin/admin defaults — otherwise a fresh seed would restrict them.
 export const RESTRICTION_PERMISSIONS = ['lesson.log_only']
 
+// Permissions handed to individual users (User.extraPermissions) on top of
+// whatever their roles grant. Only these may be stored per user — the list is
+// enforced on write AND when portalAuth builds the permission set, so a stray
+// value in the database can never grant anything else. Only the super admin's
+// role holds them by default (it holds everything); for everyone else the point
+// is that each person is switched on deliberately.
+export const USER_GRANTABLE_PERMISSIONS = ['whatsapp.reminder']
+
 // Default role → permission mappings
 export const DEFAULT_ROLE_PERMISSIONS = {
   super_admin: ALL_PERMISSIONS.filter(p => !RESTRICTION_PERMISSIONS.includes(p)),
@@ -160,7 +173,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   // Admin gets everything except role deletion, the super-admin-only Fee
   // receivables view/KPIs, and the public class-links board (and never the
   // opt-in restriction permissions).
-  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', 'data.export', 'whatsapp.manage', ...RESTRICTION_PERMISSIONS].includes(p)),
+  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', 'data.export', 'whatsapp.manage', ...RESTRICTION_PERMISSIONS, ...USER_GRANTABLE_PERMISSIONS].includes(p)),
 
   principal: [
     'student.read', 'student.approve', 'enrollment.read', 'enrollment.update',

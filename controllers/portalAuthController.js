@@ -94,6 +94,7 @@ export async function portalLogin(req, res) {
         lastLoginAt: user.lastLoginAt,
         linkedStudentId: user.linkedStudentId || null,
         linkedTutorId: user.linkedTutorId || null,
+        extraPermissions: user.extraPermissions || [],
       },
     })
   } catch (err) {
@@ -243,6 +244,7 @@ export async function portalGetMe(req, res) {
       lastLoginAt: req.user.lastLoginAt,
       linkedStudentId: req.user.linkedStudentId || null,
       linkedTutorId: req.user.linkedTutorId || null,
+      extraPermissions: req.user.extraPermissions || [],
     })
   } catch (err) {
     console.error('Portal getMe error:', err)

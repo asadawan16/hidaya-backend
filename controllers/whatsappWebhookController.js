@@ -2,7 +2,8 @@ import crypto from 'crypto'
 import WhatsappMessage from '../models/WhatsappMessage.js'
 import WhatsappConnection from '../models/WhatsappConnection.js'
 import Student from '../models/Student.js'
-import { emitToRole } from '../config/socket.js'
+import ClassReminder from '../models/ClassReminder.js'
+import { emitToRole, emitToUser } from '../config/socket.js'
 
 /*
  * WhatsApp Cloud API webhook — GET /api/whatsapp/webhook (Meta's one-off
@@ -287,6 +288,11 @@ async function applyStatus(st) {
 
   if (updated) {
     for (const role of NOTIFY_ROLES) emitToRole(role, 'whatsapp_status', updated)
+    // A class reminder's ticks also go to the tutor who sent it
+    const reminder = await ClassReminder.findOne({ wamid: updated.wamid }).select('sessionId sentBy').lean()
+    if (reminder) {
+      emitToUser(String(reminder.sentBy), 'class_reminder_status', { sessionId: reminder.sessionId, status: updated.status })
+    }
   }
 }
 

@@ -1,5 +1,22 @@
 import jwt from 'jsonwebtoken'
 import User from '../models/User.js'
+import { USER_GRANTABLE_PERMISSIONS } from '../config/permissions.js'
+
+/**
+ * Role permissions + the user's own extraPermissions. Per-user grants are
+ * filtered through USER_GRANTABLE_PERMISSIONS again here, so a value written
+ * to the database by hand can never grant anything outside that list.
+ */
+export function effectivePermissions(user) {
+  const permissions = new Set()
+  for (const role of user.roles || []) {
+    for (const perm of role.permissions || []) permissions.add(perm)
+  }
+  for (const perm of user.extraPermissions || []) {
+    if (USER_GRANTABLE_PERMISSIONS.includes(perm)) permissions.add(perm)
+  }
+  return permissions
+}
 
 /**
  * Base portal authentication middleware.
@@ -32,13 +49,8 @@ export async function portalAuth(req, res, next) {
       return res.status(401).json({ error: 'Account is suspended or pending' })
     }
 
-    // Build flat permission set from all roles
-    const permissions = new Set()
-    for (const role of user.roles) {
-      for (const perm of role.permissions) {
-        permissions.add(perm)
-      }
-    }
+    // Build flat permission set from all roles, plus this person's own grants
+    const permissions = effectivePermissions(user)
 
     req.user = user
     req.userId = user._id

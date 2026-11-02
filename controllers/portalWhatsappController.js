@@ -4,6 +4,7 @@ import { emitToRole } from '../config/socket.js'
 import { findStudentIdByPhone } from './whatsappWebhookController.js'
 import { encryptSecret, decryptSecret } from '../utils/totp.js'
 import { logActivity } from '../utils/activityLogger.js'
+import { toWaId } from '../utils/waNumber.js'
 import {
   META_APP_ID, WHATSAPP_ES_CONFIG_ID, GRAPH_VERSION, GraphError,
   exchangeCodeForToken, listPhoneNumbers, subscribeApp, unsubscribeApp, requestAppSync,
@@ -208,13 +209,6 @@ function describeSender(sender) {
   if (!sender) return { source: 'none' }
   const { token, ...rest } = sender
   return rest
-}
-
-// International digits only: "+92 300-1234567" / "0092…" → "923001234567"
-function toWaId(raw) {
-  let d = String(raw || '').replace(/\D/g, '')
-  if (d.startsWith('00')) d = d.slice(2)
-  return d.length >= 8 && d.length <= 15 && !d.startsWith('0') ? d : ''
 }
 
 export async function listMessages(req, res) {

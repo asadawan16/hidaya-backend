@@ -1,9 +1,7 @@
 import Notice from '../models/Notice.js'
 import { isStudentAccount } from '../middleware/studentScope.js'
 import Complaint from '../models/Complaint.js'
-import WhatsappReminderLog from '../models/WhatsappReminderLog.js'
 import TutorProfile from '../models/TutorProfile.js'
-import Student from '../models/Student.js'
 import Assignment from '../models/Assignment.js'
 import User from '../models/User.js'
 import Role from '../models/Role.js'
@@ -454,42 +452,6 @@ export async function deleteComplaint(req, res) {
     res.json({ success: true })
   } catch (err) {
     console.error('Delete complaint error:', err)
-    res.status(500).json({ error: 'Server error' })
-  }
-}
-
-// ─── WhatsApp Reminders ───
-
-export async function sendWhatsappReminder(req, res) {
-  try {
-    const { studentId, tutorId } = req.body
-    if (!studentId) return res.status(400).json({ error: 'studentId is required' })
-
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-
-    const existing = await WhatsappReminderLog.findOne({ studentId, sentDate: today })
-    if (existing) {
-      return res.status(400).json({ error: 'Reminder already sent today for this student' })
-    }
-
-    await WhatsappReminderLog.create({
-      studentId, tutorId, sentDate: today, sentBy: req.userId,
-    })
-
-    // Get student's WhatsApp number
-    const student = await Student.findById(studentId).lean()
-    const whatsapp = student?.whatsappNumber || student?.phone || ''
-
-    res.json({
-      message: 'Reminder logged',
-      whatsappUrl: whatsapp ? `https://wa.me/${whatsapp.replace(/[^0-9]/g, '')}` : null,
-    })
-  } catch (err) {
-    if (err.code === 11000) {
-      return res.status(400).json({ error: 'Reminder already sent today' })
-    }
-    console.error('WhatsApp reminder error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

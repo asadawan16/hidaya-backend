@@ -5,7 +5,6 @@ import {
   listNotices, createNotice, updateNotice, deleteNotice,
   getActiveNoticesForUser, acknowledgeNotice, getNoticeAckStatus,
   listComplaints, createComplaint, resolveComplaint, updateComplaint, deleteComplaint,
-  sendWhatsappReminder,
 } from '../controllers/portalNoticeController.js'
 
 const router = Router()
@@ -34,7 +33,11 @@ router.post('/complaints/:id/resolve', requireAnyPermission('complaint.update', 
 router.patch('/complaints/:id', requirePermission('complaint.update'), updateComplaint)
 router.delete('/complaints/:id', requirePermission('complaint.delete'), deleteComplaint)
 
-// WhatsApp
-router.post('/whatsapp-reminder', requirePermission('whatsapp.send'), sendWhatsappReminder)
+// The old wa.me reminder link (whatsapp.send) is retired: it showed tutors the
+// family's number. Reminders are now sent from the academy's number — see
+// /portal/class-reminders.
+router.post('/whatsapp-reminder', (_req, res) => res.status(410).json({
+  error: 'This reminder link has been retired. Send reminders from your class on the Schedule page.',
+}))
 
 export default router

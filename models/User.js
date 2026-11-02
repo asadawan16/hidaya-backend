@@ -1,5 +1,6 @@
 import mongoose from 'mongoose'
 import bcrypt from 'bcryptjs'
+import { USER_GRANTABLE_PERMISSIONS } from '../config/permissions.js'
 
 const userSchema = new mongoose.Schema({
   email: {
@@ -84,6 +85,17 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true,
     uppercase: true,
+  },
+  // Permissions granted to THIS person on top of their roles (e.g. one tutor
+  // allowed to send WhatsApp class reminders). Restricted to
+  // USER_GRANTABLE_PERMISSIONS — enforced here and again in portalAuth.
+  extraPermissions: {
+    type: [String],
+    default: [],
+    validate: {
+      validator: (arr) => arr.every(p => USER_GRANTABLE_PERMISSIONS.includes(p)),
+      message: 'Not a per-user permission',
+    },
   },
   // Registered mobile push tokens (Expo push tokens). Populated by the mobile
   // app via /portal/notifications/register-device. Used by services/push.js.

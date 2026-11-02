@@ -11,6 +11,7 @@ export const WHATSAPP_ES_CONFIG_ID = process.env.WHATSAPP_ES_CONFIG_ID || '17612
 export const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v23.0'
 
 const GRAPH = `https://graph.facebook.com/${GRAPH_VERSION}`
+const GRAPH_TIMEOUT_MS = 30_000
 
 export class GraphError extends Error {
   constructor(message, { status, code, subcode } = {}) {
@@ -30,7 +31,11 @@ async function graph(path, { method = 'GET', token, query, body } = {}) {
   if (token) headers.Authorization = `Bearer ${token}`
   if (body) headers['Content-Type'] = 'application/json'
 
-  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
+  // Without a timeout a hung Graph call would hold the request (and a class
+  // reminder's claim) open indefinitely; an abort surfaces as a TimeoutError.
+  const res = await fetch(url, {
+    method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+  })
   let data = null
   try { data = await res.json() } catch { /* empty body */ }
   if (!res.ok || data?.error) {
