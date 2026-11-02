@@ -1,6 +1,8 @@
 import { Server } from 'socket.io'
 import jwt from 'jsonwebtoken'
 import User from '../models/User.js'
+import { effectivePermissions } from '../middleware/portalAuth.js'
+import { canUseChats } from '../utils/whatsappAccess.js'
 
 let io = null
 
@@ -53,15 +55,14 @@ export function initSocket(server) {
     }
 
     // Join live-board room if user has permission
-    const perms = new Set()
-    for (const role of socket.user.roles) {
-      for (const p of role.permissions || []) perms.add(p)
-    }
+    const perms = effectivePermissions(socket.user)
     if (perms.has('liveboard.view')) {
       socket.join('live-board')
     }
-    // WhatsApp Chats: content-free "this chat changed" pings (utils/whatsappChats.js)
-    if (perms.has('whatsapp.chat')) {
+    // WhatsApp Chats: content-free "this chat changed" pings (utils/whatsappChats.js).
+    // Any level, own-students included — a ping names no one, and the list
+    // the page refetches is scoped by the server.
+    if (canUseChats(perms)) {
       socket.join('whatsapp-chats')
     }
 
@@ -124,6 +125,15 @@ export function getPortalNamespace() {
 export function emitToUser(userId, event, data) {
   const portal = getPortalNamespace()
   if (portal) portal.to(`user:${userId}`).emit(event, data)
+}
+
+// Move a user's open tabs in or out of a room, e.g. after their access changed
+export function setUserRoom(userId, room, inRoom) {
+  const portal = getPortalNamespace()
+  if (!portal) return
+  const target = portal.in(`user:${userId}`)
+  if (inRoom) target.socketsJoin(room)
+  else target.socketsLeave(room)
 }
 
 // Emit to all users with a specific role

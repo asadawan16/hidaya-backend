@@ -109,11 +109,15 @@ export const PERMISSIONS = {
   // never by a default role — see USER_GRANTABLE_PERMISSIONS below.
   // whatsapp.send is legacy: it gated the old wa.me link tab on Notices, which
   // the real reminder replaced. Kept so existing role documents stay valid.
-  // whatsapp.chat opens /portal/whatsapp-chats — staff reply to parents as the
-  // academy, never see a contact's number, and messages about fees are hidden
-  // from them. whatsapp.inbox lifts both limits (numbers, fee messages,
-  // templates, photos/documents) — it only matters together with whatsapp.chat.
-  whatsapp: ['whatsapp.send', 'whatsapp.manage', 'whatsapp.reminder', 'whatsapp.chat', 'whatsapp.inbox'],
+  // WhatsApp Chats (/portal/whatsapp-chats) has four levels, set per person on
+  // the WhatsApp page → Team access (utils/whatsappAccess.js):
+  //   whatsapp.chat_own           a tutor's OWN students' chats only
+  //   whatsapp.chat               every chat
+  //   whatsapp.chat + .inbox      the full inbox
+  // The first two are the staff view: the contact's number is never sent and
+  // messages about fees are hidden. whatsapp.inbox lifts both limits (numbers,
+  // fee messages, templates, photos/documents) — only together with whatsapp.chat.
+  whatsapp: ['whatsapp.send', 'whatsapp.manage', 'whatsapp.reminder', 'whatsapp.chat', 'whatsapp.chat_own', 'whatsapp.inbox'],
 
   // Expense management
   expense: ['expense.read', 'expense.manage'],
@@ -174,7 +178,7 @@ export const RESTRICTION_PERMISSIONS = ['lesson.log_only']
 // value in the database can never grant anything else. Only the super admin's
 // role holds them by default (it holds everything); for everyone else the point
 // is that each person is switched on deliberately.
-export const USER_GRANTABLE_PERMISSIONS = ['whatsapp.reminder']
+export const USER_GRANTABLE_PERMISSIONS = ['whatsapp.reminder', 'whatsapp.chat', 'whatsapp.chat_own', 'whatsapp.inbox']
 
 // Default role → permission mappings
 export const DEFAULT_ROLE_PERMISSIONS = {
@@ -182,8 +186,10 @@ export const DEFAULT_ROLE_PERMISSIONS = {
 
   // Admin gets everything except role deletion, the super-admin-only Fee
   // receivables view/KPIs, and the public class-links board (and never the
-  // opt-in restriction permissions).
-  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', 'data.export', 'whatsapp.manage', ...RESTRICTION_PERMISSIONS, ...USER_GRANTABLE_PERMISSIONS].includes(p)),
+  // opt-in restriction permissions). Of the per-person WhatsApp grants it keeps
+  // the full inbox, which is the admin's by design; reminders and the
+  // own-students level are for tutors.
+  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', 'data.export', 'whatsapp.manage', 'whatsapp.reminder', 'whatsapp.chat_own', ...RESTRICTION_PERMISSIONS].includes(p)),
 
   principal: [
     'student.read', 'student.approve', 'enrollment.read', 'enrollment.update',
@@ -209,7 +215,6 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'leave.read', 'leave.review',
     'student_progress.read',
     'demo.read', 'demo.manage',
-    'whatsapp.chat',
     'coach.practice', 'coach.review',
   ],
 
@@ -224,7 +229,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'complaint.read', 'complaint.create',
     'report.read', 'report.generate',
     'liveboard.view', 'chat.use',
-    'whatsapp.send', 'whatsapp.chat',
+    'whatsapp.send',
     'finance.read', 'revenue.read',
     'staff.read',
     // Read-only billing surface (matches the pre-split finance.read access)
@@ -258,7 +263,6 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read', 'advance.request',
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
-    'whatsapp.chat',
     'coach.practice', 'coach.review',
   ],
 
@@ -275,7 +279,6 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read', 'advance.request',
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
-    'whatsapp.chat',
     'coach.practice', 'coach.review',
   ],
 

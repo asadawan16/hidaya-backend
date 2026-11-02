@@ -278,6 +278,22 @@ try {
   r = await call(getReminderState, { ...req, query: { sessionIds: String(live._id) } })
   ok(r.body.sessions[live._id].delivery === 'read', 'a late "delivered" does not move it backwards')
 
+  // Meta accepted it, then reported it undelivered (e.g. 131042, no payment
+  // method on the business account) — that class can be reminded again
+  console.log('\nNot delivered, then sent again')
+  const failedRem = await ClassReminder.findOne({ sessionId: s3._id }).lean()
+  await processWebhookPayload({ object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value: { statuses: [{ id: failedRem.wamid, status: 'failed', timestamp: ts, errors: [{ code: 131042, title: 'Business eligibility payment issue' }] }] } }] }] })
+  r = await call(getReminderState, { ...req, query: { sessionIds: String(s3._id) } })
+  const failedView = r.body.sessions[s3._id]
+  ok(failedView.delivery === 'failed' && failedView.failedReason === 'Business eligibility payment issue' && failedView.canSend === true, 'tutor sees "not delivered" with a way to try again')
+  r = await call(sendClassReminder, { ...req, params: { sessionId: String(s3._id) } })
+  const again = await ClassReminder.find({ sessionId: s3._id }).lean()
+  ok(r.status === 201 && again.length === 1 && again[0].wamid !== failedRem.wamid, 'sent again: one reminder row, new message')
+  r = await call(sendClassReminder, { ...req, params: { sessionId: String(s3._id) } })
+  ok(r.status === 409, 'once it went out again, a further tap is refused')
+  r = await call(getReminderState, { ...req, query: { sessionIds: String(live._id) } })
+  ok(r.body.sessions[live._id].canSend === false, 'a delivered reminder offers no resend')
+
   // ── Admin: log + access ───────────────────────────────────────────────────
   console.log('\nAdmin')
   r = await call(listReminders, { ...adminReq, query: {} })

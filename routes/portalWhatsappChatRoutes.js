@@ -1,15 +1,20 @@
 import express, { Router } from 'express'
-import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
+import { portalAuth } from '../middleware/portalAuth.js'
 import { denyStudentAccounts } from '../middleware/studentScope.js'
 import {
   listChats, getChatMessages, readChat, sendChatMessage, sendChatMedia, getChatMedia, listChatTemplates, MEDIA_UPLOAD_LIMIT,
 } from '../controllers/portalWhatsappChatController.js'
+import { chatLevel } from '../utils/whatsappAccess.js'
 
-// /api/portal/whatsapp-chats — staff view on whatsapp.chat, full view with
-// whatsapp.inbox as well (see the controller for what each one may see)
+// /api/portal/whatsapp-chats — any chat level gets in (own students / all
+// chats = staff view); templates and file uploads need the full inbox. See
+// utils/whatsappAccess.js for the levels and the controller for what each sees.
+const atLeast = (...levels) => (req, res, next) => (
+  levels.includes(chatLevel(req.userPermissions)) ? next() : res.status(403).json({ error: 'Insufficient permissions' })
+)
 const router = Router()
-router.use(portalAuth, denyStudentAccounts, requirePermission('whatsapp.chat'))
-const inboxOnly = requirePermission('whatsapp.inbox')
+router.use(portalAuth, denyStudentAccounts, atLeast('own', 'all', 'full'))
+const inboxOnly = atLeast('full')
 
 router.get('/', listChats)
 router.get('/templates', inboxOnly, listChatTemplates)

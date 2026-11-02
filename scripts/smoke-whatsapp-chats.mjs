@@ -2,7 +2,9 @@
 // the staff chat with hidden numbers + fee filtering, and the admin inbox.
 //
 // Covers:
-//   - default roles: staff roles get whatsapp.chat, only admin gets whatsapp.inbox
+//   - default roles: only admin holds a chat level; everyone else is per person
+//   - access levels: own students (tutor) sees only their students' chats;
+//     Team access lists and sets levels, refuses own-students without a tutor profile
 //   - the fee filter (English, Roman Urdu, Urdu) and what it leaves alone
 //   - staff view: no contact number anywhere in a response, fee messages arrive
 //     as content-free placeholders, digit searches can't probe a number,
@@ -24,8 +26,12 @@ import Role from '../models/Role.js'
 import Student from '../models/Student.js'
 import WhatsappMessage from '../models/WhatsappMessage.js'
 import WhatsappChat from '../models/WhatsappChat.js'
+import TutorProfile from '../models/TutorProfile.js'
+import Assignment from '../models/Assignment.js'
 import { effectivePermissions } from '../middleware/portalAuth.js'
-import { DEFAULT_ROLE_PERMISSIONS } from '../config/permissions.js'
+import { DEFAULT_ROLE_PERMISSIONS, USER_GRANTABLE_PERMISSIONS } from '../config/permissions.js'
+import { listTeamAccess, setTeamAccess } from '../controllers/portalWhatsappAccessController.js'
+import { chatLevel } from '../utils/whatsappAccess.js'
 import { processWebhookPayload } from '../controllers/whatsappWebhookController.js'
 import {
   listChats, getChatMessages, readChat, sendChatMessage, sendChatMedia, getChatMedia, listChatTemplates,
@@ -133,16 +139,17 @@ try {
 
   // ── Roles ─────────────────────────────────────────────────────────────────
   console.log('\nDefault roles')
-  ok(['principal', 'coordinator', 'qci', 'qcm'].every(k => DEFAULT_ROLE_PERMISSIONS[k].includes('whatsapp.chat')), 'staff roles get whatsapp.chat')
-  ok(['principal', 'coordinator', 'qci', 'qcm', 'tutor'].every(k => !DEFAULT_ROLE_PERMISSIONS[k].includes('whatsapp.inbox')), 'only admin-level roles get whatsapp.inbox')
-  ok(DEFAULT_ROLE_PERMISSIONS.admin.includes('whatsapp.inbox') && DEFAULT_ROLE_PERMISSIONS.admin.includes('whatsapp.chat'), 'admin gets both')
-  ok(!DEFAULT_ROLE_PERMISSIONS.tutor.includes('whatsapp.chat'), 'tutors get neither')
+  ok(['principal', 'coordinator', 'qci', 'qcm', 'tutor'].every(k => chatLevel(DEFAULT_ROLE_PERMISSIONS[k]) === 'none'), 'no staff or tutor role has a chat level by default — given per person')
+  ok(chatLevel(DEFAULT_ROLE_PERMISSIONS.admin) === 'full' && chatLevel(DEFAULT_ROLE_PERMISSIONS.super_admin) === 'full', 'admin and super admin: full inbox')
+  ok(!DEFAULT_ROLE_PERMISSIONS.admin.includes('whatsapp.chat_own') && !DEFAULT_ROLE_PERMISSIONS.admin.includes('whatsapp.reminder'), 'admin is not given the tutor-only grants')
+  ok(['whatsapp.chat', 'whatsapp.chat_own', 'whatsapp.inbox'].every(p => USER_GRANTABLE_PERMISSIONS.includes(p)), 'every chat level can be given to one person')
 
   // ── Fixtures ──────────────────────────────────────────────────────────────
   const roles = {}
   for (const key of ['admin', 'qci']) roles[key] = await Role.create({ key, name: key, permissions: DEFAULT_ROLE_PERMISSIONS[key], system: true })
   const adminUser = await User.create({ email: 'admin@x.test', password: 'secret123', displayName: 'Admin', roles: [roles.admin._id] })
-  const qciUser = await User.create({ email: 'qci@x.test', password: 'secret123', displayName: 'Ayesha QCI', roles: [roles.qci._id] })
+  // The QCI's chat access is a per-person grant (Team access), not her role
+  const qciUser = await User.create({ email: 'qci@x.test', password: 'secret123', displayName: 'Ayesha QCI', roles: [roles.qci._id], extraPermissions: ['whatsapp.chat'] })
   const loadReq = async (userId) => {
     const user = await User.findById(userId).populate('roles').lean()
     return { user, userId: user._id, userPermissions: effectivePermissions(user) }
@@ -313,6 +320,76 @@ try {
 
   r = await call(getChatMessages, { ...staff, params: { id: 'nope' } })
   ok(r.status === 404, 'bad chat id: 404')
+
+  // ── Access levels: a tutor's own students ─────────────────────────────────
+  console.log('\nOwn students (tutor) + Team access')
+  roles.tutor = await Role.create({ key: 'tutor', name: 'Tutor', permissions: DEFAULT_ROLE_PERMISSIONS.tutor, system: true })
+  const tutorUser = await User.create({ email: 'tutor@x.test', password: 'secret123', displayName: 'Bilal Tutor', roles: [roles.tutor._id] })
+  const tutorProfile = await TutorProfile.create({ tutorId: 'T01', userId: tutorUser._id, name: 'Bilal Ahmed' })
+  const otherUser = await User.create({ email: 'other@x.test', password: 'secret123', displayName: 'Other Tutor', roles: [roles.tutor._id] })
+  const otherProfile = await TutorProfile.create({ tutorId: 'T02', userId: otherUser._id, name: 'Other Tutor' })
+  // The chat list was rebuilt above, so look the chat up again
+  const motherChat = { id: String((await WhatsappChat.findOne({ waId: MOTHER }).lean())._id) }
+  const noProfile = await User.create({ email: 'coord@x.test', password: 'secret123', displayName: 'Coordinator', roles: [roles.qci._id] })
+
+  let tutor = await loadReq(tutorUser._id)
+  ok(chatLevel(tutor.userPermissions) === 'none', 'a tutor starts with no chat access')
+
+  r = await call(listTeamAccess, admin)
+  const rowOf = (name) => r.body.users.find(u => u.displayName === name)
+  ok(r.status === 200 && rowOf('Bilal Tutor')?.tutor?.tutorId === 'T01' && rowOf('Bilal Tutor').chat.level === 'none', 'Team access lists the tutor, no access')
+  ok(rowOf('Ayesha QCI')?.chat.level === 'all' && rowOf('Ayesha QCI').chat.personal === 'all' && rowOf('Ayesha QCI').chat.fromRole === 'none', 'the QCI shows her personal level')
+  ok(rowOf('Admin')?.chat.fromRole === 'full', "the admin's level comes from the role")
+
+  r = await call(setTeamAccess, { ...admin, body: { userIds: [String(noProfile._id)], level: 'own' } })
+  ok(r.body.updated === 0 && r.body.skipped.length === 1, 'own students refused without a tutor profile')
+  r = await call(setTeamAccess, { ...admin, body: { userIds: [String(tutorUser._id)], level: 'sideways' } })
+  ok(r.status === 400, 'an unknown level is refused')
+  r = await call(setTeamAccess, { ...admin, body: { userIds: [String(tutorUser._id)], level: 'own' } })
+  ok(r.status === 200 && r.body.updated === 1, 'tutor set to own students')
+  tutor = await loadReq(tutorUser._id)
+  ok(chatLevel(tutor.userPermissions) === 'own', '…and it takes effect')
+
+  r = await call(listChats, tutor)
+  ok(r.status === 200 && r.body.chats.length === 0 && r.body.scope === 'own', 'no assigned students yet: an empty list')
+  await Assignment.create({ studentId: hamza._id, tutorId: otherProfile._id, track: 'nazra' })
+  tutor = await loadReq(tutorUser._id)
+  r = await call(listChats, tutor)
+  ok(r.body.chats.length === 0, "another tutor's student stays hidden")
+  r = await call(getChatMessages, { ...tutor, params: motherChat })
+  ok(r.status === 404, 'opening that chat by id: 404')
+
+  await Assignment.create({ studentId: hamza._id, tutorId: tutorProfile._id, track: 'qaida', approvalStatus: 'pending_approval' })
+  tutor = await loadReq(tutorUser._id)
+  r = await call(listChats, tutor)
+  ok(r.body.chats.length === 0, 'an assignment still awaiting approval does not count')
+
+  await Assignment.create({ studentId: hamza._id, tutorId: tutorProfile._id, track: 'nazra' })
+  tutor = await loadReq(tutorUser._id)
+  r = await call(listChats, tutor)
+  blob = JSON.stringify(r.body)
+  ok(r.body.chats.length === 1 && r.body.chats[0].name === 'Hamza Raza' && r.body.view === 'staff', "their own student's chat, staff view")
+  ok(!NUMBERS.some(n => blob.includes(n)) && !/jazzcash/i.test(blob), 'still no number and no fee text')
+  r = await call(getChatMessages, { ...tutor, params: motherChat })
+  ok(r.status === 200 && r.body.messages.length > 0, 'and they can open it')
+  const leadRow = await WhatsappChat.findOne({ waId: LEAD }).lean()
+  r = await call(getChatMessages, { ...tutor, params: { id: String(leadRow._id) } })
+  ok(r.status === 404, 'an unknown contact (lead) is not theirs')
+  const imageMsg = await WhatsappMessage.findOne({ waId: MOTHER, type: 'image', direction: 'in' }).lean()
+  r = await call(getChatMedia, { ...tutor, params: { messageId: String(imageMsg._id) } })
+  ok(r.status === 200, "a photo in their student's chat opens")
+  const leadMsg = await WhatsappMessage.create({ wamid: 'wamid.LEADIMG', direction: 'in', waId: LEAD, type: 'image', media: { id: 'MEDIA_IN_1', mimeType: 'image/jpeg' }, timestamp: new Date() })
+  r = await call(getChatMedia, { ...tutor, params: { messageId: String(leadMsg._id) } })
+  ok(r.status === 404, "a file from someone else's chat: 404")
+
+  await call(setTeamAccess, { ...admin, body: { userIds: [String(tutorUser._id)], level: 'full' } })
+  tutor = await loadReq(tutorUser._id)
+  ok(chatLevel(tutor.userPermissions) === 'full' && (await call(listChats, tutor)).body.view === 'full', 'raised to full inbox')
+  await call(setTeamAccess, { ...admin, body: { userIds: [String(tutorUser._id)], level: 'none' } })
+  ok((await User.findById(tutorUser._id).lean()).extraPermissions.length === 0, 'set back to none: every chat grant removed')
+  await User.updateOne({ _id: tutorUser._id }, { $addToSet: { extraPermissions: 'whatsapp.reminder' } })
+  await call(setTeamAccess, { ...admin, body: { userIds: [String(tutorUser._id)], level: 'own' } })
+  ok((await User.findById(tutorUser._id).lean()).extraPermissions.sort().join() === 'whatsapp.chat_own,whatsapp.reminder', 'changing the level keeps their reminder grant')
 } catch (err) {
   fail++
   console.error(err)

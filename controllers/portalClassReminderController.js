@@ -162,7 +162,13 @@ function tutorView(session, reminder, delivery, now) {
     view.sentAt = reminder.sentAt || null
     view.recipient = reminder.recipientLabel
     view.delivery = delivery?.status || (reminder.status === 'sent' ? 'accepted' : null)
-    if (delivery?.status === 'failed') view.failedReason = delivery.statusErrors?.[0]?.title || 'Not delivered'
+    if (delivery?.status === 'failed') {
+      view.failedReason = delivery.statusErrors?.[0]?.title || 'Not delivered'
+      // Meta took it but couldn't deliver (e.g. a billing problem on the
+      // business account) — that isn't the class's one reminder, so it can be
+      // sent again while the class window is still open
+      view.canSend = !block
+    }
     return view
   }
   // A block that only lifts with time is still worth showing as "opens at"
@@ -321,7 +327,8 @@ export async function sendClassReminder(req, res) {
     const now = Date.now()
     const lookup = await remindersFor([session])
     const { reminder: existing, delivery } = lookup(session)
-    if (existing && !isStale(existing, now)) {
+    const undelivered = existing?.status === 'sent' && delivery?.status === 'failed'
+    if (existing && !isStale(existing, now) && !undelivered) {
       return res.status(409).json({
         error: existing.status === 'sending' ? 'This reminder is being sent right now.' : 'A reminder has already been sent for this class.',
         reminder: tutorView(session, existing, delivery, now),
@@ -340,7 +347,13 @@ export async function sendClassReminder(req, res) {
 
     // Claim the class before talking to Meta — the unique indexes make a second
     // tap (another tab, a double click) fail here instead of sending twice.
-    if (existing) await ClassReminder.deleteOne({ _id: existing._id, status: 'sending', claimedAt: existing.claimedAt })
+    // A stale claim, or a reminder Meta reported as not delivered, gives way to
+    // this one. Matched exactly, so two tabs retrying at once still send once.
+    if (existing) {
+      await ClassReminder.deleteOne(undelivered
+        ? { _id: existing._id, status: 'sent', wamid: existing.wamid }
+        : { _id: existing._id, status: 'sending', claimedAt: existing.claimedAt })
+    }
     try {
       const claim = await ClassReminder.create({
         sessionId: session._id,

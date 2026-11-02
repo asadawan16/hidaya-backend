@@ -7,6 +7,7 @@ import { logActivity } from '../utils/activityLogger.js'
 import { contactLabelFor } from '../utils/waNumber.js'
 import { isFeeMessage, mentionsFees } from '../utils/feeFilter.js'
 import { UNREAD, touchChat, ensureChats, replyWindow } from '../utils/whatsappChats.js'
+import { chatLevel, chatScope, inScope } from '../utils/whatsappAccess.js'
 import { resolveSender } from './portalWhatsappController.js'
 import { findStudentIdByPhone } from './whatsappWebhookController.js'
 import {
@@ -16,8 +17,11 @@ import {
 /*
  * /api/portal/whatsapp-chats — the team's WhatsApp, as the academy.
  *
- * Two views of the same chats, picked per request from the caller's permissions:
+ * Two views of the same chats, picked per request from the caller's permissions
+ * (levels in utils/whatsappAccess.js):
  *
+ *   whatsapp.chat_own          STAFF view, limited to the chats of the tutor's
+ *                              own students — any other chat is "not found".
  *   whatsapp.chat              STAFF view (QCI, coordinators…). The contact's
  *                              number is never sent — not in a chat, a search
  *                              match or a socket event; a chat is addressed by
@@ -34,7 +38,7 @@ import {
  * can't see it — so it stays unread until someone with the full view opens it.
  */
 
-const fullView = (req) => req.userPermissions?.has('whatsapp.inbox')
+const fullView = (req) => chatLevel(req.userPermissions) === 'full'
 const isId = (v) => mongoose.isValidObjectId(v)
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -132,6 +136,8 @@ export async function listChats(req, res) {
     await ensureChats()
 
     const and = []
+    const scope = await chatScope(req)
+    if (scope) and.push({ studentId: { $in: scope.map(id => new mongoose.Types.ObjectId(id)) } })
     if (filter === 'students') and.push({ studentId: { $ne: null } })
     if (filter === 'unread') and.push({ unreadCount: { $gt: 0 } })
 
@@ -189,6 +195,7 @@ export async function listChats(req, res) {
       chats,
       nextCursor: hasMore && lastRow ? `${new Date(lastRow.lastMessageAt).getTime()}_${lastRow._id}` : null,
       view: full ? 'full' : 'staff',
+      scope: scope ? 'own' : 'all',
     })
   } catch (err) {
     console.error('List WhatsApp chats error:', err)
@@ -209,6 +216,8 @@ async function loadChat(req, res) {
       chat.studentId = studentId
     }
   }
+  // Own-students access: someone else's chat doesn't exist, as far as this caller knows
+  if (!inScope(await chatScope(req), chat.studentId)) { res.status(404).json({ error: 'Chat not found' }); return null }
   return chat
 }
 
@@ -467,8 +476,12 @@ export async function getChatMedia(req, res) {
   const full = fullView(req)
   if (!isId(req.params.messageId)) return res.status(404).json({ error: 'File not found' })
   try {
-    const m = await WhatsappMessage.findById(req.params.messageId).select('media text templateName').lean()
+    const m = await WhatsappMessage.findById(req.params.messageId).select('waId media text templateName').lean()
     if (!m?.media?.id) return res.status(404).json({ error: 'File not found' })
+    const scope = await chatScope(req)
+    if (scope && !(await WhatsappChat.exists({ waId: m.waId, studentId: { $in: scope } }))) {
+      return res.status(404).json({ error: 'File not found' })
+    }
     if (!full && isFeeMessage(m)) return res.status(403).json({ error: 'Hidden — this message mentions fees' })
 
     const sender = await resolveSender()
