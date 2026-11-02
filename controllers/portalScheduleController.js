@@ -415,22 +415,8 @@ export async function deleteSlot(req, res) {
 // (same as a single-slot edit); the new time applies from the next shift.
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
-const fromMinutes = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
-
-// Move a slot by `delta` minutes along the overnight shift-day model. A shift
-// runs 07:00 → 06:59 the next morning and keeps its starting dayOfWeek, so
-// 23:30 + 60 is 00:30 on the SAME shift-day, while 06:30 + 60 rolls over to
-// 07:30 on the next one.
-function shiftSlotTime(dayOfWeek, startTime, delta) {
-  const wrap = SHIFT_WRAP_HOUR * 60
-  let m = toMinutes(startTime)
-  if (m < wrap) m += 1440 // after-midnight tail sits at the end of the shift
-  m += Number(delta) || 0
-  let dow = Number(dayOfWeek)
-  while (m >= wrap + 1440) { m -= 1440; dow = (dow + 1) % 7 }
-  while (m < wrap) { m += 1440; dow = (dow + 6) % 7 }
-  return { dayOfWeek: dow, startTime: fromMinutes(m % 1440) }
-}
+// Shifting a slot by ±minutes uses shiftSlotTime from utils/dstShift.js, the same
+// shift-day math as the daylight-saving toggle.
 
 // Validate a set of slot changes against the rest of the active timetable.
 // `changes` are { slot?, dayOfWeek, startTime, durationMinutes, tutorId, studentId }
@@ -519,6 +505,8 @@ export async function saveStudentWeek(req, res) {
     const problem = await validateSlotChanges(changes, removed.map(s => s._id))
     if (problem) return res.status(409).json({ error: problem })
 
+    // New days are entered on today's clock, so they already include the DST hour if on.
+    const cfg = await ScheduleConfig.findOne({ key: 'default' }).select('dstActive').lean()
     for (const c of changes) {
       const fields = {
         dayOfWeek: c.dayOfWeek, startTime: c.startTime, durationMinutes: dur,
@@ -529,7 +517,7 @@ export async function saveStudentWeek(req, res) {
         Object.assign(c.slot, fields)
         await c.slot.save()
       } else {
-        await ClassSlot.create({ studentId, tutorId, timezone: 'Asia/Karachi', active: true, meetLink: '', ...fields })
+        await ClassSlot.create({ studentId, tutorId, timezone: 'Asia/Karachi', active: true, meetLink: '', dstShifted: !!cfg?.dstActive, ...fields })
       }
     }
     for (const s of removed) { s.active = false; await s.save() }
@@ -550,8 +538,8 @@ export async function saveStudentWeek(req, res) {
 // once. Body: { studentIds?: [], allStudents?: bool, days?: [0-6],
 // mode: 'set' | 'shift', startTime?: 'HH:MM', shiftMinutes?: number, dryRun?: bool }.
 // 'set' gives every matched slot the same start time; 'shift' moves each by
-// ±minutes (e.g. +60 when US clocks go back), rolling over the shift-day
-// boundary when needed. dryRun returns the before/after list without saving.
+// ±minutes, rolling over the shift-day boundary when needed (daylight saving
+// has its own toggle, PUT /dst). dryRun returns the before/after list without saving.
 export async function bulkUpdateSlotTimes(req, res) {
   try {
     const { studentIds, allStudents, days, mode, startTime, shiftMinutes, dryRun } = req.body
