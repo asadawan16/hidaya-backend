@@ -60,3 +60,17 @@ export function resolveStudentRecipient(student) {
   }
   return { recipient: null, reason: sawNumber ? 'invalid' : 'none' }
 }
+
+// Who a WhatsApp contact is to a student — "Mother", "Student"… — or '' when
+// the number isn't one of theirs. Last 10 digits, like findStudentIdByPhone.
+const tail10 = (raw) => String(raw || '').replace(/\D/g, '').slice(-10)
+
+export function contactLabelFor(student, waId) {
+  const t = tail10(waId)
+  if (t.length < 7 || !student) return ''
+  for (const g of student.guardians || []) {
+    if (tail10(g.phone) === t) return RELATION_LABEL[g.relation] || 'Guardian'
+  }
+  if (tail10(student.whatsappNumber) === t || tail10(student.phone) === t) return 'Student'
+  return ''
+}

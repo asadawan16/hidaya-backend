@@ -4,6 +4,7 @@ import WhatsappConnection from '../models/WhatsappConnection.js'
 import Student from '../models/Student.js'
 import ClassReminder from '../models/ClassReminder.js'
 import { emitToRole, emitToUser } from '../config/socket.js'
+import { touchChat, announceChatFor } from '../utils/whatsappChats.js'
 
 /*
  * WhatsApp Cloud API webhook — GET /api/whatsapp/webhook (Meta's one-off
@@ -147,6 +148,9 @@ async function recordMessage(msg, { direction, waId, phoneNumberId, contactName 
   }
   if (!emit) return
 
+  // The WhatsApp Chats list (content-free event — see utils/whatsappChats.js)
+  await touchChat(waId, { contactName })
+
   const event = {
     _id: saved._id,
     wamid: saved.wamid,
@@ -184,6 +188,7 @@ async function recordHistory(chunks, phoneNumberId) {
     }
     for (const thread of chunk.threads || []) {
       const customer = thread.id
+      if (!customer) continue
       for (const msg of thread.messages || []) {
         const inbound = msg.from === customer
         await recordMessage(msg, {
@@ -195,6 +200,8 @@ async function recordHistory(chunks, phoneNumberId) {
           emit: false,
         })
       }
+      // One chat-list update per thread, not per message, and no live event
+      await touchChat(customer, { announce: false })
     }
     const progress = Number(chunk.metadata?.progress)
     if (Number.isFinite(progress)) {
@@ -288,6 +295,7 @@ async function applyStatus(st) {
 
   if (updated) {
     for (const role of NOTIFY_ROLES) emitToRole(role, 'whatsapp_status', updated)
+    await announceChatFor(updated.waId)
     // A class reminder's ticks also go to the tutor who sent it
     const reminder = await ClassReminder.findOne({ wamid: updated.wamid }).select('sessionId sentBy').lean()
     if (reminder) {

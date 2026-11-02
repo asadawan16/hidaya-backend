@@ -128,6 +128,7 @@ export const EXCLUDED = [
   { model: 'StripeEvent', reason: 'webhook de-duplication ledger; expires after 30 days' },
   { model: 'WhatsappReminderLog', reason: 'legacy log of the retired wa.me reminder links' },
   { model: 'WhatsappConnection', reason: 'holds the encrypted WhatsApp API token; reconnect from the portal' },
+  { model: 'WhatsappChat', reason: 'chat-list summary derived from the WhatsApp messages; rebuilt automatically' },
   { model: 'DataExport', reason: 'the history of these exports' },
 ]
 

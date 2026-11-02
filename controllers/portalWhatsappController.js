@@ -5,6 +5,7 @@ import { findStudentIdByPhone } from './whatsappWebhookController.js'
 import { encryptSecret, decryptSecret } from '../utils/totp.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { toWaId } from '../utils/waNumber.js'
+import { touchChat } from '../utils/whatsappChats.js'
 import {
   META_APP_ID, WHATSAPP_ES_CONFIG_ID, GRAPH_VERSION, GraphError,
   exchangeCodeForToken, listPhoneNumbers, subscribeApp, unsubscribeApp, requestAppSync,
@@ -264,6 +265,7 @@ export async function send(req, res) {
     })
     const event = { _id: saved._id, wamid, direction: 'out', source: 'live', waId, type, text: saved.text, timestamp: saved.timestamp }
     for (const role of ['super_admin', 'admin']) emitToRole(role, 'whatsapp_message', event)
+    await touchChat(waId)
     await logActivity({ level: 'info', category: 'portal', action: 'whatsapp_sent', message: `WhatsApp ${type} sent to ${waId}`, req })
     res.status(201).json({ message: saved })
   } catch (err) {

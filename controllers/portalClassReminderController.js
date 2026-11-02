@@ -11,6 +11,7 @@ import { resolveSender } from './portalWhatsappController.js'
 import { GraphError, sendMessage, listTemplates, createTemplate } from '../services/whatsappGraph.js'
 import { resolveStudentRecipient } from '../utils/waNumber.js'
 import { emitToRole, emitToUser } from '../config/socket.js'
+import { touchChat } from '../utils/whatsappChats.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { isStudentAccount } from '../middleware/studentScope.js'
 
@@ -408,6 +409,7 @@ export async function sendClassReminder(req, res) {
       })
       const event = { _id: saved._id, wamid, direction: 'out', source: 'live', waId: recipient.waId, type: 'template', text: saved.text, timestamp: sentAt, studentId: saved.studentId }
       for (const role of ['super_admin', 'admin']) emitToRole(role, 'whatsapp_message', event)
+      await touchChat(recipient.waId)
     } catch (err) {
       console.error('Class reminder: message log write failed:', err)
     }

@@ -109,3 +109,46 @@ export async function listTemplates(wabaId, token) {
 export function createTemplate(wabaId, token, template) {
   return graph(`${wabaId}/message_templates`, { method: 'POST', token, body: template })
 }
+
+// Blue ticks on the contact's side for an inbound message (and everything before it)
+export function markMessageRead(phoneNumberId, token, wamid) {
+  return graph(`${phoneNumberId}/messages`, {
+    method: 'POST', token, body: { messaging_product: 'whatsapp', status: 'read', message_id: wamid },
+  })
+}
+
+// ── Media ───────────────────────────────────────────────────────────────────
+// Upload a file to Meta (multipart) and get back the media id to send it with
+export async function uploadMedia(phoneNumberId, token, { buffer, mimeType, filename }) {
+  const form = new FormData()
+  form.append('messaging_product', 'whatsapp')
+  form.append('type', mimeType)
+  form.append('file', new Blob([buffer], { type: mimeType }), filename || 'file')
+
+  const res = await fetch(`${GRAPH}/${phoneNumberId}/media`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form, signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+  })
+  let data = null
+  try { data = await res.json() } catch { /* empty body */ }
+  if (!res.ok || data?.error || !data?.id) {
+    const e = data?.error || {}
+    throw new GraphError(e.error_user_msg || e.message || `Media upload failed (${res.status})`, { status: res.status, code: e.code })
+  }
+  return data.id
+}
+
+/*
+ * A media id from a message → the file. Meta hands out a short-lived URL
+ * (~5 min) that itself needs the token; ids for received media expire after
+ * about 30 days, after which this throws a GraphError.
+ */
+export async function downloadMedia(mediaId, token) {
+  const info = await graph(mediaId, { token })
+  if (!info?.url) throw new GraphError('Meta returned no download URL for this file')
+  const res = await fetch(info.url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS) })
+  if (!res.ok) throw new GraphError(`Could not download the file from WhatsApp (${res.status})`, { status: res.status })
+  return {
+    buffer: Buffer.from(await res.arrayBuffer()),
+    mimeType: info.mime_type || res.headers.get('content-type') || 'application/octet-stream',
+  }
+}

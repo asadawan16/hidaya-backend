@@ -109,7 +109,11 @@ export const PERMISSIONS = {
   // never by a default role — see USER_GRANTABLE_PERMISSIONS below.
   // whatsapp.send is legacy: it gated the old wa.me link tab on Notices, which
   // the real reminder replaced. Kept so existing role documents stay valid.
-  whatsapp: ['whatsapp.send', 'whatsapp.manage', 'whatsapp.reminder'],
+  // whatsapp.chat opens /portal/whatsapp-chats — staff reply to parents as the
+  // academy, never see a contact's number, and messages about fees are hidden
+  // from them. whatsapp.inbox lifts both limits (numbers, fee messages,
+  // templates, photos/documents) — it only matters together with whatsapp.chat.
+  whatsapp: ['whatsapp.send', 'whatsapp.manage', 'whatsapp.reminder', 'whatsapp.chat', 'whatsapp.inbox'],
 
   // Expense management
   expense: ['expense.read', 'expense.manage'],
@@ -199,6 +203,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'leave.read', 'leave.review',
     'student_progress.read',
     'demo.read', 'demo.manage',
+    'whatsapp.chat',
   ],
 
   coordinator: [
@@ -212,7 +217,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'complaint.read', 'complaint.create',
     'report.read', 'report.generate',
     'liveboard.view', 'chat.use',
-    'whatsapp.send',
+    'whatsapp.send', 'whatsapp.chat',
     'finance.read', 'revenue.read',
     'staff.read',
     // Read-only billing surface (matches the pre-split finance.read access)
@@ -245,6 +250,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read', 'advance.request',
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
+    'whatsapp.chat',
   ],
 
   qcm: [
@@ -260,6 +266,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read', 'advance.request',
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
+    'whatsapp.chat',
   ],
 
   tutor: [

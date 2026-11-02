@@ -60,6 +60,10 @@ export function initSocket(server) {
     if (perms.has('liveboard.view')) {
       socket.join('live-board')
     }
+    // WhatsApp Chats: content-free "this chat changed" pings (utils/whatsappChats.js)
+    if (perms.has('whatsapp.chat')) {
+      socket.join('whatsapp-chats')
+    }
 
     // ── Presence ──
     const wasOffline = !onlineCounts.has(socket.userId)
