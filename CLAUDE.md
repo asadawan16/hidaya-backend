@@ -8,12 +8,25 @@ Hidaya Online — a full-stack web application for an online Quran learning acad
 
 This root folder is **not** a git repository — `hidayah-frontend/` and `hidayah-backend/` each are, separately. Run `git` inside one of those, never here.
 
-### Where things stand (Nov 2026) — read this first
-Two big features were built in the first days of Nov 2026, each by its own Claude session working in parallel (they coordinated by message and staged files by explicit path — never `git add -A` while another session has work in progress):
+### Where things stand (4 Nov 2026) — read this first
+Two big features were built in the first days of Nov 2026, each by its own Claude session working in parallel (they coordinated by message and staged files by explicit path — never `git add -A` while another session has work in progress). Everything below is committed and pushed to `main` in both repos.
 
-- **WhatsApp** (details: *WhatsApp Cloud API* below, and `docs/WHATSAPP-PROGRESS.md`). Meta App Review approved 31 Oct 2026. Part 01 (connect the number, two-way messaging, templates, phone sync) done; Part 02 (tutor class reminders) and Part 03 (staff chat with hidden numbers + fee filter, admin inbox, per-person access levels) built and pushed. **Production still needs:** `node scripts/migrate-add-whatsapp-chat-perms.mjs --apply`, then each person's level set at `/portal/whatsapp` → Team access, and reminder access per tutor. Error 131042 = no payment method on Meta's business portfolio.
-- **English Coach** (`/portal/english-coach`, details: *English Coach* below). Spoken role-play practice for tutors with an AI character, marked against IELTS/CEFR-style descriptors. Built for the client (sold at PKR 8,000). Pushed and working against the live free APIs. **Production still needs:** `GROQ_API_KEY` + `GEMINI_API_KEY` (and optional `GROQ_API_KEYS` / `GEMINI_API_KEYS` backups) on Render, then `node scripts/migrate-add-coach-perms.mjs --apply` and `node scripts/migrate-coach-add-3min.mjs --apply`. Both migrations were already applied to the test database.
-- **Which database `hidayah-backend/.env` points at changes.** In Nov 2026 it was switched from production (`…yzyvei2…` cluster) to a TEST cluster (`…tl4xg…`, db `hidayah`, demo accounts `*@hidaya.com` / `Demo@123`). Check `MONGODB_URI` before running any `--apply` script or starting a server. Smoke tests always use their own throwaway database.
+- **`hidayah-backend/.env` points at PRODUCTION** (`…yzyvei2…` cluster, db `test` — real client data). It was on a TEST cluster (`…tl4xg…`, db `hidayah`, demo accounts `*@hidaya.com` / `Demo@123`) for a few days and was switched back on 4 Nov; it may flip again. Print the host before any `--apply` script, and don't start the server locally against it (its background jobs write). Smoke tests are safe either way: each creates and drops its own throwaway database on whatever cluster the URI names.
+- **WhatsApp** (details: *WhatsApp Cloud API* below, and `docs/WHATSAPP-PROGRESS.md`). Meta App Review approved 31 Oct 2026. Built and pushed:
+  - Part 01: connect the number, two-way messaging, templates, phone sync.
+  - Part 02: tutor class reminders.
+  - Part 03: staff chat with hidden numbers and a fee filter, the admin inbox, per-person access levels.
+  - Since then: the `/portal/whatsapp` page redesigned for non-technical users, plain-English Meta errors, send-to-student, and archive / remove-from-portal on WhatsApp Chats.
+
+  **Production state, deliberately:**
+  - WhatsApp is **locked to the super admin**: every `whatsapp.*` permission was pulled from all other roles on 4 Nov at the client's request. So do **not** run `migrate-add-whatsapp-chat-perms.mjs --apply` there — it would give the admin role the full inbox. Re-seeding the default roles would do the same, since `DEFAULT_ROLE_PERMISSIONS.admin` includes the inbox.
+  - The number is **disconnected**. It had been onboarded under the developer's own "calcite" business. Re-onboarding under the client's business portfolio (3277320135614426) fails inside Meta's Embedded Signup with "isn't a valid Business ID (#1690130)". Already ruled out: admin rights, the app being Live, a fresh window. Unresolved; next steps would be removing the number from the old WABA, or a Meta support ticket.
+  - The API Setup test number's 24-hour token (`WHATSAPP_ACCESS_TOKEN`) had expired.
+  - Error 131042 = no payment method on Meta's business portfolio.
+- **English Coach** (`/portal/english-coach`, details: *English Coach* below). Spoken role-play practice with an AI character, marked against IELTS/CEFR-style descriptors and Hidaya's own house rules. Built for the client (sold at PKR 8,000). It now has 14 scenarios built from the academy's training documents, 3 of them for managers only. **Production state:**
+  - Coach permissions were applied on 4 Nov to admin, principal, coordinator, qci and qcm, but **not to tutors**. The client will switch tutors on later from the Roles page (`coach.practice` only — never `coach.manager`). `migrate-add-coach-perms.mjs --skip=tutor` exists for exactly this.
+  - Still needed on Render: `GROQ_API_KEY` + `GEMINI_API_KEY`, optionally with `GROQ_API_KEYS` / `GEMINI_API_KEYS` backups. Without them the coach shows "not set up".
+  - Optional: `node scripts/migrate-coach-add-3min.mjs --apply` to offer 3-minute calls.
 
 ### Repository layout
 - `hidayah-frontend/` — React SPA (public site + admin + portal). Has its own `CLAUDE.md`.
@@ -84,7 +97,9 @@ Frontend uses only `VITE_API_URL` (defaults to `http://localhost:5000/api`).
 
 **Frontend:** React 19, React Router v7 (BrowserRouter), Vite 8, Tailwind CSS v4 (via `@tailwindcss/vite` plugin — no tailwind.config.js), Framer Motion, GSAP + ScrollTrigger, Lucide React, Chart.js + react-chartjs-2, Socket.IO client. Marketing routes are prerendered to static HTML at build time (see SEO below). Three.js was removed — it only drew a login background.
 
-**Backend:** Express 4 (ES modules), Mongoose 8 / MongoDB, JWT auth (jsonwebtoken + bcryptjs), Nodemailer (SMTP), Mastercard Payment Gateway Integration, Socket.IO, Helmet + CORS + express-rate-limit, AWS S3 (blog images), otplib + qrcode (MFA/TOTP)
+**Backend:** Express 4 (ES modules), Mongoose 8 / MongoDB, JWT auth (jsonwebtoken + bcryptjs), Nodemailer 10 (SMTP; needs Node 20+), Mastercard Payment Gateway Integration, Socket.IO, Helmet + CORS + express-rate-limit, AWS S3 (blog images), otplib + qrcode (MFA/TOTP)
+
+> **Dependencies (security pass, Nov 2026):** `xlsx` is installed from SheetJS's own CDN (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`) because fixed versions are no longer published to npm; `package.json` has `overrides.qs` so Express's bundled `qs` is patched. `npm audit` leaves 3 moderate findings in archiver → readdir-glob → minimatch: npm's only fix is downgrading archiver 8 → 4, and the issue needs `glob()`, which the data export never calls — leave them. Don't run `npm audit fix --force`.
 
 ## Architecture
 
