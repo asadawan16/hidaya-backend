@@ -12,6 +12,8 @@
 //
 //   node scripts/migrate-add-coach-perms.mjs           # dry run (no writes)
 //   node scripts/migrate-add-coach-perms.mjs --apply   # write changes
+//   node scripts/migrate-add-coach-perms.mjs --apply --skip=tutor   # leave some roles out
+//     (e.g. switch tutors on later from the Roles page)
 import 'dotenv/config'
 import mongoose from 'mongoose'
 import Role from '../models/Role.js'
@@ -19,6 +21,7 @@ import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from '../config/permissions.js'
 
 const COACH = PERMISSIONS.coach
 const APPLY = process.argv.includes('--apply')
+const SKIP = (process.argv.find(a => a.startsWith('--skip=')) || '').slice(7).split(',').map(s => s.trim()).filter(Boolean)
 
 await mongoose.connect(process.env.MONGODB_URI)
 console.log(`Connected. Mode: ${APPLY ? 'APPLY' : 'DRY RUN (no writes)'}\n`)
@@ -27,6 +30,7 @@ const roles = await Role.find({ key: { $in: Object.keys(DEFAULT_ROLE_PERMISSIONS
 let changed = 0
 
 for (const role of roles) {
+  if (SKIP.includes(role.key)) { console.log(`SKIP    ${role.key} — left out (--skip)`); continue }
   const wanted = (DEFAULT_ROLE_PERMISSIONS[role.key] || []).filter(p => COACH.includes(p))
   const missing = wanted.filter(p => !(role.permissions || []).includes(p))
   if (!wanted.length) { console.log(`KEEP    ${role.key} — no English Coach permissions by default`); continue }
