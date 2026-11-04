@@ -567,6 +567,12 @@ export async function listSessions(req, res) {
     const from = parseDate(req.query.from)
     const to = parseDate(req.query.to, true)
     if (from || to) q.createdAt = { ...(from && { $gte: from }), ...(to && { $lte: to }) }
+    const term = String(req.query.q || '').trim().slice(0, 60)
+    if (term) {
+      const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      const users = await User.find({ $or: [{ displayName: re }, { email: re }] }).select('_id').limit(200).lean()
+      q.$or = [{ userId: { $in: users.map(u => u._id) } }, { 'scenario.title': re }]
+    }
 
     const sortable = { date: 'createdAt', score: 'result.overall' }
     const [field, dir] = String(req.query.sort || 'date:desc').split(':')
@@ -597,9 +603,18 @@ export async function listPeople(req, res) {
 
 export async function getOverview(req, res) {
   try {
+    // The period: ?from&to (the Team tab's Day / Week / Month filter), ?all=1 for
+    // all time, or the older ?days=N rolling window
     const days = Math.min(365, Math.max(7, parseInt(req.query.days, 10) || 90))
-    const since = new Date(Date.now() - days * DAY_MS)
-    const scored = { status: 'scored', createdAt: { $gte: since } }
+    const from = parseDate(req.query.from)
+    const to = parseDate(req.query.to, true)
+    const all = req.query.all === '1'
+    const scored = { status: 'scored' }
+    if (from || to) scored.createdAt = { ...(from && { $gte: from }), ...(to && { $lte: to }) }
+    else if (!all) scored.createdAt = { $gte: new Date(Date.now() - days * DAY_MS) }
+    // Bars per day when the period is a month or shorter, per week otherwise
+    const spanDays = from && to ? (to - from) / DAY_MS : all ? Infinity : days
+    const bucket = spanDays <= 62 ? 'day' : 'week'
     const areas = ['fluency', 'grammar', 'vocabulary', 'professionalism', 'clarity', 'handling']
 
     const [totals, perUser, weekly, byScenario, calibration, bands] = await Promise.all([
@@ -638,7 +653,7 @@ export async function getOverview(req, res) {
         { $match: scored },
         {
           $group: {
-            _id: { $dateTrunc: { date: '$createdAt', unit: 'week', timezone: 'Asia/Karachi', startOfWeek: 'monday' } },
+            _id: { $dateTrunc: { date: '$createdAt', unit: bucket, timezone: 'Asia/Karachi', ...(bucket === 'week' ? { startOfWeek: 'monday' } : {}) } },
             tests: { $sum: 1 },
             avg: { $avg: '$result.overall' },
           },
@@ -668,6 +683,8 @@ export async function getOverview(req, res) {
 
     res.json({
       days,
+      range: { from: from || scored.createdAt?.$gte || null, to: to || null, all },
+      bucket,
       totals: {
         tests: t.tests || 0,
         testers: t.testers?.length || 0,
