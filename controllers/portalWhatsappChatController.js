@@ -6,7 +6,7 @@ import { emitToRole } from '../config/socket.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { contactLabelFor } from '../utils/waNumber.js'
 import { isFeeMessage, mentionsFees } from '../utils/feeFilter.js'
-import { UNREAD, touchChat, ensureChats, replyWindow } from '../utils/whatsappChats.js'
+import { UNREAD, touchChat, ensureChats, replyWindow, visibleSince, announceChat } from '../utils/whatsappChats.js'
 import { chatLevel, chatScope, inScope } from '../utils/whatsappAccess.js'
 import { resolveSender } from './portalWhatsappController.js'
 import { findStudentIdByPhone } from './whatsappWebhookController.js'
@@ -136,9 +136,13 @@ export async function listChats(req, res) {
   try {
     await ensureChats()
 
-    const and = []
+    // A chat removed from the portal has no lastMessageAt until something new arrives
+    const and = [{ lastMessageAt: { $ne: null } }]
     const scope = await chatScope(req)
-    if (scope) and.push({ studentId: { $in: scope.map(id => new mongoose.Types.ObjectId(id)) } })
+    const scoped = scope ? { studentId: { $in: scope.map(id => new mongoose.Types.ObjectId(id)) } } : null
+    if (scoped) and.push(scoped)
+    // Archived chats live under their own filter and nowhere else
+    and.push(filter === 'archived' ? { archivedAt: { $ne: null } } : { archivedAt: null })
     if (filter === 'students') and.push({ studentId: { $ne: null } })
     if (filter === 'unread') and.push({ unreadCount: { $gt: 0 } })
 
@@ -161,11 +165,15 @@ export async function listChats(req, res) {
       and.push({ $or: [{ lastMessageAt: { $lt: at } }, { lastMessageAt: at, _id: { $lt: new mongoose.Types.ObjectId(cId) } }] })
     }
 
-    const rows = await WhatsappChat.find(and.length ? { $and: and } : {})
+    const [rows, archivedCount] = await Promise.all([
+      WhatsappChat.find({ $and: and })
       .sort({ lastMessageAt: -1, _id: -1 }).limit(PAGE + 1)
       .populate('studentId', STUDENT_FIELDS)
       .populate({ path: 'lastMessage', populate: { path: 'sentBy', select: 'displayName email' } })
-      .lean()
+      .lean(),
+      // For the "Archived" filter's count (first page only — it doesn't change while paging)
+      cursor ? null : WhatsappChat.countDocuments({ lastMessageAt: { $ne: null }, archivedAt: { $ne: null }, ...(scoped || {}) }),
+    ])
     const hasMore = rows.length > PAGE
     const page = rows.slice(0, PAGE)
     const lastRow = page[page.length - 1]
@@ -197,6 +205,7 @@ export async function listChats(req, res) {
       nextCursor: hasMore && lastRow ? `${new Date(lastRow.lastMessageAt).getTime()}_${lastRow._id}` : null,
       view: full ? 'full' : 'staff',
       scope: scope ? 'own' : 'all',
+      archivedCount,
     })
   } catch (err) {
     console.error('List WhatsApp chats error:', err)
@@ -230,7 +239,7 @@ export async function getChatMessages(req, res) {
     const chat = await loadChat(req, res)
     if (!chat) return
 
-    const query = { waId: chat.waId }
+    const query = { waId: chat.waId, ...visibleSince(chat) }
     if (isId(req.query.before)) {
       const pivot = await WhatsappMessage.findById(req.query.before).select('timestamp waId').lean()
       if (pivot && pivot.waId === chat.waId) {
@@ -258,6 +267,9 @@ export async function getChatMessages(req, res) {
         ...describeChat(chat, { full, student, unread }),
         canSendTemplates: full,
         canSendMedia: full,
+        // Archive / remove from the portal: team-wide, so the full inbox only
+        canManage: full,
+        archived: Boolean(chat.archivedAt),
       },
       messages,
       hasMore,
@@ -273,7 +285,7 @@ export async function getChatMessages(req, res) {
  * newest one (best effort — WhatsApp marks everything before it read too).
  */
 async function markChatRead(chat, full) {
-  const unread = await WhatsappMessage.find({ waId: chat.waId, ...UNREAD })
+  const unread = await WhatsappMessage.find({ waId: chat.waId, ...UNREAD, ...visibleSince(chat) })
     .select('_id wamid source timestamp text templateName media.filename').lean()
   const readable = full ? unread : unread.filter(m => !isFeeMessage(m))
   if (!readable.length) return 0
@@ -477,8 +489,10 @@ export async function getChatMedia(req, res) {
   const full = fullView(req)
   if (!isId(req.params.messageId)) return res.status(404).json({ error: 'File not found' })
   try {
-    const m = await WhatsappMessage.findById(req.params.messageId).select('waId media text templateName').lean()
+    const m = await WhatsappMessage.findById(req.params.messageId).select('waId media text templateName timestamp').lean()
     if (!m?.media?.id) return res.status(404).json({ error: 'File not found' })
+    const owner = await WhatsappChat.findOne({ waId: m.waId }).select('clearedAt').lean()
+    if (owner?.clearedAt && m.timestamp <= owner.clearedAt) return res.status(404).json({ error: 'File not found' })
     const scope = await chatScope(req)
     if (scope && !(await WhatsappChat.exists({ waId: m.waId, studentId: { $in: scope } }))) {
       return res.status(404).json({ error: 'File not found' })
@@ -524,6 +538,50 @@ export async function listChatTemplates(_req, res) {
     })
   } catch (err) {
     console.error('List WhatsApp chat templates error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ── Archive / remove (full inbox only — both change the list for the whole team) ──
+export async function archiveChat(req, res) {
+  try {
+    const chat = await loadChat(req, res)
+    if (!chat) return
+    const archived = req.body?.archived !== false
+    await WhatsappChat.updateOne({ _id: chat._id }, {
+      $set: archived ? { archivedAt: new Date(), archivedBy: req.userId } : { archivedAt: null, archivedBy: null },
+    })
+    announceChat(chat._id)
+    res.json({ archived })
+  } catch (err) {
+    console.error('Archive WhatsApp chat error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+/*
+ * Remove a chat from the portal. Nothing is deleted from WhatsApp, the phone
+ * or the database: the chat leaves every portal list and its messages stop
+ * being shown, up to now. A new message brings the chat back with only what
+ * comes after. Unread messages in it are marked read so they stop counting.
+ */
+export async function removeChat(req, res) {
+  try {
+    const chat = await loadChat(req, res)
+    if (!chat) return
+    const now = new Date()
+    await WhatsappMessage.updateMany({ waId: chat.waId, ...UNREAD, timestamp: { $lte: now } }, { $set: { readByStaffAt: now } })
+    await WhatsappChat.updateOne({ _id: chat._id }, {
+      $set: { clearedAt: now, clearedBy: req.userId, archivedAt: null, archivedBy: null },
+    })
+    await touchChat(chat.waId)
+    await logActivity({
+      level: 'info', category: 'portal', action: 'whatsapp_chat_removed',
+      message: `WhatsApp chat with ${chat.waId} removed from the portal`, req,
+    })
+    res.json({ removed: true })
+  } catch (err) {
+    console.error('Remove WhatsApp chat error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

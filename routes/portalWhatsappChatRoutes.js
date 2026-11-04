@@ -3,6 +3,7 @@ import { portalAuth } from '../middleware/portalAuth.js'
 import { denyStudentAccounts } from '../middleware/studentScope.js'
 import {
   listChats, getChatMessages, readChat, sendChatMessage, sendChatMedia, getChatMedia, listChatTemplates, MEDIA_UPLOAD_LIMIT,
+  archiveChat, removeChat,
 } from '../controllers/portalWhatsappChatController.js'
 import { chatLevel } from '../utils/whatsappAccess.js'
 
@@ -22,6 +23,8 @@ router.get('/media/:messageId', getChatMedia)
 router.get('/:id/messages', getChatMessages)
 router.post('/:id/read', readChat)
 router.post('/:id/messages', sendChatMessage)
+router.post('/:id/archive', inboxOnly, archiveChat)
+router.delete('/:id', inboxOnly, removeChat)
 // The file is the request body; express.json() upstream leaves non-JSON types alone
 router.post('/:id/media', inboxOnly, express.raw({ type: () => true, limit: MEDIA_UPLOAD_LIMIT }), sendChatMedia)
 

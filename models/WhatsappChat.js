@@ -24,6 +24,17 @@ const whatsappChatSchema = new mongoose.Schema({
   lastInboundAt: { type: Date, default: null },
   // Inbound messages nobody on the team has read (history replays excluded)
   unreadCount: { type: Number, default: 0 },
+
+  // Archived: out of the main list, under "Archived". Shared by the whole team,
+  // and undone by itself when the contact writes again (utils/whatsappChats.js).
+  archivedAt: { type: Date, default: null },
+  archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  // Removed from the portal: messages up to this moment are no longer shown
+  // anywhere in the portal (they stay in the database, on the phone and on
+  // WhatsApp). The row is kept — it is what remembers the cut-off — and the
+  // chat comes back, empty of the old messages, when a new one arrives.
+  clearedAt: { type: Date, default: null },
+  clearedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 }, { timestamps: true })
 
 whatsappChatSchema.index({ lastMessageAt: -1 })

@@ -35,7 +35,10 @@ import { chatLevel } from '../utils/whatsappAccess.js'
 import { processWebhookPayload } from '../controllers/whatsappWebhookController.js'
 import {
   listChats, getChatMessages, readChat, sendChatMessage, sendChatMedia, getChatMedia, listChatTemplates,
+  archiveChat, removeChat,
 } from '../controllers/portalWhatsappChatController.js'
+import { listMessages } from '../controllers/portalWhatsappController.js'
+import chatRouter from '../routes/portalWhatsappChatRoutes.js'
 import { rebuildWhatsappChats } from '../utils/whatsappChats.js'
 import { mentionsFees, isFeeMessage } from '../utils/feeFilter.js'
 
@@ -390,6 +393,53 @@ try {
   await User.updateOne({ _id: tutorUser._id }, { $addToSet: { extraPermissions: 'whatsapp.reminder' } })
   await call(setTeamAccess, { ...admin, body: { userIds: [String(tutorUser._id)], level: 'own' } })
   ok((await User.findById(tutorUser._id).lean()).extraPermissions.sort().join() === 'whatsapp.chat_own,whatsapp.reminder', 'changing the level keeps their reminder grant')
+
+  // ── Archive and remove from the portal ────────────────────────────────────
+  console.log('\nArchive and remove')
+  const leadId = String((await WhatsappChat.findOne({ waId: LEAD }).lean())._id)
+  const inList = async (req, query = {}) => (await call(listChats, { ...req, query })).body.chats.some(c => String(c._id) === leadId)
+
+  // The route guard: only the full inbox may archive or remove
+  const guardOf = (path, method) => chatRouter.stack.find(l => l.route?.path === path && l.route.methods[method])?.route.stack[0].handle
+  const blocked = async (guard, req) => { let status = 200; let passed = false; await guard(req, { status(c) { status = c; return this }, json() { return this } }, () => { passed = true }); return !passed && status === 403 }
+  ok(await blocked(guardOf('/:id/archive', 'post'), staff) && await blocked(guardOf('/:id', 'delete'), staff), 'staff (all chats) cannot archive or remove')
+  ok(!(await blocked(guardOf('/:id/archive', 'post'), admin)), 'the full inbox can')
+  r = await call(getChatMessages, { ...staff, params: { id: leadId } })
+  ok(r.body.chat.canManage === false, 'staff are not offered the actions')
+
+  ok(await inList(admin) && await inList(staff), 'before: the chat is in everyone\'s list')
+  r = await call(archiveChat, { ...admin, params: { id: leadId }, body: { archived: true } })
+  ok(r.body.archived === true && !(await inList(admin)) && !(await inList(staff)), 'archived: gone from the main list, for everyone')
+  r = await call(listChats, { ...admin, query: { filter: 'archived' } })
+  ok(r.body.chats.length === 1 && String(r.body.chats[0]._id) === leadId && r.body.archivedCount === 1, 'listed under Archived, with a count')
+  ok((await call(listChats, admin)).body.archivedCount === 1, 'the main list reports the archived count too')
+  r = await call(getChatMessages, { ...admin, params: { id: leadId } })
+  ok(r.body.chat.archived === true && r.body.chat.canManage === true && r.body.messages.length > 0, 'an archived chat still opens, marked archived')
+
+  await inbound(LEAD, 'Imran', [txt(LEAD, 'Hello? Any update on Tajweed classes?')])
+  ok(await inList(admin) && !(await WhatsappChat.findById(leadId).lean()).archivedAt, 'a new message from the contact un-archives it')
+  await call(archiveChat, { ...admin, params: { id: leadId }, body: { archived: true } })
+  await call(archiveChat, { ...admin, params: { id: leadId }, body: { archived: false } })
+  ok(await inList(admin), 'unarchive by hand')
+
+  const leadRows = await WhatsappMessage.countDocuments({ waId: LEAD })
+  r = await call(removeChat, { ...admin, params: { id: leadId } })
+  ok(r.body.removed === true && !(await inList(admin)) && !(await inList(admin, { filter: 'archived' })), 'removed: in no list at all')
+  ok(await WhatsappMessage.countDocuments({ waId: LEAD }) === leadRows, '…but nothing is deleted from the database')
+  ok(await WhatsappMessage.countDocuments({ waId: LEAD, direction: 'in', readByStaffAt: null }) === 0, 'its unread messages stop counting')
+  r = await call(getChatMessages, { ...admin, params: { id: leadId } })
+  ok(r.body.messages.length === 0, 'opening it shows none of the old messages')
+  r = await call(listMessages, { ...admin, query: { limit: 100 } })
+  ok(!r.body.messages.some(m => m.waId === LEAD), 'the WhatsApp page\'s latest conversations leave them out too')
+  await rebuildWhatsappChats()
+  ok(!(await inList(admin)), 'a chat-list rebuild does not bring it back')
+
+  await inbound(LEAD, 'Imran', [txt(LEAD, 'Assalamu alaikum, I would like to book a trial')])
+  r = await call(listChats, admin)
+  const back = r.body.chats.find(c => String(c._id) === leadId)
+  ok(back && back.unread === 1, 'a new message brings the chat back, with just that one unread')
+  r = await call(getChatMessages, { ...admin, params: { id: leadId } })
+  ok(r.body.messages.length === 1 && /book a trial/.test(r.body.messages[0].text), '…showing only what came after the removal')
 } catch (err) {
   fail++
   console.error(err)

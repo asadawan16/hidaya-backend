@@ -1,5 +1,6 @@
 import WhatsappConnection from '../models/WhatsappConnection.js'
 import WhatsappMessage from '../models/WhatsappMessage.js'
+import WhatsappChat from '../models/WhatsappChat.js'
 import { emitToRole } from '../config/socket.js'
 import { findStudentIdByPhone } from './whatsappWebhookController.js'
 import { encryptSecret, decryptSecret } from '../utils/totp.js'
@@ -226,8 +227,11 @@ function describeSender(sender) {
 export async function listMessages(req, res) {
   try {
     const limit = Math.min(Number(req.query.limit) || 30, 100)
+    // Chats removed from the portal: their messages up to the cut-off stay hidden here too
+    const cleared = await WhatsappChat.find({ clearedAt: { $ne: null } }).select('waId clearedAt').lean()
+    const visible = cleared.length ? { $nor: cleared.map(c => ({ waId: c.waId, timestamp: { $lte: c.clearedAt } })) } : {}
     const [messages, sent, received, read, failed] = await Promise.all([
-      WhatsappMessage.find({})
+      WhatsappMessage.find(visible)
         .sort({ timestamp: -1 }).limit(limit)
         .select('wamid direction source waId contactName type text templateName status statusErrors timestamp sentBy studentId')
         .populate('sentBy', 'displayName email').populate('studentId', 'name')
