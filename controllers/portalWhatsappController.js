@@ -4,7 +4,9 @@ import { emitToRole } from '../config/socket.js'
 import { findStudentIdByPhone } from './whatsappWebhookController.js'
 import { encryptSecret, decryptSecret } from '../utils/totp.js'
 import { logActivity } from '../utils/activityLogger.js'
-import { toWaId } from '../utils/waNumber.js'
+import Student from '../models/Student.js'
+import { toWaId, resolveStudentRecipient } from '../utils/waNumber.js'
+import { plainWhatsappError, plainFailure } from '../utils/whatsappErrors.js'
 import { touchChat } from '../utils/whatsappChats.js'
 import {
   META_APP_ID, WHATSAPP_ES_CONFIG_ID, GRAPH_VERSION, GraphError,
@@ -206,6 +208,15 @@ export async function resolveSender() {
   return null
 }
 
+// Meta's error in plain words. An expired token means something different for
+// the API Setup test number (its token lives in the server's settings and
+// lasts a day) than for the connected number (reconnect it on the page).
+const TEST_TOKEN_EXPIRED = "Meta's test number has stopped working because its access key expired (they last 24 hours). Ask your developer for a new one, or connect the academy's own number."
+export function senderError(err, sender) {
+  if (Number(err.code) === 190 && sender?.source === 'test') return TEST_TOKEN_EXPIRED
+  return plainWhatsappError(err.code, err.message)
+}
+
 function describeSender(sender) {
   if (!sender) return { source: 'none' }
   const { token, ...rest } = sender
@@ -215,7 +226,7 @@ function describeSender(sender) {
 export async function listMessages(req, res) {
   try {
     const limit = Math.min(Number(req.query.limit) || 30, 100)
-    const [messages, sent, received, read] = await Promise.all([
+    const [messages, sent, received, read, failed] = await Promise.all([
       WhatsappMessage.find({})
         .sort({ timestamp: -1 }).limit(limit)
         .select('wamid direction source waId contactName type text templateName status statusErrors timestamp sentBy studentId')
@@ -224,26 +235,52 @@ export async function listMessages(req, res) {
       WhatsappMessage.countDocuments({ direction: 'out' }),
       WhatsappMessage.countDocuments({ direction: 'in' }),
       WhatsappMessage.countDocuments({ direction: 'out', status: 'read' }),
+      WhatsappMessage.countDocuments({ direction: 'out', status: 'failed' }),
     ])
-    res.json({ messages, stats: { sent, received, read } })
+    for (const m of messages) if (m.status === 'failed') m.failedReason = plainFailure(m)
+    res.json({ messages, stats: { sent, received, read, failed } })
   } catch (err) {
     console.error('List WhatsApp messages error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
 
+// Who a student's message goes to: the same order class reminders use
+async function studentRecipient(studentId) {
+  if (!/^[a-f\d]{24}$/i.test(String(studentId))) return { error: 'Pick a student' }
+  const student = await Student.findById(studentId).select('name country guardians whatsappNumber phone').lean()
+  if (!student) return { error: 'That student no longer exists' }
+  const { recipient, reason } = resolveStudentRecipient(student)
+  if (!recipient) {
+    return { error: reason === 'invalid'
+      ? `The number on ${student.name}'s record isn't in a form WhatsApp can use. Fix it on the student's page.`
+      : `${student.name} has no WhatsApp number on their record yet. Add one on the student's page.` }
+  }
+  return { waId: recipient.waId, label: recipient.label, student }
+}
+
 export async function send(req, res) {
-  const { to, type = 'text', text, templateName, language = 'en_US', params } = req.body || {}
-  const waId = toWaId(to)
-  if (!waId) return res.status(400).json({ error: 'Enter the number in international format, e.g. +92 300 1234567' })
+  const { to, studentId, type = 'text', text, templateName, language = 'en_US', params } = req.body || {}
+  let waId = ''
+  let recipient = null
+  if (studentId) {
+    const found = await studentRecipient(studentId)
+    if (found.error) return res.status(400).json({ error: found.error })
+    waId = found.waId
+    recipient = { label: found.label, studentName: found.student.name }
+  } else {
+    waId = toWaId(to)
+    if (!waId) return res.status(400).json({ error: 'Enter the number in international format, e.g. +92 300 1234567' })
+  }
   if (!['text', 'template'].includes(type)) return res.status(400).json({ error: 'Unknown message type' })
   if (type === 'text' && (typeof text !== 'string' || !text.trim())) return res.status(400).json({ error: 'Message text is required' })
   if (type === 'template' && (typeof templateName !== 'string' || !/^[a-z0-9_]+$/.test(templateName))) {
     return res.status(400).json({ error: 'Pick a template' })
   }
 
+  let sender = null
   try {
-    const sender = await resolveSender()
+    sender = await resolveSender()
     if (!sender) return res.status(503).json({ error: 'No WhatsApp number is connected and no test number is configured' })
 
     const values = Array.isArray(params) ? params.map(v => String(v ?? '').trim()).filter(Boolean) : []
@@ -261,27 +298,28 @@ export async function send(req, res) {
     const saved = await WhatsappMessage.create({
       wamid, direction: 'out', source: 'live', waId, phoneNumberId: sender.phoneNumberId,
       type, text: type === 'text' ? text.trim() : values.join(' · '), templateName: type === 'template' ? templateName : '',
-      status: 'accepted', timestamp: new Date(), sentBy: req.userId, studentId: await findStudentIdByPhone(waId),
+      status: 'accepted', timestamp: new Date(), sentBy: req.userId, studentId: recipient ? studentId : await findStudentIdByPhone(waId),
     })
     const event = { _id: saved._id, wamid, direction: 'out', source: 'live', waId, type, text: saved.text, timestamp: saved.timestamp }
     for (const role of ['super_admin', 'admin']) emitToRole(role, 'whatsapp_message', event)
     await touchChat(waId)
     await logActivity({ level: 'info', category: 'portal', action: 'whatsapp_sent', message: `WhatsApp ${type} sent to ${waId}`, req })
-    res.status(201).json({ message: saved })
+    res.status(201).json({ message: saved, recipient })
   } catch (err) {
-    if (err instanceof GraphError) return res.status(502).json({ error: err.message })
+    if (err instanceof GraphError) return res.status(502).json({ error: senderError(err, sender), code: err.code })
     console.error('Send WhatsApp error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
 
 export async function getTemplates(_req, res) {
+  let sender = null
   try {
-    const sender = await resolveSender()
+    sender = await resolveSender()
     if (!sender) return res.json({ templates: [] })
     res.json({ templates: await listTemplates(sender.wabaId, sender.token) })
   } catch (err) {
-    if (err instanceof GraphError) return res.status(502).json({ error: err.message })
+    if (err instanceof GraphError) return res.status(502).json({ error: senderError(err, sender), code: err.code })
     console.error('List WhatsApp templates error:', err)
     res.status(500).json({ error: 'Server error' })
   }
@@ -295,6 +333,7 @@ export async function addTemplate(req, res) {
     return res.status(400).json({ error: 'Template name: lowercase letters, numbers and underscores only' })
   }
   if (!TEMPLATE_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Category must be Utility or Marketing' })
+  if (!/^[a-z]{2,3}(_[A-Z]{2})?$/.test(String(language))) return res.status(400).json({ error: 'Unknown template language' })
   if (typeof body !== 'string' || !body.trim() || body.length > 1024) {
     return res.status(400).json({ error: 'Message body is required (max 1024 characters)' })
   }
@@ -306,8 +345,9 @@ export async function addTemplate(req, res) {
     return res.status(400).json({ error: `Give an example value for each of the ${vars.length} variable(s)` })
   }
 
+  let sender = null
   try {
-    const sender = await resolveSender()
+    sender = await resolveSender()
     if (!sender) return res.status(503).json({ error: 'No WhatsApp number is connected and no test number is configured' })
     const component = { type: 'BODY', text: body.trim() }
     if (vars.length) component.example = { body_text: [ex.slice(0, vars.length)] }
@@ -317,7 +357,7 @@ export async function addTemplate(req, res) {
     await logActivity({ level: 'info', category: 'portal', action: 'whatsapp_template_created', message: `WhatsApp template ${name} submitted`, req })
     res.status(201).json({ template: { id: created.id, name, category: created.category || category, status: created.status || 'PENDING', language } })
   } catch (err) {
-    if (err instanceof GraphError) return res.status(502).json({ error: err.message })
+    if (err instanceof GraphError) return res.status(502).json({ error: senderError(err, sender), code: err.code })
     console.error('Create WhatsApp template error:', err)
     res.status(500).json({ error: 'Server error' })
   }

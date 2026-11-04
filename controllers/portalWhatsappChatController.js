@@ -13,6 +13,7 @@ import { findStudentIdByPhone } from './whatsappWebhookController.js'
 import {
   GraphError, sendMessage, listTemplates, markMessageRead, uploadMedia, downloadMedia,
 } from '../services/whatsappGraph.js'
+import { plainFailure, plainWhatsappError } from '../utils/whatsappErrors.js'
 
 /*
  * /api/portal/whatsapp-chats — the team's WhatsApp, as the academy.
@@ -122,7 +123,7 @@ function describeMessage(m, { full, bodies }) {
     media: m.media?.id || m.media?.mimeType
       ? { mimeType: m.media.mimeType || '', filename: m.media.filename || '', available: Boolean(m.media.id) }
       : null,
-    error: m.status === 'failed' ? (m.statusErrors?.[0]?.title || 'Not delivered') : '',
+    error: m.status === 'failed' ? plainFailure(m) : '',
   }
 }
 
@@ -306,7 +307,7 @@ const RE_ENGAGEMENT = 131047
 
 function friendlySendError(err) {
   if (Number(err.code) === RE_ENGAGEMENT) return WINDOW_CLOSED
-  return err.message
+  return plainWhatsappError(err.code, err.message)
 }
 
 async function newestInboundAt(waId) {

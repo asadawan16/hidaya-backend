@@ -14,6 +14,7 @@ import { emitToRole, emitToUser } from '../config/socket.js'
 import { touchChat } from '../utils/whatsappChats.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { isStudentAccount } from '../middleware/studentScope.js'
+import { plainFailure } from '../utils/whatsappErrors.js'
 
 /*
  * WhatsApp class reminders.
@@ -163,7 +164,7 @@ function tutorView(session, reminder, delivery, now) {
     view.recipient = reminder.recipientLabel
     view.delivery = delivery?.status || (reminder.status === 'sent' ? 'accepted' : null)
     if (delivery?.status === 'failed') {
-      view.failedReason = delivery.statusErrors?.[0]?.title || 'Not delivered'
+      view.failedReason = plainFailure(delivery)
       // Meta took it but couldn't deliver (e.g. a billing problem on the
       // business account) — that isn't the class's one reminder, so it can be
       // sent again while the class window is still open
@@ -701,7 +702,7 @@ export async function listReminders(req, res) {
           waId: r.waId,
           templateName: r.templateName,
           delivery: m?.status || 'accepted',
-          failedReason: m?.status === 'failed' ? (m.statusErrors?.[0]?.title || 'Not delivered') : '',
+          failedReason: m?.status === 'failed' ? plainFailure(m) : '',
         }
       }),
       total, page, pages: Math.max(Math.ceil(total / limit), 1), stats,

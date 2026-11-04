@@ -285,7 +285,7 @@ try {
   await processWebhookPayload({ object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value: { statuses: [{ id: failedRem.wamid, status: 'failed', timestamp: ts, errors: [{ code: 131042, title: 'Business eligibility payment issue' }] }] } }] }] })
   r = await call(getReminderState, { ...req, query: { sessionIds: String(s3._id) } })
   const failedView = r.body.sessions[s3._id]
-  ok(failedView.delivery === 'failed' && failedView.failedReason === 'Business eligibility payment issue' && failedView.canSend === true, 'tutor sees "not delivered" with a way to try again')
+  ok(failedView.delivery === 'failed' && /payment method/.test(failedView.failedReason) && failedView.canSend === true, 'tutor sees "not delivered" with a way to try again')
   r = await call(sendClassReminder, { ...req, params: { sessionId: String(s3._id) } })
   const again = await ClassReminder.find({ sessionId: s3._id }).lean()
   ok(r.status === 201 && again.length === 1 && again[0].wamid !== failedRem.wamid, 'sent again: one reminder row, new message')
