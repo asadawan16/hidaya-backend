@@ -73,6 +73,11 @@ const coachSessionSchema = new mongoose.Schema({
     personaName: String, personaRole: String, initials: String,
     voice: String, lang: String, gender: String,
     goals: [String],
+    // 'tutor' | 'manager' — which house rules the call is marked against
+    audience: String,
+    group: String,
+    // Hidaya's model sentences for this situation (scorecard + examiner)
+    academyLines: [String],
   },
   difficulty: { type: String, enum: ['easy', 'normal', 'hard'], required: true },
   durationSec: { type: Number, required: true },

@@ -1,9 +1,11 @@
 // Add-only migration: grant the English Coach permissions (coach.practice,
-// coach.review, coach.manage) to the built-in roles that hold them by default
-// in config/permissions.js:
-//   super_admin, admin            practice + review + manage
-//   principal, qci, qcm           practice + review
-//   coordinator, tutor            practice
+// coach.review, coach.manage, coach.manager) to the built-in roles that hold
+// them by default in config/permissions.js:
+//   super_admin, admin            practice + review + manage + manager
+//   principal, qci, qcm           practice + review + manager
+//   coordinator                   practice + manager
+//   tutor                         practice
+// coach.manager = the manager-only scenarios; tutors never get it.
 // Custom roles and the student role are left alone (grant from the Roles page).
 // Uses $addToSet, so no existing permission or customisation is removed.
 // Idempotent. Dry run by default; pass --apply to write.

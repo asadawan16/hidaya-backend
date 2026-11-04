@@ -43,8 +43,10 @@ const BUDGET_MS = { actor: 30_000, examiner: 120_000 }
 const GONE_FOR_MS = 6 * 60 * 60_000
 
 // Biases Whisper towards keeping hesitations, so fillers can be counted.
-// Without it Whisper tidies "um, so, uh" into clean prose.
-const FILLER_PROMPT = 'Umm, let me think, uh... so, hmm, I mean, okay. Er, well, um, yes.'
+// Without it Whisper tidies "um, so, uh" into clean prose. The second half
+// teaches it the academy's everyday words, which it otherwise turns into
+// English look-alikes ("Ghunnah" → "goona", "Qaida" → "kayda").
+const FILLER_PROMPT = 'Umm, let me think, uh... so, hmm, I mean, okay. Er, well, um, yes. Assalamu alaikum, InshaAllah, MashaAllah, Alhamdulillah, JazakAllah. The Qaida, Tajweed, Madd, Ghunnah, Sukoon, Shaddah, Nazra, Hifz, Surah, Ayah, Kalimah, dua.'
 
 const list = (env, defaults) => [...new Set([...String(env || '').split(',').map(s => s.trim()).filter(Boolean), ...defaults])]
 

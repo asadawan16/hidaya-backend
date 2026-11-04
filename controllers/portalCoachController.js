@@ -39,7 +39,7 @@
 import CoachSession from '../models/CoachSession.js'
 import CoachSettings from '../models/CoachSettings.js'
 import User from '../models/User.js'
-import { COACH_SCENARIOS, DIFFICULTIES, SCENARIO_KEYS, getScenario, publicScenario } from '../config/coachScenarios.js'
+import { COACH_SCENARIOS, DIFFICULTIES, SCENARIO_KEYS, SCENARIO_GROUPS, getScenario, publicScenario, canUseScenario, audienceOf, groupOf } from '../config/coachScenarios.js'
 import { transcribe, coachAiStatus, CoachAiError, audioExtension } from '../services/coachAi.js'
 import { personaReply } from '../services/coachPersona.js'
 import { examineSession } from '../services/coachExaminer.js'
@@ -90,8 +90,11 @@ export function sessionView(s, { withTurns = true } = {}) {
       title: sc.title, summary: sc.summary, brief: sc.brief,
       personaName: sc.personaName, personaRole: sc.personaRole, initials: sc.initials,
       voice: sc.voice, lang: sc.lang, gender: sc.gender,
-      // What good handling looks like — shown with the scorecard, not before the call
+      group: sc.group, audience: sc.audience,
+      // What good handling looks like, and how Hidaya's training says it —
+      // shown with the scorecard, not before the call
       goals: ended ? (sc.goals || []) : undefined,
+      academyLines: ended ? (sc.academyLines || []) : undefined,
     },
     difficulty: s.difficulty,
     durationSec: s.durationSec,
@@ -165,7 +168,8 @@ async function orgLimitReached(settings) {
   return n >= settings.orgDailyLimit
 }
 
-const enabledScenarios = (settings) => COACH_SCENARIOS.filter(s => !(settings.disabledScenarios || []).includes(s.key))
+// Switched on in Settings AND open to this person (manager scenarios need coach.manager)
+const enabledScenarios = (settings, req) => COACH_SCENARIOS.filter(s => !(settings.disabledScenarios || []).includes(s.key) && canUseScenario(s, req.userPermissions))
 
 // ── Ending and marking ──────────────────────────────────────────────────────
 /**
@@ -298,7 +302,8 @@ export async function getConfig(req, res) {
       ready: ai.ready,
       durations: settings.durations,
       difficulties: DIFFICULTIES,
-      scenarios: enabledScenarios(settings).map(publicScenario),
+      scenarios: enabledScenarios(settings, req).map(publicScenario),
+      groups: SCENARIO_GROUPS,
       usage,
       orgLimitReached: orgFull,
       minTesterWords: settings.minTesterWords,
@@ -321,7 +326,7 @@ export async function startSession(req, res) {
     if (consent !== true) return res.status(400).json({ code: 'consent_required', error: 'Please agree to how your recording is processed first.' })
 
     const sc = getScenario(scenarioKey)
-    if (!sc || (settings.disabledScenarios || []).includes(sc.key)) return res.status(400).json({ error: 'Choose one of the available scenarios.' })
+    if (!sc || (settings.disabledScenarios || []).includes(sc.key) || !canUseScenario(sc, req.userPermissions)) return res.status(400).json({ error: 'Choose one of the available scenarios.' })
     if (!DIFFICULTIES[difficulty]) return res.status(400).json({ error: 'Choose a difficulty.' })
     const minutes = Number(durationMin)
     if (!settings.durations.includes(minutes)) return res.status(400).json({ error: 'Choose one of the available call lengths.' })
@@ -354,6 +359,7 @@ export async function startSession(req, res) {
           title: sc.title, summary: sc.summary, brief: sc.brief,
           personaName: sc.personaName, personaRole: sc.personaRole, initials: sc.initials,
           voice: sc.voice, lang: sc.lang, gender: sc.gender, goals: sc.goals,
+          audience: audienceOf(sc), group: groupOf(sc), academyLines: sc.academyLines || [],
         },
         difficulty,
         durationSec: minutes * 60,
@@ -773,7 +779,8 @@ async function settingsView(settings) {
       updatedAt: settings.updatedAt,
     },
     allowedDurations: ALLOWED_DURATIONS,
-    scenarios: COACH_SCENARIOS.map(s => ({ key: s.key, title: s.title, summary: s.summary, personaName: s.personaName })),
+    scenarios: COACH_SCENARIOS.map(s => ({ key: s.key, title: s.title, summary: s.summary, personaName: s.personaName, group: groupOf(s), audience: audienceOf(s) })),
+    groups: SCENARIO_GROUPS,
     ai: coachAiStatus(),
     last24h: day
       ? { started: day.started, scored: day.scored, failed: day.failed, audioMin: Math.round(day.audioSec / 6) / 10, tokens: day.tokens }

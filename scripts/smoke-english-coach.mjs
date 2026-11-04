@@ -41,8 +41,12 @@ import { DEFAULT_ROLE_PERMISSIONS } from '../config/permissions.js'
 import {
   turnMetrics, sessionMetrics, mattr, fluencyScore, overallScore, bandFor, diversityScore,
 } from '../utils/coachMetrics.js'
-import { cleanReply, historyMessages, personaReply, FALLBACK_LINES } from '../services/coachPersona.js'
-import { parseJsonReply, validateVerdict } from '../services/coachExaminer.js'
+import { cleanReply, historyMessages, personaReply, personaSystemPrompt, FALLBACK_LINES } from '../services/coachPersona.js'
+import { parseJsonReply, validateVerdict, examinerPrompt } from '../services/coachExaminer.js'
+import { COACH_SCENARIOS, SCENARIO_KEYS, audienceOf } from '../config/coachScenarios.js'
+
+// What a tutor is offered: every scenario except the managers' ones
+const TUTOR_SCENARIOS = COACH_SCENARIOS.filter(s => audienceOf(s) !== 'manager').length
 import { chat, resetCoachAiHealth, coachAiStatus } from '../services/coachAi.js'
 import {
   getConfig, startSession, addTurn, finishSession, listMine, getSession, rescoreSession,
@@ -313,7 +317,7 @@ try {
   // ── Starting a call ───────────────────────────────────────────────────────
   console.log('\nStarting a call')
   let r = await call(getConfig, { ...tutor })
-  ok(r.body.ready === false && r.body.scenarios.length === 5, 'not set up: config says so, lists 5 scenarios')
+  ok(r.body.ready === false && r.body.scenarios.length === TUTOR_SCENARIOS, `not set up: config says so, lists the ${TUTOR_SCENARIOS} tutor scenarios`)
   const startBody = { scenarioKey: 'worried_parent', difficulty: 'normal', durationMin: 5, consent: true }
   r = await call(startSession, { ...tutor, body: startBody })
   ok(r.status === 503 && r.body.code === 'not_configured', 'no keys → 503 not_configured')
@@ -511,25 +515,53 @@ try {
   r = await call(startSession, { ...tutor, body: startBody })
   ok(r.status === 400, 'a scenario switched off can\'t be started')
   r = await call(getConfig, { ...tutor })
-  ok(r.body.scenarios.length === 4 && !r.body.scenarios.some(s => s.key === 'worried_parent'), '…and is not offered')
+  ok(r.body.scenarios.length === TUTOR_SCENARIOS - 1 && !r.body.scenarios.some(s => s.key === 'worried_parent'), '…and is not offered')
   ok(r.body.scenarios.every(s => !('persona' in s) && !('goals' in s)), 'the character\'s hidden brief never reaches the browser')
   await CoachSettings.updateOne({ key: 'default' }, { enabled: false, disabledScenarios: [] })
   r = await call(startSession, { ...tutor, body: startBody })
   ok(r.status === 403 && r.body.code === 'disabled', 'switched off → 403')
   await CoachSettings.updateOne({ key: 'default' }, { enabled: true })
 
+  // ── Hidaya's own scenarios, and the managers' ones ─────────────────────────
+  console.log('\nScenarios from Hidaya\'s training')
+  ok(qci.userPermissions.has('coach.manager') && !tutor.userPermissions.has('coach.manager'), 'coach.manager: QCI yes, tutor no')
+  ok(['principal', 'coordinator', 'qci', 'qcm', 'admin'].every(k => DEFAULT_ROLE_PERMISSIONS[k].includes('coach.manager')) && !DEFAULT_ROLE_PERMISSIONS.tutor.includes('coach.manager'), 'managers hold coach.manager by default, tutors never')
+  r = await call(getConfig, { ...tutor })
+  ok(!r.body.scenarios.some(x => x.audience === 'manager') && r.body.scenarios.some(x => x.key === 'trial_parent_feedback'), 'a tutor is offered the new tutor scenarios but none of the managers\'')
+  ok(r.body.groups?.length >= 4 && r.body.scenarios.every(x => x.group), 'every scenario comes with its group')
+  ok(r.body.scenarios.every(x => !('academyLines' in x)), 'the academy\'s model lines are not shown before a call')
+  r = await call(startSession, { ...tutor, body: { ...startBody, scenarioKey: 'manager_tutor_feedback' } })
+  ok(r.status === 400, 'a tutor cannot start a manager scenario')
+  r = await call(getConfig, { ...qci })
+  ok(r.body.scenarios.filter(x => x.audience === 'manager').length === 3, 'a QCI is offered the three manager scenarios')
+  r = await call(startSession, { ...qci, body: { ...startBody, scenarioKey: 'manager_tutor_feedback' } })
+  ok(r.status === 201, 'a QCI can start one')
+  const mgr = await CoachSession.findById(r.body.session?.id).lean()
+  ok(mgr?.scenario?.audience === 'manager' && mgr.scenario.group === 'manager' && mgr.scenario.academyLines.length > 0, 'the call stores its audience, group and model lines')
+  ok(r.body.session?.scenario?.academyLines === undefined && r.body.session?.scenario?.goals === undefined, '…but neither the lines nor the goals reach the browser during the call')
+  ok(/quality-team supervisor/.test(personaSystemPrompt(mgr, 200)), 'the character knows it is talking to a supervisor')
+  const mgrExam = examinerPrompt(mgr)
+  ok(/The tester is a manager/.test(mgrExam) && /never invents prices/.test(mgrExam) && !/does not decide or promise/.test(mgrExam), 'the examiner marks it against the managers\' rules')
+  ok(mgrExam.includes(mgr.scenario.academyLines[0]) && /I am agree/.test(mgrExam), 'and sees the model lines and the typical mistakes to correct')
+  await CoachSession.deleteOne({ _id: mgr._id })
+  const tutorExam = examinerPrompt({ scenario: { title: 'x', goals: [] }, difficulty: 'normal', turns: [], metrics: {} })
+  ok(/The tester is a tutor/.test(tutorExam) && /does not decide or promise/.test(tutorExam) && !/How Hidaya.s training says it/.test(tutorExam), 'an older call (no audience, no lines) is marked as a tutor call, without a lines section')
+  ok(cleanReply('Alright, I’ll wait.Also, could we move it?I mean later. Okay.') === 'Alright, I’ll wait. Also, could we move it? I mean later. Okay.', 'sentences the model glued together get their space back')
+  ok(COACH_SCENARIOS.filter(x => x.academyLines).every(x => x.academyLines.length >= 3 && x.goals.length >= 5 && x.openings.easy && x.openings.hard && x.difficulty.hard), 'every new scenario has lines, goals, openings and all three difficulties')
+
   // ── Settings ──────────────────────────────────────────────────────────────
   console.log('\nSettings')
   r = await call(updateSettings, { ...admin, body: { durations: [7] } })
   ok(r.status === 400, 'no valid call length → refused')
-  r = await call(updateSettings, { ...admin, body: { disabledScenarios: ['worried_parent', 'new_parent', 'unmotivated_student', 'progress_update', 'small_talk'] } })
+  r = await call(updateSettings, { ...admin, body: { disabledScenarios: SCENARIO_KEYS } })
   ok(r.status === 400, 'every scenario off → refused')
   r = await call(updateSettings, { ...admin, body: { dailyLimitPerUser: 2.5 } })
   ok(r.status === 400, 'a fractional limit → refused')
   r = await call(updateSettings, { ...admin, body: { durations: [10, 5, 5, 15], dailyLimitPerUser: 4, minTesterWords: 30 } })
   ok(r.status === 200 && r.body.settings.durations.join() === '5,10,15' && r.body.settings.dailyLimitPerUser === 4, 'saved, lengths de-duplicated and sorted')
   r = await call(getSettings, { ...admin })
-  ok(r.body.ai.providers.groq.configured && r.body.last24h.started > 0 && r.body.scenarios.length === 5, 'settings show provider status and the last 24 hours')
+  ok(r.body.ai.providers.groq.configured && r.body.last24h.started > 0 && r.body.scenarios.length === COACH_SCENARIOS.length, 'settings show provider status and the last 24 hours')
+  ok(r.body.scenarios.filter(x => x.audience === 'manager').length === 3 && r.body.groups.some(g => g.key === 'manager'), 'settings list every scenario, the managers\' ones marked')
 
   // ── Reviewers ─────────────────────────────────────────────────────────────
   console.log('\nReviewers')

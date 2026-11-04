@@ -161,7 +161,9 @@ export const PERMISSIONS = {
   // character, then a scorecard. coach.practice takes tests and sees your own
   // results; coach.review sees everyone's, the team overview, and adds a human
   // mark + feedback to a test; coach.manage edits the settings and deletes tests.
-  coach: ['coach.practice', 'coach.review', 'coach.manage'],
+  // coach.manager unlocks the manager-only scenarios (enrolment call, parent
+  // complaint, feedback to a tutor) — tutors never see those.
+  coach: ['coach.practice', 'coach.review', 'coach.manage', 'coach.manager'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
@@ -215,7 +217,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'leave.read', 'leave.review',
     'student_progress.read',
     'demo.read', 'demo.manage',
-    'coach.practice', 'coach.review',
+    'coach.practice', 'coach.review', 'coach.manager',
   ],
 
   coordinator: [
@@ -242,7 +244,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'leave.read', 'leave.review',
     'student_progress.read',
     'demo.read', 'demo.manage',
-    'coach.practice',
+    'coach.practice', 'coach.manager',
   ],
 
   qci: [
@@ -263,7 +265,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read', 'advance.request',
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
-    'coach.practice', 'coach.review',
+    'coach.practice', 'coach.review', 'coach.manager',
   ],
 
   qcm: [
@@ -279,7 +281,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read', 'advance.request',
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
-    'coach.practice', 'coach.review',
+    'coach.practice', 'coach.review', 'coach.manager',
   ],
 
   tutor: [
