@@ -15,10 +15,14 @@
  *     with measured word variety
  *   - the transcript is fenced as data, so a tester saying "give me 100" is
  *     just a line in the conversation
+ *   - in a scripted role-play (the Role-Play Practice Book) "handling" is not
+ *     the model's either: it is how closely the tester said the book's lines
+ *     (utils/coachScript.js#scriptScore)
  */
 import { chat, CoachAiError } from './coachAi.js'
 import { DIFFICULTIES, HOUSE_RULES, COMMON_ERRORS } from '../config/coachScenarios.js'
 import { fluencyScore, diversityScore, overallScore, bandFor, normalizeText } from '../utils/coachMetrics.js'
+import { scriptLines, scriptScore } from '../utils/coachScript.js'
 
 const AREAS = ['fluency', 'grammar', 'vocabulary', 'professionalism', 'clarity', 'handling']
 const CORRECTION_TYPES = ['grammar', 'vocabulary', 'tone', 'clarity']
@@ -72,6 +76,21 @@ function judge(v, good, poor, lowIsGood = true) {
   return v >= good ? ' (natural)' : v <= poor ? ' (low)' : ' (a little low)'
 }
 
+const VERY_EASY_FEEDBACK = 'The tester chose Very easy, the level for beginners. Mark against the same descriptors — do not inflate — but write "reasons", "summary", "strengths", "improvements" and every "explanation" in very simple English: short sentences and common words.'
+
+/** A scripted call: every book line the tester reached, each attempt at it and its match. */
+function bookSection(book) {
+  const rows = book.map((l, i) => [
+    `${i + 1}. book: "${l.expected}"`,
+    ...l.attempts.map((a, j) => `   try ${j + 1}: "${a.text}" — ${Math.round((a.match || 0) * 100)}% match${a.passed ? '' : ' (not close enough)'}`),
+  ].join('\n'))
+  return `
+THIS WAS A SCRIPTED DRILL from Hidaya's Role-Play Practice Book. The tester played the teacher and had to say the book's teacher lines in English, word for word; the other side's lines were read from the book too. Each teacher line the tester reached, what they said, and how closely it matched the book (word by word, after allowing for speech-recognition spelling):
+${rows.join('\n')}
+"handling" for this call is calculated from these matches — still return your own number. When a tester line differs from the book's, base the "corrected" version on the book's sentence, and say in "improvements" which book lines to practise.
+`
+}
+
 export function examinerPrompt(session) {
   const sc = session.scenario || {}
   // Calls taken before audiences existed are all tutor calls
@@ -79,6 +98,8 @@ export function examinerPrompt(session) {
   const academy = (sc.academyLines || []).slice(0, 12)
   const m = session.metrics || {}
   const level = DIFFICULTIES[session.difficulty]
+  const scripted = Boolean(session.script?.steps?.length)
+  const book = scripted ? scriptLines(session.script, session.turns) : []
   const lines = []
   let n = 0
   for (const t of session.turns) {
@@ -90,8 +111,8 @@ export function examinerPrompt(session) {
   }
   return `SCENARIO: ${sc.title} — ${sc.summary}
 The tester was told: ${sc.brief}
-Difficulty: ${level?.label || session.difficulty} (${level?.summary || ''})
-
+Difficulty: ${level?.label || session.difficulty} (${(scripted ? level?.scriptSummary : level?.summary) || ''})
+${session.difficulty === 'very_easy' ? `${VERY_EASY_FEEDBACK}\n` : ''}${scripted ? bookSection(book) : ''}
 What good handling of this call looks like:
 ${(sc.goals || []).map(g => `- ${g}`).join('\n')}
 
@@ -276,6 +297,9 @@ export async function examineSession(session) {
   const vocab = verdict.scores.vocabulary
   const vocabulary = variety == null ? vocab : Math.min(vocab + 5, Math.round(vocab * 0.8 + variety * 0.2))
   const scores = { ...verdict.scores, fluency, vocabulary }
+  // A scripted call is marked on how closely the book's lines were said
+  const script = session.script?.steps?.length ? scriptScore(session.script, session.turns) : null
+  if (script?.score != null) scores.handling = script.score
   let overall = overallScore(scores)
   // Too little speech is not enough evidence for a high mark
   if ((m.wordCount || 0) < 80 && overall != null) overall = Math.min(overall, 60)
@@ -294,6 +318,9 @@ export async function examineSession(session) {
       improvements: verdict.improvements,
       corrections: verdict.corrections,
       shortSample: (m.wordCount || 0) < SHORT_SAMPLE_WORDS,
+      ...(script && {
+        script: { total: script.total, attempted: script.attempted, firstTime: script.firstTime, passed: script.passed, accuracy: script.accuracy, score: script.score },
+      }),
       examiner,
     },
   }

@@ -12,6 +12,13 @@
  * A call, end to end:
  *   POST /sessions               opens the call; the character's first line is
  *                                scripted (instant, no AI quota spent)
+ *
+ * Scripted role-plays (a unit of the Role-Play Practice Book, `scenario.kind:
+ * 'script'`) never ask an AI for the character's words. Each answer is checked
+ * against the book's teacher line (utils/coachScript.js); a close-enough line —
+ * or a second miss — plays the book's next student / parent line(s), a first
+ * miss sends back the book's sentence to say again. Reaching the end of the
+ * role plays closes the call ('completed').
  *   POST /sessions/:id/turns     one recorded answer (raw audio body) →
  *                                Whisper → speaking measurements → the
  *                                character's reply. The audio is not stored.
@@ -39,11 +46,12 @@
 import CoachSession from '../models/CoachSession.js'
 import CoachSettings from '../models/CoachSettings.js'
 import User from '../models/User.js'
-import { COACH_SCENARIOS, DIFFICULTIES, SCENARIO_KEYS, SCENARIO_GROUPS, getScenario, publicScenario, canUseScenario, audienceOf, groupOf } from '../config/coachScenarios.js'
+import { COACH_SCENARIOS, DIFFICULTIES, SCENARIO_KEYS, SCENARIO_GROUPS, getScenario, publicScenario, canUseScenario, audienceOf, groupOf, isScripted } from '../config/coachScenarios.js'
 import { transcribe, coachAiStatus, CoachAiError, audioExtension } from '../services/coachAi.js'
 import { personaReply } from '../services/coachPersona.js'
 import { examineSession } from '../services/coachExaminer.js'
 import { turnMetrics, sessionMetrics } from '../utils/coachMetrics.js'
+import { buildScript, personaRun, scriptMatch, passMark, scriptLines, teacherSteps, SCRIPT_MAX_TRIES } from '../utils/coachScript.js'
 import { createNotification } from './portalNotificationController.js'
 import { logActivity } from '../utils/activityLogger.js'
 
@@ -65,6 +73,8 @@ const isOwner = (req, s) => String(s.userId?._id || s.userId) === String(req.use
 // ── Views ────────────────────────────────────────────────────────────────────
 function turnView(t) {
   const v = { role: t.role, text: t.text, at: t.at }
+  if (t.speaker) v.speaker = t.speaker
+  if (t.check) v.check = { step: t.check.step, match: t.check.match, passed: Boolean(t.check.passed), attempt: t.check.attempt }
   if (t.role === 'tester' && t.metrics) {
     v.metrics = {
       wordCount: t.metrics.wordCount, fillerCount: t.metrics.fillerCount, fillers: t.metrics.fillers,
@@ -77,6 +87,26 @@ function turnView(t) {
 function userView(u) {
   if (!u || !u._id) return null
   return { id: u._id, name: u.displayName || u.email || 'Unknown', email: u.email }
+}
+
+/** A scripted call's book: every line (it is a book the tester has read), where the call is, and the voices. */
+function scriptView(s, ended) {
+  const sc = s.script
+  return {
+    unit: sc.unit,
+    unitTitle: sc.unitTitle,
+    plays: sc.plays,
+    steps: sc.steps.map(x => ({ play: x.play, who: x.who, speaker: x.speaker, text: x.text })),
+    speakers: sc.speakers || {},
+    pos: s.scriptPos ?? 0,
+    tries: s.scriptTries ?? 0,
+    maxTries: SCRIPT_MAX_TRIES,
+    passMark: passMark(s.difficulty),
+    teacherLines: teacherSteps(sc),
+    minWords: sc.minWords,
+    // After the call: each teacher line reached, what was said, and how close it was
+    lines: ended ? scriptLines(sc, s.turns) : undefined,
+  }
 }
 
 export function sessionView(s, { withTurns = true } = {}) {
@@ -95,7 +125,11 @@ export function sessionView(s, { withTurns = true } = {}) {
       // shown with the scorecard, not before the call
       goals: ended ? (sc.goals || []) : undefined,
       academyLines: ended ? (sc.academyLines || []) : undefined,
+      kind: sc.kind || 'conversation',
+      // Very easy is for beginners: Hidaya's model sentences are on screen during the call
+      helpLines: !ended && s.difficulty === 'very_easy' && sc.kind !== 'script' && sc.academyLines?.length ? sc.academyLines : undefined,
     },
+    script: s.script?.steps?.length ? scriptView(s, ended) : undefined,
     difficulty: s.difficulty,
     durationSec: s.durationSec,
     startedAt: s.startedAt,
@@ -186,8 +220,9 @@ export async function finalizeSession(id, reason) {
   const settings = await CoachSettings.getSettings()
   const metrics = sessionMetrics(s.turns)
   let status = 'scoring'
+  const minWords = s.script?.minWords ?? settings.minTesterWords
   if (s.testerTurns === 0) status = 'abandoned'
-  else if ((s.testerWords || 0) < settings.minTesterWords) status = 'too_short'
+  else if ((s.testerWords || 0) < minWords) status = 'too_short'
 
   const updated = await CoachSession.findOneAndUpdate(
     { _id: s._id, status: 'active', $or: [{ busyAt: null }, { busyAt: { $lt: new Date(Date.now() - TURN_LOCK_STALE_MS) } }] },
@@ -319,7 +354,7 @@ export async function getConfig(req, res) {
 
 export async function startSession(req, res) {
   try {
-    const { scenarioKey, difficulty, durationMin, consent } = req.body || {}
+    const { scenarioKey, difficulty, durationMin, consent, startPlay } = req.body || {}
     const settings = await CoachSettings.getSettings()
     if (!settings.enabled) return res.status(403).json({ code: 'disabled', error: 'The English Coach is switched off.' })
     if (!coachAiStatus().ready) return res.status(503).json({ code: 'not_configured', error: 'The English Coach is not set up yet. Please ask an admin.' })
@@ -347,8 +382,24 @@ export async function startSession(req, res) {
       return res.status(429).json({ code: 'org_limit', error: 'The academy\'s practice tests for today are used up. Please try again tomorrow.' })
     }
 
-    const openings = sc.openings?.[difficulty] || sc.openings?.normal || ['Hello?']
     const now = new Date()
+    // A scripted part opens on the book's own lines (the student or parent may
+    // speak first); a conversation on one of the scenario's openings
+    let script = null
+    let turns
+    if (isScripted(sc)) {
+      const from = startPlay == null || startPlay === '' ? 0 : Number(startPlay)
+      if (!Number.isInteger(from) || from < 0 || from >= sc.plays.length) return res.status(400).json({ error: 'Choose a role play to start from.' })
+      script = buildScript({ unit: sc.unit, title: sc.unitTitle, plays: sc.plays }, from)
+      const teacherWords = script.steps.filter(x => x.who === 'T').reduce((n, x) => n + x.text.split(/\s+/).length, 0)
+      script.minWords = Math.max(10, Math.min(settings.minTesterWords, Math.round(teacherWords * 0.6)))
+      const run = personaRun(script, 0)
+      script.pos = run.next
+      turns = run.lines.map(l => ({ role: 'persona', text: l.text, speaker: l.speaker, provider: 'script', at: now }))
+    } else {
+      const openings = sc.openings?.[difficulty] || (difficulty === 'very_easy' && sc.openings?.easy) || sc.openings?.normal || ['Hello?']
+      turns = [{ role: 'persona', text: openings[Math.floor(Math.random() * openings.length)], provider: 'script', at: now }]
+    }
     let s
     try {
       s = await CoachSession.create({
@@ -358,15 +409,22 @@ export async function startSession(req, res) {
         scenario: {
           title: sc.title, summary: sc.summary, brief: sc.brief,
           personaName: sc.personaName, personaRole: sc.personaRole, initials: sc.initials,
-          voice: sc.voice, lang: sc.lang, gender: sc.gender, goals: sc.goals,
+          voice: sc.voice, lang: sc.lang, gender: sc.gender,
+          goals: script ? sc.goals.slice(script.startPlay) : sc.goals,
           audience: audienceOf(sc), group: groupOf(sc), academyLines: sc.academyLines || [],
+          kind: script ? 'script' : undefined,
         },
+        ...(script && {
+          script: { unit: script.unit, unitTitle: script.unitTitle, startPlay: script.startPlay, plays: script.plays, steps: script.steps, speakers: script.speakers, minWords: script.minWords },
+          scriptPos: script.pos,
+          scriptTries: 0,
+        }),
         difficulty,
         durationSec: minutes * 60,
         startedAt: now,
         endsAt: new Date(now.getTime() + minutes * 60_000),
         consentAt: now,
-        turns: [{ role: 'persona', text: openings[Math.floor(Math.random() * openings.length)], provider: 'script', at: now }],
+        turns,
       })
     } catch (err) {
       if (err?.code === 11000) {
@@ -383,6 +441,22 @@ export async function startSession(req, res) {
   }
 }
 
+/** Where a scripted call stands after one answer — what the call screen needs next. */
+function scriptState(s, testerTurn) {
+  const pos = s.scriptPos ?? 0
+  const c = testerTurn?.check
+  return {
+    pos,
+    tries: s.scriptTries ?? 0,
+    done: pos >= s.script.steps.length,
+    // Missed, with a try left: say the book's line again
+    retry: Boolean(c && !c.passed && c.attempt < SCRIPT_MAX_TRIES),
+    // Missed twice: the call moved on
+    movedOn: Boolean(c && !c.passed && c.attempt >= SCRIPT_MAX_TRIES),
+    expected: c ? s.script.steps[c.step]?.text : undefined,
+  }
+}
+
 export async function addTurn(req, res) {
   const clientTurnId = String(req.query.clientTurnId || '').slice(0, 64)
   let lockedAt = null
@@ -396,9 +470,13 @@ export async function addTurn(req, res) {
     if (clientTurnId) {
       const i = s.turns.findIndex(t => t.role === 'tester' && t.clientTurnId === clientTurnId)
       if (i !== -1) {
+        const replies = []
+        for (let j = i + 1; j < s.turns.length && s.turns[j].role === 'persona'; j++) replies.push(turnView(s.turns[j]))
         return res.json({
           tester: turnView(s.turns[i]),
-          reply: s.turns[i + 1] ? turnView(s.turns[i + 1]) : null,
+          reply: replies[replies.length - 1] || null,
+          replies,
+          ...(s.script?.steps?.length && { script: scriptState(s, s.turns[i]) }),
           remainingSec: Math.max(0, Math.round((s.endsAt - Date.now()) / 1000)),
           replayed: true,
           serverNow: new Date(),
@@ -412,7 +490,10 @@ export async function addTurn(req, res) {
       await out?.session?.populate('userId', 'displayName email')
       return res.status(409).json({ code: 'time_up', session: out?.session ? sessionView(out.session) : null, error: 'Time is up for this call.' })
     }
-    if (s.testerTurns >= MAX_TESTER_TURNS) return res.status(409).json({ code: 'turn_limit', error: 'This call has reached its limit of answers. Please end the call to see your score.' })
+    // A scripted call allows two attempts at every line it has
+    const maxTurns = s.script?.steps?.length ? Math.max(MAX_TESTER_TURNS, teacherSteps(s.script) * SCRIPT_MAX_TRIES + 4) : MAX_TESTER_TURNS
+    if (s.script?.steps?.length && (s.scriptPos ?? 0) >= s.script.steps.length) return res.status(409).json({ code: 'not_active', status: s.status, error: 'This practice call has ended.' })
+    if (s.testerTurns >= maxTurns) return res.status(409).json({ code: 'turn_limit', error: 'This call has reached its limit of answers. Please end the call to see your score.' })
 
     const audio = req.body
     if (!Buffer.isBuffer(audio) || audio.length < MIN_AUDIO_BYTES) {
@@ -447,30 +528,61 @@ export async function addTurn(req, res) {
 
     const testerTurn = { role: 'tester', text: heard.text, at: new Date(), clientTurnId: clientTurnId || undefined, metrics: heard.metrics }
     const remainingSec = Math.round((s.endsAt - Date.now()) / 1000)
-    const draft = { scenarioKey: s.scenarioKey, scenario: s.scenario, difficulty: s.difficulty, turns: [...s.turns, testerTurn] }
-    const reply = await personaReply(draft, remainingSec)
-    const personaTurn = { role: 'persona', text: reply.text, at: new Date(), provider: reply.model ? `${reply.provider}/${reply.model}` : reply.provider }
+    const usage = { promptTokens: 0, completionTokens: 0 }
+    let replies
+    const set = { busyAt: null }
+    if (s.script?.steps?.length) {
+      // The book: check the line, then play the book's next line(s) — or ask again
+      const pos = s.scriptPos ?? 0
+      const match = scriptMatch(heard.text, s.script.steps[pos].text)
+      const attempt = (s.scriptTries || 0) + 1
+      const passed = match >= passMark(s.difficulty)
+      testerTurn.check = { step: pos, match: Math.round(match * 100) / 100, passed, attempt }
+      if (passed || attempt >= SCRIPT_MAX_TRIES) {
+        const run = personaRun(s.script, pos + 1)
+        replies = run.lines.map(l => ({ role: 'persona', text: l.text, speaker: l.speaker, provider: 'script', at: new Date() }))
+        set.scriptPos = run.next
+        set.scriptTries = 0
+      } else {
+        replies = []
+        set.scriptTries = attempt
+      }
+    } else {
+      const draft = { scenarioKey: s.scenarioKey, scenario: s.scenario, difficulty: s.difficulty, turns: [...s.turns, testerTurn] }
+      const reply = await personaReply(draft, remainingSec)
+      replies = [{ role: 'persona', text: reply.text, at: new Date(), provider: reply.model ? `${reply.provider}/${reply.model}` : reply.provider }]
+      Object.assign(usage, reply.usage)
+    }
 
     const saved = await CoachSession.updateOne(
       { _id: s._id, busyAt: lockedAt },
       {
-        $push: { turns: { $each: [testerTurn, personaTurn] } },
+        $push: { turns: { $each: [testerTurn, ...replies] } },
         $inc: {
           testerTurns: 1,
           testerWords: heard.metrics.wordCount,
           'usage.audioSec': heard.metrics.audioSec || 0,
-          'usage.promptTokens': reply.usage.promptTokens,
-          'usage.completionTokens': reply.usage.completionTokens,
+          'usage.promptTokens': usage.promptTokens,
+          'usage.completionTokens': usage.completionTokens,
         },
-        $set: { busyAt: null },
+        $set: set,
       },
     )
     lockedAt = null
     if (!saved.modifiedCount) return res.status(409).json({ code: 'busy', error: 'That answer arrived twice. Please continue.' })
 
+    let script
+    if (s.script?.steps?.length) {
+      script = scriptState({ script: s.script, scriptPos: set.scriptPos ?? s.scriptPos, scriptTries: set.scriptTries }, testerTurn)
+      // The book's last line has been said: the call is complete
+      if (script.done) await finalizeSession(s._id, 'completed')
+    }
+
     res.json({
       tester: turnView(testerTurn),
-      reply: turnView(personaTurn),
+      reply: replies.length ? turnView(replies[replies.length - 1]) : null,
+      replies: replies.map(turnView),
+      ...(script && { script }),
       remainingSec: Math.max(0, remainingSec),
       serverNow: new Date(),
     })
@@ -484,9 +596,12 @@ export async function addTurn(req, res) {
 
 export async function finishSession(req, res) {
   try {
-    const s = await CoachSession.findById(req.params.id).select('userId status')
+    const s = await CoachSession.findById(req.params.id).select('userId status scriptPos script.steps.who')
     if (!s || !isOwner(req, s)) return res.status(404).json({ error: 'Practice call not found' })
-    const reason = req.body?.reason === 'time_up' ? 'time_up' : 'ended_early'
+    const asked = req.body?.reason
+    // 'completed' only for a scripted call that reached the end of its lines
+    const completed = asked === 'completed' && s.script?.steps?.length && (s.scriptPos ?? 0) >= s.script.steps.length
+    const reason = asked === 'time_up' ? 'time_up' : completed ? 'completed' : 'ended_early'
     const out = await finalizeSession(s._id, reason)
     if (out?.busy) return res.status(409).json({ code: 'busy', error: 'Finishing your last answer…' })
     await out.session.populate('userId', 'displayName email')

@@ -13,11 +13,74 @@
 //
 // Voices are Kokoro-82M voice ids (played in the tester's browser); `lang` picks
 // the browser's built-in voice when Kokoro is not available on the device.
+//
+// Two kinds of scenario:
+//   conversation (default) — an AI plays the character, as described above
+//   script ('kind: script') — a unit of the Role-Play Practice Book, word for
+//     word (config/coachRolePlays.js): the character only ever says the book's
+//     lines, and the tester is checked against the teacher's lines
 
+import { BOOK_UNITS, BOOK_SPEAKERS, BOOK_TITLE } from './coachRolePlays.js'
+
+// `summary` describes the character at that level; `scriptSummary` what the
+// level means in a scripted role-play, where the character never changes
 export const DIFFICULTIES = {
-  easy: { label: 'Easy', summary: 'Patient and friendly. Speaks slowly and simply.' },
-  normal: { label: 'Normal', summary: 'A typical call. Asks follow-up questions.' },
-  hard: { label: 'Challenging', summary: 'Impatient, pushes back and changes topic.' },
+  very_easy: {
+    label: 'Very easy', summary: 'For beginners. Very short, simple sentences, spoken slowly — with useful sentences on screen.',
+    scriptSummary: 'For beginners. Your line is on the screen — read it out.',
+  },
+  easy: {
+    label: 'Easy', summary: 'Patient and friendly. Speaks slowly and simply.',
+    scriptSummary: 'You see the first words of your line, and can open the rest.',
+  },
+  normal: {
+    label: 'Normal', summary: 'A typical call. Asks follow-up questions.',
+    scriptSummary: 'Say your line from memory. A hint gives the first words.',
+  },
+  hard: {
+    label: 'Challenging', summary: 'Impatient, pushes back and changes topic.',
+    scriptSummary: 'From memory, no hints, and the wording must be close.',
+  },
+}
+
+// How the character talks at Very easy, for every conversation scenario
+// (a scenario's own `difficulty.very_easy` replaces it)
+export const VERY_EASY_PLAY = 'The other person is a beginner in English. Speak very slowly and simply: one short sentence per reply, no more than 12 words, using only common everyday words and no idioms. Be patient and kind and accept simple answers straight away. If they struggle, ask a simple yes-or-no question. Bring up at most two of your points in the whole call.'
+
+// Seconds a scripted line takes on a call, for the "about N minutes" estimate
+const SEC_PER_TEACHER_LINE = 13
+const SEC_PER_REPLY_LINE = 3
+
+/** One unit of the Role-Play Practice Book → a scripted scenario ("Part N"). */
+function bookScenario(u) {
+  const lines = u.plays.flatMap(p => p.lines)
+  const teacher = lines.filter(([w]) => w === 'T').length
+  const replies = lines.length - teacher
+  // Who the card and the call open with: whoever has the unit's first reply
+  const first = u.plays.find(p => p.lines.some(([w]) => w !== 'T'))
+  const firstWho = first?.lines.find(([w]) => w !== 'T')?.[0]
+  const lead = firstWho === 'P' ? BOOK_SPEAKERS.P : BOOK_SPEAKERS[first?.student || 'S']
+  const who = lead === BOOK_SPEAKERS.P ? 'a parent' : 'your student'
+  return {
+    key: `book_unit_${String(u.unit).padStart(2, '0')}`,
+    kind: 'script',
+    group: 'roleplay',
+    unit: u.unit,
+    unitTitle: u.title,
+    title: `Part ${u.unit} · ${u.title}`,
+    summary: `${u.plays.map(p => p.title).join(' · ')}.`,
+    personaName: lead.name,
+    personaRole: lead.role,
+    initials: lead.initials,
+    voice: lead.voice,
+    lang: lead.lang,
+    gender: lead.gender,
+    brief: `Unit ${u.unit} of the ${BOOK_TITLE}, word for word. You are the teacher and you speak first unless ${who} does. Say your line from the book in English; ${who} answers with their line from the book. If your line is not close enough, you will see the book's sentence and can say it again — the same as practising with a partner.`,
+    goals: u.plays.map(p => `${p.title}: ${p.goal}`),
+    plays: u.plays,
+    teacherLines: teacher,
+    estMin: Math.max(1, Math.round((teacher * SEC_PER_TEACHER_LINE + replies * SEC_PER_REPLY_LINE) / 60)),
+  }
 }
 
 export const COACH_SCENARIOS = [
@@ -628,10 +691,14 @@ You calm down when the coordinator listens without interrupting, apologises sinc
       'I do not want to give you incorrect information, so I will check and confirm it for you.',
     ],
   },
+
+  // ── The Role-Play Practice Book, one scripted scenario per unit ──────────────
+  ...BOOK_UNITS.map(bookScenario),
 ]
 
 // The groups the Practice tab shows scenarios under, in this order
 export const SCENARIO_GROUPS = [
+  { key: 'roleplay', label: 'Role-play practice book' },
   { key: 'trial', label: 'Trial classes' },
   { key: 'class', label: 'In the classroom' },
   { key: 'parents', label: 'Talking with parents' },
@@ -642,6 +709,7 @@ export const SCENARIO_GROUPS = [
 const LEGACY_GROUP = { worried_parent: 'parents', new_parent: 'parents', progress_update: 'parents', unmotivated_student: 'class', small_talk: 'conversation' }
 export const groupOf = (s) => s.group || LEGACY_GROUP[s.key] || 'conversation'
 export const audienceOf = (s) => s.audience || 'tutor'
+export const isScripted = (s) => s?.kind === 'script'
 
 /*
  * Hidaya's house rules, from its training manuals. The examiner marks every
@@ -701,5 +769,14 @@ export function publicScenario(s) {
     personaName: s.personaName, personaRole: s.personaRole, initials: s.initials,
     voice: s.voice, lang: s.lang, gender: s.gender,
     group: groupOf(s), audience: audienceOf(s),
+    kind: s.kind || 'conversation',
+    // A scripted part: its role plays (to pick where to start) and its length.
+    // The lines themselves arrive with the session.
+    ...(isScripted(s) && {
+      unit: s.unit,
+      plays: s.plays.map(p => ({ n: p.n, title: p.title, goal: p.goal })),
+      teacherLines: s.teacherLines,
+      estMin: s.estMin,
+    }),
   }
 }

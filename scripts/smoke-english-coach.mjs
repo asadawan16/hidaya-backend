@@ -25,6 +25,13 @@
 //     your own test, notification to the tester; delete
 //   - the sweeper closes a call whose tab was closed and marks it
 //   - default role permissions
+//   - the Role-Play Practice Book (scripted parts): the book's 48 role plays,
+//     line matching (Arabic spellings, contractions, word order), who speaks
+//     first, a pass plays the book's reply with no AI call, a miss sends the
+//     line back, a second miss moves on, two replies in a row, retried uploads,
+//     a part completed end to end and marked on how closely its lines were said
+//   - Very easy: easy opening, one-sentence character, model sentences on
+//     screen, simple-English feedback
 //
 // AI providers are a stubbed global fetch. Runs against a THROWAWAY database
 // (hidaya_english_coach_smoke) and drops it. No server or API keys needed.
@@ -43,7 +50,9 @@ import {
 } from '../utils/coachMetrics.js'
 import { cleanReply, historyMessages, personaReply, personaSystemPrompt, FALLBACK_LINES } from '../services/coachPersona.js'
 import { parseJsonReply, validateVerdict, examinerPrompt } from '../services/coachExaminer.js'
-import { COACH_SCENARIOS, SCENARIO_KEYS, audienceOf } from '../config/coachScenarios.js'
+import { COACH_SCENARIOS, SCENARIO_KEYS, audienceOf, VERY_EASY_PLAY } from '../config/coachScenarios.js'
+import { BOOK_UNITS } from '../config/coachRolePlays.js'
+import { scriptMatch, matchTokens, buildScript, personaRun, SCRIPT_PASS } from '../utils/coachScript.js'
 
 // What a tutor is offered: every scenario except the managers' ones
 const TUTOR_SCENARIOS = COACH_SCENARIOS.filter(s => audienceOf(s) !== 'manager').length
@@ -622,6 +631,97 @@ try {
 
   r = await call(deleteSession, { ...admin, params: { id: s3 } })
   ok(r.status === 200 && !(await CoachSession.findById(s3)), 'a manager deletes a test')
+
+  // ── The Role-Play Practice Book (scripted parts) ─────────────────────────
+  console.log('\nThe Role-Play Practice Book')
+  await CoachSettings.updateOne({ key: 'default' }, { dailyLimitPerUser: 0 })
+  ok(BOOK_UNITS.length === 11 && BOOK_UNITS.reduce((n, u) => n + u.plays.length, 0) === 48, 'the book: 11 units, 48 role plays')
+  ok(BOOK_UNITS.every(u => u.plays.every(p => p.lines.length >= 6 && p.lines.some(([w]) => w === 'T') && p.lines.every(([w, t]) => ['T', 'S', 'P'].includes(w) && t.trim()))), 'every role play has teacher lines and only T / S / P lines')
+  ok(scriptMatch('Assalamualaikum Ahmed, how are you today?', 'Assalamu Alaikum, Ahmad. How are you today?') === 1, 'match: Whisper\'s spellings of Arabic words and names are the same words')
+  ok(scriptMatch('Um, very good, let\'s begin with bismillah', 'Very good. Let us begin with Bismillah.') === 1, 'match: contractions and hesitations don\'t count against a line')
+  ok(scriptMatch('Lines 1 to 6 on this page', 'Lines one to six on this page.') === 1 && scriptMatch('See you next class inshallah', 'Very good. See you in the next class, In sha Allah.') > 0.65, 'match: digits and InshaAllah spellings')
+  ok(scriptMatch('How you are today Ahmad', 'Assalamu Alaikum, Ahmad. How are you today?') < SCRIPT_PASS.easy, 'match: wrong word order and a missing greeting fail')
+  ok(scriptMatch('What is your name?', 'Please read from here.') === 0 && matchTokens('Wa alaikum as-salam')[2] === 'assalam', 'match: an unrelated sentence scores 0')
+  ok(SCRIPT_PASS.very_easy < SCRIPT_PASS.easy && SCRIPT_PASS.normal < SCRIPT_PASS.hard, 'the pass mark rises with the difficulty')
+  const u9 = buildScript(BOOK_UNITS[8])
+  ok(u9.steps[0].who === 'P' && u9.speakers.P && !u9.speakers.S, 'Unit 9 opens with the parent, in the parent\'s voice')
+  const u11 = buildScript(BOOK_UNITS[10], 3)
+  ok(u11.plays.length === 1 && u11.plays[0].n === 48 && u11.speakers.S && u11.speakers.P, 'starting from a later role play keeps only the plays from there')
+  ok(buildScript(BOOK_UNITS[10]).steps.find(x => x.who === 'S').speaker === 'sara', 'the Beginner Qaida mock class is with Sara')
+  let run = personaRun(u11, 1)
+  ok(run.lines.length === 2 && run.lines[0].speaker === 'S' && run.lines[1].speaker === 'P' && u11.steps[run.next].who === 'T', 'two book lines in a row (student, then parent) are played together')
+
+  r = await call(getConfig, { ...tutor })
+  const parts = r.body.scenarios.filter(x => x.kind === 'script')
+  ok(parts.length === 11 && parts.every(x => x.group === 'roleplay' && x.plays.length && x.teacherLines && x.estMin), 'tutors are offered all 11 parts, with their role plays and length')
+  ok(r.body.groups[0].key === 'roleplay' && r.body.difficulties.very_easy?.scriptSummary, 'the practice book is the first group, and Very easy is a difficulty')
+  const bookBody = { scenarioKey: 'book_unit_01', difficulty: 'easy', durationMin: 5, consent: true }
+  r = await call(startSession, { ...tutor, body: { ...bookBody, startPlay: 9 } })
+  ok(r.status === 400, 'a role play that isn\'t in the part is refused')
+  const groqBefore = calls.groq.length + calls.gemini.length
+  r = await call(startSession, { ...tutor, body: bookBody })
+  const b1 = r.body.session
+  ok(r.status === 201 && b1.turns.length === 0 && b1.script.pos === 0 && b1.script.steps[0].text === 'Assalamu Alaikum, Ahmad. How are you today?', 'Part 1: the teacher speaks first, so the call opens on the tester\'s line')
+  ok(b1.scenario.kind === 'script' && b1.script.plays.length === 4 && b1.script.teacherLines === 16, 'the session carries the part\'s book')
+  r = await call(addTurn, turnReq(tutor, b1.id, say('bk1', 'Assalamualaikum Ahmed how are you today'), { clientTurnId: 'bk1' }))
+  ok(r.status === 200 && r.body.tester.check.passed && r.body.reply.text === 'Wa Alaikum Assalam. I am good, Alhamdulillah.' && r.body.reply.speaker === 'S', 'a close line → Ahmad answers with his line from the book, word for word')
+  ok(r.body.script.pos === 2 && !r.body.script.retry && calls.groq.length + calls.gemini.length === groqBefore, 'the call moves on — and no AI was asked for the character\'s words')
+  r = await call(addTurn, turnReq(tutor, b1.id, say('bk2', 'Okay so what did you eat today'), { clientTurnId: 'bk2' }))
+  ok(r.status === 200 && !r.body.tester.check.passed && r.body.replies.length === 0 && r.body.script.retry && r.body.script.expected === 'Alhamdulillah. Are you ready for your Quran class?', 'a line that isn\'t the book\'s → no reply, the book\'s sentence comes back to say again')
+  r = await call(addTurn, turnReq(tutor, b1.id, audio('bk2'), { clientTurnId: 'bk2' }))
+  ok(r.body.replayed && r.body.replies.length === 0 && r.body.script.retry, 'a retried upload of the miss replays the miss')
+  r = await call(addTurn, turnReq(tutor, b1.id, say('bk3', 'Are you hungry'), { clientTurnId: 'bk3' }))
+  ok(r.body.script.movedOn && r.body.reply.text === 'Yes, I am ready.' && r.body.script.pos === 4, 'a second miss moves the call on, with the book\'s reply')
+  doc = await CoachSession.findById(b1.id)
+  ok(doc.scriptPos === 4 && doc.scriptTries === 0 && doc.turns.filter(t => t.role === 'tester').map(t => t.check.attempt).join() === '1,1,2', 'position, tries and each attempt are stored')
+  r = await call(finishSession, { ...tutor, params: { id: b1.id }, body: { reason: 'completed' } })
+  ok(r.body.session.endReason !== 'completed', '"completed" is not taken for a part that wasn\'t finished')
+
+  r = await call(startSession, { ...tutor, body: { ...bookBody, scenarioKey: 'book_unit_08' } })
+  ok(r.status === 201 && r.body.session.turns.length === 1 && r.body.session.turns[0].text === 'Teacher, I cannot hear you clearly.' && r.body.session.script.pos === 1, 'Part 8: the student speaks first, so the call opens on his line')
+  await call(finishSession, { ...tutor, params: { id: r.body.session.id }, body: {} })
+
+  // A whole role play, start to finish: Unit 10, play 44
+  r = await call(startSession, { ...tutor, body: { ...bookBody, scenarioKey: 'book_unit_10', startPlay: 1, difficulty: 'normal' } })
+  const b2 = r.body.session
+  ok(b2.script.plays.length === 1 && b2.script.minWords < 30, 'a short part asks for fewer words to be marked')
+  const lines44 = b2.script.steps.filter(x => x.who === 'T').map(x => x.text)
+  let last
+  for (const [i, line] of lines44.entries()) last = await call(addTurn, turnReq(tutor, b2.id, say(`b44_${i}`, line.replace('In sha Allah', 'inshallah')), { clientTurnId: `b44_${i}` }))
+  ok(last.body.script.done && last.body.reply.text === 'I will.', 'the last line said → the book\'s last reply, and the part is done')
+  doc = await CoachSession.findById(b2.id)
+  ok(['scoring', 'scored'].includes(doc.status) && doc.endReason === 'completed', 'the call closes itself as completed and goes for marking')
+  ok(await waitFor(async () => (await CoachSession.findById(b2.id)).status === 'scored'), '…and is marked')
+  doc = await CoachSession.findById(b2.id)
+  ok(doc.result.script.firstTime === 4 && doc.result.script.attempted === 4 && doc.result.script.score >= 95 && doc.result.scores.handling === doc.result.script.score, 'handling = how closely the book\'s lines were said (all four right first time)')
+  const bookExam = examinerPrompt(doc.toObject())
+  ok(/SCRIPTED DRILL/.test(bookExam) && bookExam.includes('book: "Our class time is almost finished."') && /100% match/.test(bookExam), 'the examiner sees each book line, what was said and the match')
+  r = await call(getSession, { ...tutor, params: { id: b2.id } })
+  ok(r.body.session.script.lines.length === 4 && r.body.session.script.lines.every(l => l.passed && l.firstTime && l.expected), 'the scorecard gets the line-by-line comparison')
+  r = await call(addTurn, turnReq(tutor, b2.id, say('b44_x', 'hello')))
+  ok(r.status === 409, 'no answers after the part is complete')
+
+  // Two book lines in a row from different people, and a resend of the pair
+  r = await call(startSession, { ...tutor, body: { ...bookBody, scenarioKey: 'book_unit_11', startPlay: 3 } })
+  const b3 = r.body.session
+  r = await call(addTurn, turnReq(tutor, b3.id, say('b48', 'Assalamu alaikum please read from the highlighted line'), { clientTurnId: 'b48' }))
+  ok(r.body.replies.length === 2 && r.body.replies[0].text === 'Okay.' && r.body.replies[1].speaker === 'P' && r.body.reply.text === 'Teacher, I need to ask you about next month\'s payment.', 'the student\'s "Okay." and then the parent, each in their own voice')
+  r = await call(addTurn, turnReq(tutor, b3.id, audio('b48'), { clientTurnId: 'b48' }))
+  ok(r.body.replayed && r.body.replies.length === 2, 'a resend replays both lines')
+  await call(finishSession, { ...tutor, params: { id: b3.id }, body: {} })
+
+  // ── Very easy (beginners) ─────────────────────────────────────────────────
+  console.log('\nVery easy')
+  r = await call(startSession, { ...tutor, body: { ...startBody, scenarioKey: 'trial_child', difficulty: 'very_easy' } })
+  const ve = r.body.session
+  ok(r.status === 201 && ve.difficulty === 'very_easy' && ve.turns[0].text === COACH_SCENARIOS.find(x => x.key === 'trial_child').openings.easy[0], 'Very easy starts with the easy opening')
+  ok(ve.scenario.helpLines?.length > 0 && ve.scenario.academyLines === undefined, 'Hidaya\'s model sentences are on screen during a Very easy call')
+  const veDoc = await CoachSession.findById(ve.id).lean()
+  const veSys = personaSystemPrompt(veDoc, 200)
+  ok(veSys.includes(VERY_EASY_PLAY) && /ONE short, simple sentence/.test(veSys), 'the character speaks in one short, simple sentence')
+  ok(/very simple English/.test(examinerPrompt(veDoc)), 'the examiner writes its feedback in very simple English')
+  r = await call(startSession, { ...tutor2, body: { ...startBody, scenarioKey: 'trial_child', difficulty: 'normal' } })
+  ok(r.body.session.scenario.helpLines === undefined, 'no model sentences on screen at other levels')
 } catch (err) {
   fail++
   console.error(err)

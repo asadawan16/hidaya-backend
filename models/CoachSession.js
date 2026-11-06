@@ -52,6 +52,18 @@ const turnSchema = new mongoose.Schema({
   clientTurnId: { type: String },
   metrics: { type: turnMetricsSchema, default: undefined },
   provider: { type: String }, // which model produced a persona line
+  // Scripted role-plays: which book voice said a persona line (script.speakers key),
+  // and how a tester line compared with the book's (utils/coachScript.js)
+  speaker: { type: String },
+  check: {
+    type: new mongoose.Schema({
+      step: Number,      // index into script.steps
+      match: Number,     // 0–1, utils/coachScript.js#scriptMatch
+      passed: Boolean,
+      attempt: Number,   // 1 or 2
+    }, { _id: false }),
+    default: undefined,
+  },
 }, { _id: false })
 
 const scoreBlock = {
@@ -78,8 +90,31 @@ const coachSessionSchema = new mongoose.Schema({
     group: String,
     // Hidaya's model sentences for this situation (scorecard + examiner)
     academyLines: [String],
+    // 'script' = a unit of the Role-Play Practice Book (absent = AI conversation)
+    kind: String,
   },
-  difficulty: { type: String, enum: ['easy', 'normal', 'hard'], required: true },
+  difficulty: { type: String, enum: ['very_easy', 'easy', 'normal', 'hard'], required: true },
+
+  // A scripted call's snapshot of the book (utils/coachScript.js#buildScript):
+  // the role plays it covers, every line in order, and the voices. `scriptPos`
+  // is the next line to play or to wait for; `scriptTries` the misses on the
+  // teacher line being waited for.
+  script: {
+    type: new mongoose.Schema({
+      unit: Number,
+      unitTitle: String,
+      startPlay: Number,
+      plays: [{ _id: false, n: Number, title: String, goal: String }],
+      steps: [{ _id: false, play: Number, who: String, speaker: String, text: String }],
+      speakers: mongoose.Schema.Types.Mixed,
+      // Words the tester must say for the call to be marked: the Settings
+      // minimum, or less when the chosen role plays are short
+      minWords: Number,
+    }, { _id: false }),
+    default: undefined,
+  },
+  scriptPos: { type: Number },
+  scriptTries: { type: Number },
   durationSec: { type: Number, required: true },
 
   status: {
@@ -90,7 +125,8 @@ const coachSessionSchema = new mongoose.Schema({
   startedAt: { type: Date, default: Date.now },
   endsAt: { type: Date, required: true },
   endedAt: { type: Date },
-  endReason: { type: String, enum: ['time_up', 'ended_early', 'expired', 'abandoned'] },
+  // 'completed' = a scripted call reached the end of its role plays
+  endReason: { type: String, enum: ['time_up', 'ended_early', 'expired', 'abandoned', 'completed'] },
   // The tester agreed to their voice and transcript going to the AI providers
   consentAt: { type: Date, required: true },
 
@@ -130,6 +166,11 @@ const coachSessionSchema = new mongoose.Schema({
       type: { type: String, enum: ['grammar', 'vocabulary', 'tone', 'clarity'] },
     }],
     shortSample: Boolean, // marked, but on little speech — the UI says scores are less reliable
+    // Scripted calls: how the tester's lines compared with the book's. `score`
+    // is the call's "handling" mark (utils/coachScript.js#scriptScore).
+    script: {
+      total: Number, attempted: Number, firstTime: Number, passed: Number, accuracy: Number, score: Number,
+    },
     examiner: String,     // provider/model that marked it
   },
   scoringAttempts: { type: Number, default: 0 },
