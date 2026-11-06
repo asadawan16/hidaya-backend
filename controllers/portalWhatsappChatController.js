@@ -6,6 +6,7 @@ import { emitToRole } from '../config/socket.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { contactLabelFor } from '../utils/waNumber.js'
 import { isFeeMessage, mentionsFees } from '../utils/feeFilter.js'
+import { maskPhoneNumbers, containsPhoneNumber } from '../utils/phoneMask.js'
 import { UNREAD, touchChat, ensureChats, replyWindow, visibleSince, announceChat } from '../utils/whatsappChats.js'
 import { chatLevel, chatScope, inScope } from '../utils/whatsappAccess.js'
 import { resolveSender } from './portalWhatsappController.js'
@@ -28,7 +29,11 @@ import { plainFailure, plainWhatsappError } from '../utils/whatsappErrors.js'
  *                              match or a socket event; a chat is addressed by
  *                              its _id. A message that mentions fees
  *                              (utils/feeFilter.js) arrives as a placeholder
- *                              with no text and no media. Text replies only.
+ *                              with no text and no media. A phone number
+ *                              written in a message, caption or file name
+ *                              arrives as "[number hidden]"
+ *                              (utils/phoneMask.js). Text replies only, and
+ *                              never with a phone number in them.
  *   whatsapp.chat + .inbox     FULL view (admin). Numbers, every message,
  *                              templates and photos / documents.
  *
@@ -115,13 +120,15 @@ function describeMessage(m, { full, bodies }) {
     sentBy: m.sentBy ? { _id: m.sentBy._id, name: m.sentBy.displayName || m.sentBy.email || 'Staff' } : null,
   }
   if (!full && isFeeMessage({ ...m, text })) return { ...base, type: 'hidden', hidden: 'fees' }
+  // Staff never see a phone number, not even one typed into a message
+  const clean = full ? (s) => s : maskPhoneNumbers
   return {
     ...base,
     type: m.type,
-    text,
+    text: clean(text),
     templateName: m.templateName || '',
     media: m.media?.id || m.media?.mimeType
-      ? { mimeType: m.media.mimeType || '', filename: m.media.filename || '', available: Boolean(m.media.id) }
+      ? { mimeType: m.media.mimeType || '', filename: clean(m.media.filename || ''), available: Boolean(m.media.id) }
       : null,
     error: m.status === 'failed' ? plainFailure(m) : '',
   }
@@ -358,6 +365,9 @@ export async function sendChatMessage(req, res) {
       if (body.length > 4096) return res.status(400).json({ error: 'WhatsApp messages are limited to 4,096 characters' })
       if (!full && mentionsFees(body)) {
         return res.status(422).json({ error: 'This message mentions fees or payments. Fee matters are handled by the admin, so it was not sent.', code: 'fee_topic' })
+      }
+      if (!full && containsPhoneNumber(body)) {
+        return res.status(422).json({ error: 'This message contains a phone number. Contact details are not shared from here, so it was not sent.', code: 'phone_number' })
       }
       if (!replyWindow(await newestInboundAt(chat.waId)).open) {
         return res.status(409).json({ error: WINDOW_CLOSED, code: 'window_closed' })

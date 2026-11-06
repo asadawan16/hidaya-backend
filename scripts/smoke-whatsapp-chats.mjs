@@ -8,7 +8,8 @@
 //   - the fee filter (English, Roman Urdu, Urdu) and what it leaves alone
 //   - staff view: no contact number anywhere in a response, fee messages arrive
 //     as content-free placeholders, digit searches can't probe a number,
-//     a profile name that is a number is dropped, fee media refused
+//     a profile name that is a number is dropped, fee media refused, a phone
+//     number written in a message or file name is hidden, staff can't send one
 //   - full view: numbers, every message, media relay, templates, file upload
 //   - unread: shared across the team, staff never clear a fee message,
 //     history replays never count, read receipts go to WhatsApp
@@ -41,6 +42,7 @@ import { listMessages } from '../controllers/portalWhatsappController.js'
 import chatRouter from '../routes/portalWhatsappChatRoutes.js'
 import { rebuildWhatsappChats } from '../utils/whatsappChats.js'
 import { mentionsFees, isFeeMessage } from '../utils/feeFilter.js'
+import { maskPhoneNumbers, containsPhoneNumber, NUMBER_HIDDEN } from '../utils/phoneMask.js'
 
 process.env.WHATSAPP_ACCESS_TOKEN = 'TEST_TOKEN'
 process.env.WHATSAPP_PHONE_NUMBER_ID = 'PN_TEST'
@@ -438,6 +440,33 @@ try {
   r = await call(listChats, admin)
   const back = r.body.chats.find(c => String(c._id) === leadId)
   ok(back && back.unread === 1, 'a new message brings the chat back, with just that one unread')
+
+  // ── Phone numbers inside messages ─────────────────────────────────────────
+  console.log('\nPhone numbers written in messages')
+  ok(maskPhoneNumbers('save my number 0300-5010415') === `save my number ${NUMBER_HIDDEN}`, 'a Pakistani number with a dash')
+  ok(maskPhoneNumbers('+92 300 501 0415, or +1 (555) 123-4567, or 00447911123456').split(NUMBER_HIDDEN).length === 4, 'international numbers, spaces and brackets')
+  ok(maskPhoneNumbers('mera number ۰۳۰۰۵۰۱۰۴۱۵ hai') === `mera number ${NUMBER_HIDDEN} hai`, 'a number in Urdu digits')
+  const ordinary = 'Class on 06-11-2026 at 8:30, roll no HID518, page 12, 2026.11.06'
+  ok(maskPhoneNumbers(ordinary) === ordinary && !containsPhoneNumber(ordinary), 'dates, times, roll numbers and page numbers are left alone')
+
+  await inbound(MOTHER, 'Sara Raza', [
+    txt(MOTHER, 'Aoa\nPlease save my contact number 0300-5010415'),
+    { ...media(MOTHER, 'document', { id: 'MEDIA_CV', mime_type: 'application/pdf', filename: 'CV 03005010415.pdf' }) },
+  ])
+  // The rebuild above gave every chat a new id
+  const mother = { id: String((await WhatsappChat.findOne({ waId: MOTHER }).lean())._id) }
+  r = await call(getChatMessages, { ...staff, params: mother })
+  blob = JSON.stringify(r.body)
+  const said =r.body.messages.find(m => m.text?.startsWith('Aoa'))
+  ok(said?.text === `Aoa\nPlease save my contact number ${NUMBER_HIDDEN}` && !blob.includes('5010415'), 'staff: the number in the message is hidden')
+  ok(r.body.messages.find(m => m.type === 'document' && m.media?.filename?.startsWith('CV'))?.media.filename === `CV ${NUMBER_HIDDEN}.pdf`, 'staff: …and in a file name')
+  r = await call(listChats, staff)
+  ok(!JSON.stringify(r.body).includes('5010415'), 'staff: no number in the chat list preview either')
+  r = await call(getChatMessages, { ...admin, params: mother })
+  ok(r.body.messages.some(m => m.text?.includes('0300-5010415')), 'the admin inbox shows the message as it was sent')
+  const sentBefore = sends.length
+  r = await call(sendChatMessage, { ...staff, params: mother, body: { text: 'You can call me on 0321 7654321' } })
+  ok(r.status === 422 && r.body.code === 'phone_number' && sends.length === sentBefore, 'staff cannot send a phone number')
   r = await call(getChatMessages, { ...admin, params: { id: leadId } })
   ok(r.body.messages.length === 1 && /book a trial/.test(r.body.messages[0].text), '…showing only what came after the removal')
 } catch (err) {
