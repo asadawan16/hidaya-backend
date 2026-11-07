@@ -8,7 +8,7 @@ import { logActivity } from '../utils/activityLogger.js'
 import Student from '../models/Student.js'
 import { toWaId, resolveStudentRecipient } from '../utils/waNumber.js'
 import { plainWhatsappError, plainFailure } from '../utils/whatsappErrors.js'
-import { touchChat } from '../utils/whatsappChats.js'
+import { touchChat, syncChat, announceChat } from '../utils/whatsappChats.js'
 import {
   META_APP_ID, WHATSAPP_ES_CONFIG_ID, GRAPH_VERSION, GraphError,
   exchangeCodeForToken, inspectToken, listPhoneNumbers, getPhoneNumber, subscribeApp, unsubscribeApp, requestAppSync,
@@ -238,8 +238,15 @@ export async function resync(req, res) {
  * Stops this server receiving the number's webhooks and forgets the token.
  * The number itself stays on Meta (and on the phone) — remove it in WhatsApp
  * Manager if that is what's wanted.
+ *
+ * Opt-in (?deleteChats=1): also delete every message that went through this
+ * number, so a number being replaced leaves no stale conversations in
+ * WhatsApp Chats. Only this number's messages go (each one records the
+ * business number it used); a contact who also wrote to another number keeps
+ * those messages and their chat. Nothing on Meta or the phone is touched.
  */
 export async function disconnect(req, res) {
+  const deleteChats = req.query?.deleteChats === '1' || req.body?.deleteChats === true
   try {
     const conn = await WhatsappConnection.findOne({ key: 'default', status: 'connected' }).select('+accessTokenEnc').lean()
     if (!conn) return res.status(404).json({ error: 'No WhatsApp number is connected' })
@@ -253,15 +260,46 @@ export async function disconnect(req, res) {
     await WhatsappConnection.updateOne({ _id: conn._id }, {
       $set: { status: 'disconnected', accessTokenEnc: '', disconnectedAt: new Date() },
     })
+
+    let deleted = null
+    if (deleteChats) {
+      try {
+        deleted = await deleteNumberMessages(conn.phoneNumberId)
+      } catch (err) {
+        console.error('Delete WhatsApp chats on disconnect error:', err)
+        warning = [warning, "The number was disconnected, but its chats couldn't be deleted. Try again later."].filter(Boolean).join(' ')
+      }
+    }
     await logActivity({
       level: 'info', category: 'portal', action: 'whatsapp_disconnected',
-      message: `WhatsApp number ${conn.displayPhoneNumber || conn.phoneNumberId} disconnected`, req,
+      message: `WhatsApp number ${conn.displayPhoneNumber || conn.phoneNumberId} disconnected${deleted ? ` and ${deleted.messages} messages deleted from the portal` : ''}`, req,
     })
-    res.json({ connection: publicView(await loadConnection()), warning })
+    res.json({ connection: publicView(await loadConnection()), warning, deleted })
   } catch (err) {
     console.error('Disconnect WhatsApp error:', err)
     res.status(500).json({ error: 'Server error' })
   }
+}
+
+/*
+ * Every message that went through one of our business numbers, gone, and the
+ * chat list recomputed for the contacts involved: a chat with nothing left is
+ * dropped, one that also has another number's messages stays. Exported for
+ * scripts/smoke-whatsapp-connect.mjs.
+ */
+export async function deleteNumberMessages(phoneNumberId) {
+  if (!phoneNumberId) return { messages: 0, chats: 0 }
+  const waIds = await WhatsappMessage.distinct('waId', { phoneNumberId })
+  const chatIds = await WhatsappChat.find({ waId: { $in: waIds } }).distinct('_id')
+  const { deletedCount } = await WhatsappMessage.deleteMany({ phoneNumberId })
+  let chats = 0
+  for (const waId of waIds) {
+    // Gone from the list: no row left, or a removed-from-portal row with nothing after its cut-off
+    if (!(await syncChat(waId))?.lastMessageAt) chats++
+  }
+  // Open WhatsApp Chats pages refetch their list
+  for (const id of chatIds) announceChat(id)
+  return { messages: deletedCount, chats }
 }
 
 // ── Sending + templates ─────────────────────────────────────────────────────

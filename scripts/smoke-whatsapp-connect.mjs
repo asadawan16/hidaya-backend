@@ -29,7 +29,7 @@ import WhatsappConnection from '../models/WhatsappConnection.js'
 import WhatsappMessage from '../models/WhatsappMessage.js'
 import '../models/Student.js'
 import {
-  connectWhatsappNumber, connectWithAccessKey, getConnection, send, addTemplate, resolveSender,
+  connectWhatsappNumber, connectWithAccessKey, disconnect, getConnection, send, addTemplate, resolveSender,
 } from '../controllers/portalWhatsappController.js'
 import { decryptSecret } from '../utils/totp.js'
 import { META_APP_ID } from '../services/whatsappGraph.js'
@@ -178,6 +178,46 @@ try {
   ok(err?.name === 'GraphError' && /no phone number/.test(err.message), 'an account with no number is refused')
   manual = await connectWithAccessKey({ accessToken: 'SYSTEM_TOKEN', wabaId: 'WABA_2', phoneNumberId: 'PN_2', userId: null })
   ok(manual.connection.phoneNumberId === 'PN_2' && manual.connection.coexistence === true, 'the chosen number is connected (details lookup failure tolerated)')
+
+  console.log('\nDisconnect — chats kept unless asked, then only that number\'s')
+  const WhatsappChat = (await import('../models/WhatsappChat.js')).default
+  const { syncChat } = await import('../utils/whatsappChats.js')
+  await WhatsappMessage.deleteMany({})
+  await WhatsappChat.deleteMany({})
+  const at = (m) => new Date(Date.now() - m * 60_000)
+  await WhatsappMessage.insertMany([
+    // A wrote only to the number being disconnected (PN_2, connected above)
+    { wamid: 'wamid.A1', direction: 'in', waId: '111', phoneNumberId: 'PN_2', text: 'old 1', timestamp: at(30) },
+    { wamid: 'wamid.A2', direction: 'out', waId: '111', phoneNumberId: 'PN_2', text: 'old 2', timestamp: at(20) },
+    // B wrote to both numbers
+    { wamid: 'wamid.B1', direction: 'in', waId: '222', phoneNumberId: 'PN_OTHER', text: 'keep me', timestamp: at(40) },
+    { wamid: 'wamid.B2', direction: 'in', waId: '222', phoneNumberId: 'PN_2', text: 'old 3', timestamp: at(10) },
+    // C never used it
+    { wamid: 'wamid.C1', direction: 'in', waId: '333', phoneNumberId: 'PN_OTHER', text: 'untouched', timestamp: at(5) },
+  ])
+  for (const w of ['111', '222', '333']) await syncChat(w)
+  const callDisconnect = async (query) => {
+    let status = 200, out
+    const res = { status(c) { status = c; return this }, json(b) { out = b; return this } }
+    await disconnect({ query, body: {}, userId: null, method: 'DELETE', path: '/connection' }, res)
+    return { status, body: out }
+  }
+
+  let d = await callDisconnect({})
+  ok(d.status === 200 && d.body.connection.status === 'disconnected' && d.body.deleted === null, 'plain disconnect')
+  ok(await WhatsappMessage.countDocuments() === 5 && await WhatsappChat.countDocuments() === 3, 'without the option, every message and chat stays')
+
+  await connectWithAccessKey({ accessToken: 'SYSTEM_TOKEN', wabaId: 'WABA_2', phoneNumberId: 'PN_2', userId: null })
+  d = await callDisconnect({ deleteChats: '1' })
+  ok(d.status === 200 && d.body.connection.status === 'disconnected', 'disconnect with the option')
+  ok(d.body.deleted?.messages === 3 && d.body.deleted?.chats === 1, 'reports 3 messages and 1 chat removed')
+  ok(await WhatsappMessage.countDocuments({ phoneNumberId: 'PN_2' }) === 0, 'every message of that number is gone')
+  ok(!(await WhatsappChat.findOne({ waId: '111' })), 'a chat with only that number\'s messages is dropped')
+  const chatB = await WhatsappChat.findOne({ waId: '222' }).populate('lastMessage').lean()
+  ok(chatB?.lastMessage?.wamid === 'wamid.B1', 'a chat that also used another number stays, showing its own last message')
+  ok(await WhatsappMessage.countDocuments({ waId: '333' }) === 1 && await WhatsappChat.exists({ waId: '333' }), 'other contacts untouched')
+  await WhatsappMessage.deleteMany({})
+  await WhatsappChat.deleteMany({})
 
   console.log('\nSending — test number fallback')
   await WhatsappConnection.deleteMany({})
