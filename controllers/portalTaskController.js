@@ -337,6 +337,8 @@ function applyWaiting(task, w) {
 function setStatus(task, status, userId) {
   if (!TASK_STATUSES.includes(status) || task.status === status) return false
   task.status = status
+  // A finished task isn't waiting on anyone any more.
+  if (status === 'done' && task.waiting?.on) task.waiting = { on: false, reason: '', who: '' }
   if (status === 'done') { task.completedAt = new Date(); task.completedBy = userId }
   else { task.completedAt = undefined; task.completedBy = undefined }
   return true
@@ -483,9 +485,14 @@ export async function addTaskComment(req, res) {
     if (!text) return res.status(400).json({ error: 'Write a comment first' })
     const mentionIds = cleanIds(req.body?.mentions).filter(id => !sameId(id, req.userId)).slice(0, 10)
     const mentioned = mentionIds.length
-      ? await User.find({ _id: { $in: mentionIds }, status: 'active' }).select('_id').lean()
+      ? await User.find({ _id: { $in: mentionIds }, status: 'active' }).select('_id roles').populate('roles', 'key').lean()
       : []
-    const mentionSet = new Set(mentioned.map(u => String(u._id)))
+    // A student can only be brought in by assigning them the task, never by a
+    // mention: a mention makes you a watcher, and staff talk about students in
+    // comments on tasks the student must not see.
+    const isStudentUser = (u) => (u.roles || []).length > 0 && u.roles.every(r => r.key === 'student')
+    const allowed = mentioned.filter(u => !isStudentUser(u) || task.assignees.some(a => sameId(a, u._id)))
+    const mentionSet = new Set(allowed.map(u => String(u._id)))
     task.comments.push({ text, by: req.userId, byName: req.user.displayName || '', mentions: [...mentionSet] })
     for (const id of mentionSet) {
       const already = [...task.assignees, ...task.watchers, task.createdBy].some(x => sameId(x, id))

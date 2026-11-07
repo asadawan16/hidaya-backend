@@ -196,6 +196,9 @@ try {
   ok(await Notification.countDocuments({ userId: tutor2._id, type: 'task_mention' }) === 1, 'a mention notifies')
   res = await call(tasks.getTask, reqAs(tutor2, [], { params: { id: String(nextRep._id) } }))
   ok(res._status === 200, 'and lets the mentioned person open the task')
+  await call(tasks.addTaskComment, reqAs(tutor, [], { params: { id: String(nextRep._id) }, body: { text: '@Student User has not paid', mentions: [String(stuUser._id)] } }))
+  res = await call(tasks.getTask, reqAs(stuUser, [], { params: { id: String(nextRep._id) } }))
+  ok(res._status === 404 && !(await Notification.exists({ userId: stuUser._id, type: 'task_mention' })), 'mentioning a student who is not on the task neither notifies nor shows it to them')
 
   const unowned = await Task.create({ title: 'Nobody yet', createdBy: admin._id, assignees: [] })
   res = await call(tasks.myTaskSummary, reqAs(admin, MANAGE, {}))
