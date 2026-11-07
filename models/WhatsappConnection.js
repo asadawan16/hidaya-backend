@@ -10,7 +10,8 @@ import mongoose from 'mongoose'
  * `history` webhooks after we request a sync (Meta allows that request only in
  * the first 24 hours after onboarding).
  *
- * `accessTokenEnc` is the business-integration token from the code exchange,
+ * `accessTokenEnc` is the business-integration token from the code exchange
+ * (or, for connectMethod 'manual', the pasted system-user token),
  * AES-GCM encrypted with MFA_ENCRYPTION_KEY (utils/totp.js). It is never sent
  * to the browser and this model is excluded from the portal data export.
  */
@@ -30,6 +31,11 @@ const whatsappConnectionSchema = new mongoose.Schema({
   verifiedName: { type: String, default: '' },
   qualityRating: { type: String, default: '' },
   coexistence: { type: Boolean, default: false },
+  // 'manual' = a system-user access key pasted on the page instead of the
+  // Facebook window. Needed when the number's business portfolio is the one
+  // that owns the Meta app: Embedded Signup can't share an account with its
+  // own owner and fails with "isn't a valid Business ID" (#1690130).
+  connectMethod: { type: String, enum: ['embedded_signup', 'manual'], default: 'embedded_signup' },
 
   accessTokenEnc: { type: String, default: '', select: false },
   subscribedAt: Date,

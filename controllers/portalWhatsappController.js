@@ -11,7 +11,7 @@ import { plainWhatsappError, plainFailure } from '../utils/whatsappErrors.js'
 import { touchChat } from '../utils/whatsappChats.js'
 import {
   META_APP_ID, WHATSAPP_ES_CONFIG_ID, GRAPH_VERSION, GraphError,
-  exchangeCodeForToken, listPhoneNumbers, subscribeApp, unsubscribeApp, requestAppSync,
+  exchangeCodeForToken, inspectToken, listPhoneNumbers, getPhoneNumber, subscribeApp, unsubscribeApp, requestAppSync,
   sendMessage, listTemplates, createTemplate,
 } from '../services/whatsappGraph.js'
 
@@ -60,18 +60,66 @@ export async function getConnection(_req, res) {
  */
 export async function connectWhatsappNumber({ code, wabaId, phoneNumberId, businessId, coexistence, userId }) {
   const token = await exchangeCodeForToken(code)
+  const number = pickNumber(await listPhoneNumbers(wabaId, token), phoneNumberId)
+  return saveConnection({ token, wabaId, number, businessId, coexistence, userId, connectMethod: 'embedded_signup' })
+}
 
-  const numbers = await listPhoneNumbers(wabaId, token)
-  let number
+function pickNumber(numbers, phoneNumberId) {
   if (phoneNumberId) {
-    number = numbers.find(n => n.id === phoneNumberId)
+    const number = numbers.find(n => n.id === phoneNumberId)
     if (!number) throw new GraphError('That phone number is not on the WhatsApp Business Account Meta returned')
-  } else if (numbers.length === 1) {
-    number = numbers[0]
-  } else {
-    throw new GraphError(numbers.length ? 'Meta returned several numbers and did not say which one was connected' : 'No phone number found on that WhatsApp Business Account')
+    return number
+  }
+  if (numbers.length === 1) return numbers[0]
+  throw new GraphError(numbers.length ? 'Meta returned several numbers and did not say which one was connected' : 'No phone number found on that WhatsApp Business Account')
+}
+
+const NEEDED_SCOPES = ['whatsapp_business_management', 'whatsapp_business_messaging']
+
+/*
+ * Connect with an access key instead of the Facebook window. For the academy's
+ * own number: its business portfolio owns HidayaOnlineApp, and Embedded Signup
+ * can't share a WhatsApp account with the business that owns the app (Meta:
+ * "isn't a valid Business ID", #1690130). The key is a system-user token from
+ * that portfolio, generated for this app with the two WhatsApp permissions;
+ * after the checks it is used exactly like the token Embedded Signup returns.
+ * Returns { connection, warnings }.
+ */
+export async function connectWithAccessKey({ accessToken, wabaId, phoneNumberId, userId }) {
+  const info = await inspectToken(accessToken)
+  if (!info.isValid) throw new GraphError("Meta says that access key isn't valid. It may have been copied with a piece missing, or revoked. Generate a new one and paste it again.")
+  if (info.appId && info.appId !== META_APP_ID) throw new GraphError('That access key was made for a different Meta app. Generate it for HidayaOnlineApp.')
+  const missing = NEEDED_SCOPES.filter(s => !info.scopes.includes(s))
+  if (missing.length) throw new GraphError(`That access key is missing the permission${missing.length > 1 ? 's' : ''} ${missing.join(' and ')}. Tick ${missing.length > 1 ? 'them' : 'it'} when generating the key.`)
+
+  const numbers = await listPhoneNumbers(wabaId, accessToken)
+  if (!numbers.length) throw new GraphError('That WhatsApp Business Account has no phone number yet. Check in WhatsApp Manager that the number is linked to it.')
+  if (!phoneNumberId && numbers.length > 1) {
+    const list = numbers.map(n => `${n.display_phone_number || 'unnamed'} (ID ${n.id})`).join(', ')
+    throw new GraphError(`That account has ${numbers.length} numbers: ${list}. Paste the phone number ID of the one to connect.`)
+  }
+  let number = pickNumber(numbers, phoneNumberId)
+
+  // The fuller record says whether the number is still on the office phone
+  try { number = { ...number, ...(await getPhoneNumber(number.id, accessToken)) } } catch { /* the list entry is enough */ }
+  const warnings = []
+  if (number.platform_type && number.platform_type !== 'CLOUD_API') {
+    warnings.push(`Meta says this number isn't switched on for sending from the portal yet (${number.platform_type}). Messages may fail until it is.`)
+  }
+  if (info.expiresAt) {
+    warnings.push(`This access key stops working on ${new Date(info.expiresAt * 1000).toUTCString()}. Generate one that never expires so WhatsApp doesn't stop then.`)
   }
 
+  const connection = await saveConnection({
+    token: accessToken, wabaId, number, businessId: '', userId, connectMethod: 'manual',
+    // Unknown counts as yes: the academy's number lives on the office phone, and
+    // a sync request for a number that isn't there is refused and stored, not thrown
+    coexistence: number.is_on_biz_app !== false,
+  })
+  return { connection, warnings }
+}
+
+async function saveConnection({ token, wabaId, number, businessId, coexistence, userId, connectMethod }) {
   await subscribeApp(wabaId, token)
   const now = new Date()
 
@@ -84,6 +132,7 @@ export async function connectWhatsappNumber({ code, wabaId, phoneNumberId, busin
     verifiedName: number.verified_name || '',
     qualityRating: number.quality_rating || '',
     coexistence: Boolean(coexistence),
+    connectMethod,
     accessTokenEnc: encryptSecret(token),
     subscribedAt: now,
     connectedBy: userId || null,
@@ -138,6 +187,33 @@ export async function connect(req, res) {
   } catch (err) {
     if (err instanceof GraphError) return res.status(502).json({ error: err.message })
     console.error('Connect WhatsApp error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function connectManual(req, res) {
+  const { accessToken, wabaId, phoneNumberId } = req.body || {}
+  const token = typeof accessToken === 'string' ? accessToken.trim() : ''
+  if (!/^[A-Za-z0-9_|-]{20,2000}$/.test(token)) return res.status(400).json({ error: "That doesn't look like an access key. Copy the whole key Meta showed you and paste it again." })
+  if (!IDS.test(String(wabaId || '').trim())) return res.status(400).json({ error: 'Enter the WhatsApp Business Account ID (digits only)' })
+  if (phoneNumberId && !IDS.test(String(phoneNumberId).trim())) return res.status(400).json({ error: 'The phone number ID should be digits only' })
+  if (!process.env.WHATSAPP_APP_SECRET || !process.env.MFA_ENCRYPTION_KEY) {
+    return res.status(503).json({ error: 'Server is missing WHATSAPP_APP_SECRET or MFA_ENCRYPTION_KEY' })
+  }
+
+  try {
+    const { connection, warnings } = await connectWithAccessKey({
+      accessToken: token, wabaId: String(wabaId).trim(),
+      phoneNumberId: phoneNumberId ? String(phoneNumberId).trim() : '', userId: req.userId,
+    })
+    await logActivity({
+      level: 'info', category: 'portal', action: 'whatsapp_connected',
+      message: `WhatsApp number ${connection.displayPhoneNumber || connection.phoneNumberId} connected with an access key${connection.coexistence ? ' (coexistence)' : ''}`, req,
+    })
+    res.json({ connection: publicView(connection), warnings })
+  } catch (err) {
+    if (err instanceof GraphError) return res.status(502).json({ error: err.message })
+    console.error('Connect WhatsApp (access key) error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

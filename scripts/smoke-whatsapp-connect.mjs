@@ -13,6 +13,10 @@
 //     connected, stores the outbound row under Meta's wamid, sends template
 //     parameters, refuses local-format numbers
 //   - templates: created on the sender's WABA with example values for {{n}}
+//   - access-key connect (for the app owner's own number, where Embedded
+//     Signup fails with #1690130): the key must be valid, for our app, with
+//     both WhatsApp permissions; several numbers need an id; an expiring key
+//     connects with a warning; the number's is_on_biz_app sets coexistence
 //
 // Meta is replaced by a stubbed global fetch — no Meta account, token or
 // running server needed. Runs against a THROWAWAY database
@@ -25,7 +29,7 @@ import WhatsappConnection from '../models/WhatsappConnection.js'
 import WhatsappMessage from '../models/WhatsappMessage.js'
 import '../models/Student.js'
 import {
-  connectWhatsappNumber, getConnection, send, addTemplate, resolveSender,
+  connectWhatsappNumber, connectWithAccessKey, getConnection, send, addTemplate, resolveSender,
 } from '../controllers/portalWhatsappController.js'
 import { decryptSecret } from '../utils/totp.js'
 import { META_APP_ID } from '../services/whatsappGraph.js'
@@ -43,6 +47,14 @@ const calls = []
 let sentSeq = 0
 let failHistorySync = false
 let failExchange = false
+// debug_token answers, keyed by the token being inspected
+const TOKENS = {
+  SYSTEM_TOKEN: { app_id: '__APP__', is_valid: true, expires_at: 0, scopes: ['whatsapp_business_management', 'whatsapp_business_messaging', 'business_management'] },
+  EXPIRING_TOKEN: { app_id: '__APP__', is_valid: true, expires_at: 1893456000, scopes: ['whatsapp_business_management', 'whatsapp_business_messaging'] },
+  OTHER_APP_TOKEN: { app_id: '999', is_valid: true, expires_at: 0, scopes: ['whatsapp_business_management', 'whatsapp_business_messaging'] },
+  NO_SEND_TOKEN: { app_id: '__APP__', is_valid: true, expires_at: 0, scopes: ['whatsapp_business_management'] },
+  REVOKED_TOKEN: { app_id: '__APP__', is_valid: false, expires_at: 0, scopes: [] },
+}
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input))
   const method = init.method || 'GET'
@@ -54,6 +66,19 @@ globalThis.fetch = async (input, init = {}) => {
     if (failExchange) return json(400, { error: { message: 'This authorization code has expired.', code: 100 } })
     return json(200, { access_token: 'BUSINESS_TOKEN', token_type: 'bearer' })
   }
+  if (path === 'debug_token') {
+    const d = TOKENS[url.searchParams.get('input_token')]
+    return json(200, { data: d ? { ...d, app_id: d.app_id === '__APP__' ? META_APP_ID : d.app_id } : { is_valid: false } })
+  }
+  if (path === 'PN_1' && method === 'GET') {
+    return json(200, { id: 'PN_1', display_phone_number: '+92 300 0000000', verified_name: 'Hidaya Online', quality_rating: 'GREEN', platform_type: 'CLOUD_API', is_on_biz_app: true })
+  }
+  if (path === 'WABA_2/phone_numbers') {
+    return json(200, { data: [{ id: 'PN_1', display_phone_number: '+92 300 0000000' }, { id: 'PN_2', display_phone_number: '+92 300 1111111' }] })
+  }
+  if (path === 'WABA_EMPTY/phone_numbers') return json(200, { data: [] })
+  if (path === 'WABA_2/subscribed_apps') return json(200, { success: true })
+  if (path === 'PN_2/smb_app_data') return json(200, { success: true })
   if (path === 'WABA_1/phone_numbers') {
     return json(200, { data: [{ id: 'PN_1', display_phone_number: '+92 300 0000000', verified_name: 'Hidaya Online', quality_rating: 'GREEN' }] })
   }
@@ -122,6 +147,37 @@ try {
   err = null
   try { await connectWhatsappNumber({ ...base, phoneNumberId: 'PN_1' }) } catch (e) { err = e }
   ok(err?.name === 'GraphError' && /expired/.test(err.message), 'Meta\'s error message surfaces')
+
+  console.log('\nAccess-key connect (app owner\'s own number)')
+  calls.length = 0
+  let manual = await connectWithAccessKey({ accessToken: 'SYSTEM_TOKEN', wabaId: 'WABA_1', phoneNumberId: '', userId: null })
+  const dbg = calls.find(c => c.path === 'debug_token')
+  ok(dbg?.query.input_token === 'SYSTEM_TOKEN' && dbg?.query.access_token === `${META_APP_ID}|smoke-app-secret`, 'key inspected with the app token')
+  ok(!calls.some(c => c.path === 'oauth/access_token'), 'no code exchange')
+  ok(calls.some(c => c.method === 'POST' && c.path === 'WABA_1/subscribed_apps' && c.auth === 'Bearer SYSTEM_TOKEN'), 'app subscribed to the WABA with the pasted key')
+  ok(calls.filter(c => c.path === 'PN_1/smb_app_data').map(c => c.body.sync_type).join(',') === 'smb_app_state_sync,history', 'is_on_biz_app → coexistence, contacts + history sync requested')
+  ok(manual.connection.status === 'connected' && manual.connection.connectMethod === 'manual' && manual.connection.coexistence === true && manual.warnings.length === 0, 'connected as manual, no warnings')
+  const storedManual = await WhatsappConnection.findOne({ key: 'default' }).select('+accessTokenEnc').lean()
+  ok(decryptSecret(storedManual.accessTokenEnc) === 'SYSTEM_TOKEN', 'pasted key stored encrypted')
+  const manualSender = await resolveSender()
+  ok(manualSender?.source === 'connected' && manualSender.token === 'SYSTEM_TOKEN', 'sending uses the connected number with the pasted key')
+
+  manual = await connectWithAccessKey({ accessToken: 'EXPIRING_TOKEN', wabaId: 'WABA_1', phoneNumberId: 'PN_1', userId: null })
+  ok(manual.connection.status === 'connected' && manual.warnings.some(w => /stops working/.test(w)), 'an expiring key connects, with a warning')
+
+  const refused = async (args) => { try { await connectWithAccessKey({ wabaId: 'WABA_1', phoneNumberId: '', userId: null, ...args }); return null } catch (e) { return e } }
+  err = await refused({ accessToken: 'REVOKED_TOKEN' })
+  ok(err?.name === 'GraphError' && /isn't valid/.test(err.message), 'an invalid key is refused')
+  err = await refused({ accessToken: 'OTHER_APP_TOKEN' })
+  ok(err?.name === 'GraphError' && /different Meta app/.test(err.message), 'a key for another app is refused')
+  err = await refused({ accessToken: 'NO_SEND_TOKEN' })
+  ok(err?.name === 'GraphError' && /whatsapp_business_messaging/.test(err.message), 'a key without the messaging permission is refused, naming it')
+  err = await refused({ accessToken: 'SYSTEM_TOKEN', wabaId: 'WABA_2' })
+  ok(err?.name === 'GraphError' && /2 numbers/.test(err.message) && /PN_2/.test(err.message), 'several numbers and no id → asks for one, listing them')
+  err = await refused({ accessToken: 'SYSTEM_TOKEN', wabaId: 'WABA_EMPTY' })
+  ok(err?.name === 'GraphError' && /no phone number/.test(err.message), 'an account with no number is refused')
+  manual = await connectWithAccessKey({ accessToken: 'SYSTEM_TOKEN', wabaId: 'WABA_2', phoneNumberId: 'PN_2', userId: null })
+  ok(manual.connection.phoneNumberId === 'PN_2' && manual.connection.coexistence === true, 'the chosen number is connected (details lookup failure tolerated)')
 
   console.log('\nSending — test number fallback')
   await WhatsappConnection.deleteMany({})

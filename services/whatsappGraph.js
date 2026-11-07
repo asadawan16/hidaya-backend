@@ -61,6 +61,33 @@ export async function exchangeCodeForToken(code) {
   return data.access_token
 }
 
+/*
+ * What a pasted access token is: which app it belongs to, whether it still
+ * works, when it expires (0 = never) and its permissions. Asked with the app's
+ * own token (app id|secret), which can inspect any token issued for this app.
+ */
+export async function inspectToken(token) {
+  const secret = process.env.WHATSAPP_APP_SECRET
+  if (!secret) throw new GraphError('WHATSAPP_APP_SECRET is not set on the server')
+  const data = await graph('debug_token', {
+    query: { input_token: token, access_token: `${META_APP_ID}|${secret}` },
+  })
+  const d = data?.data || {}
+  return {
+    appId: d.app_id ? String(d.app_id) : '',
+    isValid: d.is_valid === true,
+    expiresAt: Number(d.expires_at) || 0,
+    scopes: Array.isArray(d.scopes) ? d.scopes : [],
+  }
+}
+
+// One number's details, including whether it is still on the WhatsApp Business app
+export function getPhoneNumber(phoneNumberId, token) {
+  return graph(phoneNumberId, {
+    token, query: { fields: 'id,display_phone_number,verified_name,quality_rating,platform_type,is_on_biz_app' },
+  })
+}
+
 export async function listPhoneNumbers(wabaId, token) {
   const data = await graph(`${wabaId}/phone_numbers`, {
     token, query: { fields: 'id,display_phone_number,verified_name,quality_rating' },
