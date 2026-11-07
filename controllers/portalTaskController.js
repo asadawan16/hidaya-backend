@@ -149,6 +149,19 @@ async function spawnNextIfRepeating(task, actor) {
   return next
 }
 
+// Un-finishing a repeating task (or Undo) takes back the copy it made, as
+// long as nobody has touched that copy yet; a copy already worked on stays.
+async function retractNextIfUntouched(task) {
+  if (task.status === 'done' || !task.repeatedInto) return
+  const next = await Task.findById(task.repeatedInto).select('status comments activity checklist').lean()
+  const untouched = next && next.status === 'todo' && !next.comments?.length
+    && (next.activity?.length || 0) <= 1 && !(next.checklist || []).some(i => i.done)
+  if (next && !untouched) return
+  if (next) await Task.deleteOne({ _id: next._id })
+  await Task.updateOne({ _id: task._id }, { $unset: { repeatedInto: 1 } })
+  task.repeatedInto = undefined
+}
+
 // ─── Waiting on ───
 
 async function notifyWaiting(task, actor) {
@@ -414,6 +427,8 @@ export async function updateTask(req, res) {
     if (before.status !== 'done' && task.status === 'done') {
       await notifyDone(task, req)
       await spawnNextIfRepeating(task, req.user)
+    } else if (before.status === 'done' && task.status !== 'done') {
+      await retractNextIfUntouched(task)
     }
     const populated = await Task.findById(task._id).populate(POPULATE).populate('repeatOf', 'title dueDate').lean()
     pushLive([...involved(task), ...before.assignees], 'task_changed', { taskId: String(task._id) })
@@ -447,7 +462,7 @@ export async function reorderTasks(req, res) {
       if (!wasDone && t.status === 'done') {
         await notifyDone(t, req)
         await spawnNextIfRepeating(t, req.user)
-      }
+      } else if (wasDone && t.status !== 'done') await retractNextIfUntouched(t)
     }
     pushLive(touched.flatMap(involved), 'task_changed', {})
     res.json({ ok: true, updated: touched.length })
@@ -595,6 +610,7 @@ export async function undoBulkUpdate(req, res) {
       }
       addActivity(t, req.user, 'undid a change made to several tasks')
       await t.save()
+      await retractNextIfUntouched(t)
       restored++
     }
     res.json({ ok: true, restored })

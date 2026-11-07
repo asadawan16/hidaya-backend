@@ -174,11 +174,13 @@ try {
   const rep = res._json
   ok(rep.repeat?.freq === 'weekly', 'repeat saved')
   res = await call(tasks.updateTask, reqAs(tutor, [], { params: { id: String(rep._id) }, body: { status: 'done' } }))
-  const nextRep = await Task.findOne({ repeatOf: rep._id }).lean()
+  let nextRep = await Task.findOne({ repeatOf: rep._id }).lean()
   ok(nextRep && nextRep.status === 'todo' && new Date(nextRep.dueDate).toISOString().slice(0, 10) === addDaysIso(today.iso, 7) && nextRep.checklist[0].done === false, 'finishing a weekly task makes next week\'s, checklist unticked')
   await call(tasks.updateTask, reqAs(tutor, [], { params: { id: String(rep._id) }, body: { status: 'todo' } }))
+  ok(await Task.countDocuments({ repeatOf: rep._id }) === 0, 'un-finishing it takes back the untouched copy')
   await call(tasks.updateTask, reqAs(tutor, [], { params: { id: String(rep._id) }, body: { status: 'done' } }))
-  ok(await Task.countDocuments({ repeatOf: rep._id }) === 1, 're-finishing it does not make a second copy')
+  ok(await Task.countDocuments({ repeatOf: rep._id }) === 1, 'finishing it again makes exactly one copy')
+  nextRep = await Task.findOne({ repeatOf: rep._id }).lean()
 
   res = await call(tasks.updateTask, reqAs(tutor, [], { params: { id: String(nextRep._id) }, body: { waiting: { on: true, who: 'Parent', reason: 'Confirm the time', userId: String(admin._id) } } }))
   ok(res._json.waiting?.on && res._json.waiting.who === 'Parent', 'an assignee can mark it waiting')
