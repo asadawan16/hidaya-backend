@@ -55,6 +55,7 @@ import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js
 import portalFeeRoutes from './routes/portalFeeRoutes.js'
 import portalClassLinkRoutes from './routes/portalClassLinkRoutes.js'
 import portalDataExportRoutes from './routes/portalDataExportRoutes.js'
+import portalTaskRoutes from './routes/portalTaskRoutes.js'
 import publicClassLinkRoutes from './routes/publicClassLinkRoutes.js'
 import publicCheckoutRoutes from './routes/publicCheckoutRoutes.js'
 import { stripeWebhook } from './controllers/stripeWebhookController.js'
@@ -64,6 +65,8 @@ import { initSocket } from './config/socket.js'
 // import requestLogger from './middleware/requestLogger.js' // disabled 2026-08-02 — see app.use note below
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
 import { runAutoSessionGeneration, autoCompleteOverrunSessions } from './controllers/portalScheduleController.js'
+import { runTaskDueReminders } from './controllers/portalTaskController.js'
+import { runFeeReminders } from './services/feeReminders.js'
 import { ALL_PERMISSIONS, RESTRICTION_PERMISSIONS } from './config/permissions.js'
 
 const app = express()
@@ -214,6 +217,7 @@ app.use('/api/portal/student-progress', portalStudentProgressRoutes)
 app.use('/api/portal/fees', portalFeeRoutes)
 app.use('/api/portal/class-links', portalClassLinkRoutes)
 app.use('/api/portal/data-export', portalDataExportRoutes)
+app.use('/api/portal/tasks', portalTaskRoutes)
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))
@@ -269,4 +273,11 @@ server.listen(PORT, () => {
   // Runs on startup and every 5 min; notifies oversight + prompts tutors to log.
   autoCompleteOverrunSessions()
   setInterval(autoCompleteOverrunSessions, 5 * 60 * 1000)
+
+  // Fee reminders (day before due + daily digest) and "task due today"
+  // notifications. Every 15 min; each sends at most once a day, and catches up
+  // when the server wakes (Render free sleeps when idle).
+  const reminders = () => { runFeeReminders(); runTaskDueReminders() }
+  setTimeout(reminders, 30 * 1000)
+  setInterval(reminders, 15 * 60 * 1000)
 })

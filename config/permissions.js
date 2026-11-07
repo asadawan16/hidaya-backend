@@ -52,7 +52,8 @@ export const PERMISSIONS = {
   // Revenue analytics dashboard (org-wide income/expense overview — the
   // /portal/revenue page). Separate from finance.* so a role can hold the
   // invoices/salary Finance page without the org-wide revenue breakdown.
-  revenue: ['revenue.read'],
+  // revenue.manage — set the PKR conversion rates the Revenue page converts with.
+  revenue: ['revenue.read', 'revenue.manage'],
 
   // Salary
   salary: ['salary.read', 'salary.manage'],
@@ -142,6 +143,14 @@ export const PERMISSIONS = {
   // disaster-recovery backup, /portal/data-export) plus its weekly reminder.
   // Super-admin only by default: the file holds every student, salary and fee.
   dataExport: ['data.export'],
+
+  // Tasks board (Kanban / list / calendar / timeline) + weekly/monthly goals.
+  // Everyone sees and works the tasks assigned to them or created by them, and
+  // staff can add their own to-dos, without any of these.
+  // task.read — see every task (the whole board), not just their own.
+  // task.manage — create/assign tasks for anyone (staff or students), edit and
+  // delete any task, and manage goals.
+  task: ['task.read', 'task.manage'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
@@ -185,6 +194,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'leave.read', 'leave.review',
     'student_progress.read',
     'demo.read', 'demo.manage',
+    'task.read', 'task.manage',
   ],
 
   coordinator: [
@@ -211,6 +221,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'leave.read', 'leave.review',
     'student_progress.read',
     'demo.read', 'demo.manage',
+    'task.read', 'task.manage',
   ],
 
   qci: [
@@ -231,6 +242,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'advance.read', 'advance.request',
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
+    'task.read', 'task.manage',
   ],
 
   qcm: [

@@ -87,6 +87,9 @@ const studentSchema = new mongoose.Schema({
     // backward-compat with existing records.
     cycle: { type: String, enum: ['monthly', 'bimonthly', 'quarterly', 'four_monthly', 'semiannual', 'yearly', ''], default: 'monthly' },
     status: { type: String, enum: ['pending', 'paid', 'overdue', ''], default: 'pending' },
+    // Day of the month the fee falls due (1-31). 0 = the day the student joined
+    // (utils/feeDue.js#dueDayOf). A 31st lands on the last day of short months.
+    dueDay: { type: Number, min: 0, max: 31, default: 0 },
   },
 
   performanceFlag: { type: String, enum: ['normal', 'weak', 'strong', ''], default: '' },

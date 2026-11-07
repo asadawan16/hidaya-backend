@@ -4,6 +4,7 @@ import {
   getFeeGrid, upsertFeeCell, createFeePayment, listFeePayments,
   deleteFeePayment, updateFeePayment, listLinkablePayments, bulkUpsertReceivables, resetFeeMonths,
   getStudentFeeHistory, getMyFees,
+  getFeeDues, getFeeDuesSummary, getFeeReminderSettings, updateFeeReminderSettings, sendFeeReminderNow,
 } from '../controllers/portalFeeController.js'
 
 const router = Router()
@@ -17,6 +18,11 @@ router.get('/my', getMyFees)
 router.get('/grid', requirePermission('fee.read'), getFeeGrid)
 router.get('/student/:studentId/history', requirePermission('fee.read'), getStudentFeeHistory)
 router.get('/payments', requirePermission('fee.read'), listFeePayments)
+router.get('/dues', requirePermission('fee.read'), getFeeDues)
+router.get('/dues/summary', requirePermission('fee.read'), getFeeDuesSummary)
+router.get('/reminders/settings', requirePermission('fee.read'), getFeeReminderSettings)
+router.put('/reminders/settings', requirePermission('fee.manage'), updateFeeReminderSettings)
+router.post('/reminders/send', requirePermission('fee.manage'), sendFeeReminderNow)
 router.get('/linkable-payments', requirePermission('fee.read'), listLinkablePayments)
 router.patch('/cell', requirePermission('fee.manage'), upsertFeeCell)
 router.patch('/receivables', requirePermission('fee.manage'), bulkUpsertReceivables)

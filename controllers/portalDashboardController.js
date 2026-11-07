@@ -7,6 +7,10 @@ import Payment from '../models/Payment.js'
 import Expense from '../models/Expense.js'
 import FeePayment from '../models/FeePayment.js'
 import SalaryRecord from '../models/SalaryRecord.js'
+import CurrencyRates from '../models/CurrencyRates.js'
+import { CURRENCIES, getRates, getRatesDoc, clearRatesCache, toPKRWith } from '../services/currencyRates.js'
+import { monthlyFee } from '../utils/feeDue.js'
+import { duesSummary } from '../services/feeDues.js'
 
 // Helper: last N months labels + boundaries
 function lastNMonths(n) {
@@ -334,25 +338,12 @@ async function studentCharts(_req, res, user, monthCount) {
   })
 }
 
-// Supported currencies + approximate PKR conversion rates. Used to roll the
-// multi-currency figures up into a single PKR-equivalent headline number.
-const REVENUE_CURRENCIES = ['PKR', 'USD', 'EUR', 'GBP', 'CAD']
-const PKR_RATES = { PKR: 1, USD: 278, EUR: 312, GBP: 355, CAD: 205 }
-const toPKR = (amount, cur) => (amount || 0) * (PKR_RATES[cur] || 1)
+// Supported currencies. Every multi-currency figure is rolled up into one PKR
+// headline at the conversion rates the admin enters on the Revenue page
+// (models/CurrencyRates.js, client's request 2026-11-07); they used to be
+// hard-coded here.
+const REVENUE_CURRENCIES = CURRENCIES
 
-// The students page lets a fee be tagged with a foreign currency, but in practice
-// almost every agreed fee is entered as a PKR amount (fees are collected in PKR on
-// the fee-management page). A genuine foreign monthly fee is a small number
-// ($20–80 / £15–60); a PKR fee is in the thousands. So a "foreign" label sitting on
-// a thousands-range fee is a data-entry mislabel — the value is really PKR and must
-// NOT be multiplied by the FX rate (that's what inflated Total/Avg fee to millions).
-// We therefore trust a foreign label only when the amount is small enough to plausibly
-// be that currency; anything at or above this cap is treated as PKR.
-const FOREIGN_FEE_MAX = 500
-const effectiveFeeCurrency = (fee, currency) => {
-  if (!currency || currency === 'PKR') return 'PKR'
-  return (fee || 0) < FOREIGN_FEE_MAX ? currency : 'PKR'
-}
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 // ── Revenue ledger ──────────────────────────────────────────────────────────
@@ -388,11 +379,12 @@ const blankMonth = () => ({
   salary: { tutor: 0, staff: 0, custom: 0 }, salaryCount: 0, salaryPending: 0,
   otherExpense: 0,
   gatewayByCurrency: {}, // currency → { total, count, stripe, mastercard } in the payment's own currency
+  manualByCurrency: {},  // currency → { total, count } in the payment's own currency
   channels: {},          // 'manual:cash' | 'gateway:stripe' → { pkr, count }
   expenseByCategory: {}, // category → { pkr, count }
 })
 
-async function loadRevenueLedger() {
+async function loadRevenueLedger(toPKR) {
   const [manualAgg, gatewayAgg, expenseAgg, salaryAgg] = await Promise.all([
     // A FeePayment that wraps a gateway Payment (linkedPaymentId) is the same
     // money already counted on the gateway side — skip it or it counts twice.
@@ -426,6 +418,9 @@ async function loadRevenueLedger() {
     const pkr = toPKR(r.total, r._id.currency || 'PKR')
     b.manual += pkr
     b.manualCount += r.count
+    const mcur = r._id.currency || 'PKR'
+    const mc = b.manualByCurrency[mcur] || (b.manualByCurrency[mcur] = { total: 0, count: 0 })
+    mc.total += r.total; mc.count += r.count
     addChannel(b, `manual:${r._id.method || 'other'}`, pkr, r.count)
   }
   for (const r of gatewayAgg) {
@@ -484,6 +479,7 @@ function sumLedger(ledger, from, to) {
     out.salaryCount += b.salaryCount; out.salaryPending += b.salaryPending
     out.otherExpense += b.otherExpense
     merge(out.gatewayByCurrency, b.gatewayByCurrency, ['total', 'count', 'stripe', 'mastercard'])
+    merge(out.manualByCurrency, b.manualByCurrency, ['total', 'count'])
     merge(out.channels, b.channels, ['pkr', 'count'])
     merge(out.expenseByCategory, b.expenseByCategory, ['pkr', 'count'])
   }
@@ -557,7 +553,9 @@ export async function getRevenueStats(req, res) {
     const pkNow = new Date(now.getTime() + PK_OFFSET_MS)
     const currentIdx = monthIdx(pkNow.getUTCFullYear(), pkNow.getUTCMonth() + 1)
 
-    const ledger = await loadRevenueLedger()
+    const rates = await getRates()
+    const toPKR = toPKRWith(rates)
+    const ledger = await loadRevenueLedger(toPKR)
 
     // ── 1. The selected period ──
     const startIdx = monthIdx(year, fromMonth)
@@ -571,13 +569,19 @@ export async function getRevenueStats(req, res) {
     const totalExpensePKR = salaryPKR + p.otherExpense
     const netProfitPKR = totalReceivedPKR - totalExpensePKR
 
-    // Gateway receipts per currency, in that currency (see the note above).
+    // Everything received, per currency it was paid in (manual + gateway), and
+    // its PKR value at the admin's rates. `stripe` / `mastercard` split the
+    // gateway part.
     const receivedByCurrency = REVENUE_CURRENCIES.map(c => {
       const g = p.gatewayByCurrency[c] || { total: 0, count: 0, stripe: 0, mastercard: 0 }
+      const m = p.manualByCurrency[c] || { total: 0, count: 0 }
       return {
-        currency: c, total: g.total, count: g.count,
+        currency: c, rate: rates[c] || 1,
+        total: g.total + m.total, count: g.count + m.count,
+        manual: m.total, manualCount: m.count,
+        gateway: g.total, gatewayCount: g.count,
         stripe: g.stripe, mastercard: g.mastercard,
-        pkrEquiv: round(toPKR(g.total, c)),
+        pkrEquiv: round(toPKR(g.total + m.total, c)),
       }
     })
 
@@ -611,16 +615,16 @@ export async function getRevenueStats(req, res) {
     }
 
     // ── 3. Total fee of students (current agreed monthly fee, a snapshot) ──
-    // Grouped by each student's EFFECTIVE fee currency (see effectiveFeeCurrency):
-    // a foreign label on a PKR-magnitude fee is a mislabel and counted as PKR, so
-    // Total/Avg fee reflect real rupee figures instead of FX-inflated ones.
+    // On this branch the fee is what the fee grid bills: the billed amount in
+    // the student's billing currency (utils/feeDue.js#monthlyFee), or the rupee
+    // fee when no billed amount is set.
     const feeStudents = await Student.find({ status: { $in: ['active', 'leave'] } })
-      .select('billing.fee billing.currency').lean()
+      .select('billing.fee billing.amount billing.currency').lean()
     const feeCurAgg = {} // currency -> { total, count }
     let totalFeePKR = 0
     for (const s of feeStudents) {
-      const fee = s.billing?.fee || 0
-      const cur = effectiveFeeCurrency(fee, s.billing?.currency)
+      const fee = monthlyFee(s)
+      const cur = s.billing?.amount > 0 ? (s.billing.currency || 'PKR') : 'PKR'
       const bucket = feeCurAgg[cur] || (feeCurAgg[cur] = { total: 0, count: 0 })
       bucket.total += fee
       bucket.count += 1
@@ -662,6 +666,8 @@ export async function getRevenueStats(req, res) {
       }),
     ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 20)
 
+    const [ratesDoc, dues] = await Promise.all([getRatesDoc(), duesSummary({ days: 7 })])
+
     res.json({
       period: {
         year, fromMonth, toMonth, wholeYear, months: span, elapsedMonths,
@@ -670,8 +676,12 @@ export async function getRevenueStats(req, res) {
           : fromMonth === toMonth ? `${MONTH_LABELS[fromMonth - 1]} ${year}`
             : `${MONTH_LABELS[fromMonth - 1]}–${MONTH_LABELS[toMonth - 1]} ${year}`,
       },
-      conversionRates: PKR_RATES,
+      conversionRates: rates,
+      ratesUpdatedAt: ratesDoc.updatedAt || null,
+      ratesUpdatedBy: ratesDoc.updatedByName || '',
       currencies: REVENUE_CURRENCIES,
+      // Unpaid fees right now (overdue, due today, next 7 days), per currency and in PKR.
+      outstanding: { overdue: dues.totals.overdue, today: dues.totals.today, upcoming: dues.totals.upcoming, asOf: dues.today },
 
       // Student fees (snapshot)
       totalFeePKR: round(totalFeePKR),
@@ -688,7 +698,7 @@ export async function getRevenueStats(req, res) {
       paymentCount,
       avgReceivedPerPayment: paymentCount > 0 ? round(totalReceivedPKR / paymentCount) : 0,
       receivedByCurrency,
-      currencyBasis: 'gateway',
+      currencyBasis: 'all',
       receivedByChannel,
 
       // Expenses: paid salaries (by subject type) + logged operating expenses
@@ -711,6 +721,43 @@ export async function getRevenueStats(req, res) {
     })
   } catch (err) {
     console.error('Revenue stats error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /portal/dashboard/currency-rates — the PKR conversion rates (revenue.read)
+export async function getCurrencyRates(_req, res) {
+  try {
+    const doc = await getRatesDoc()
+    res.json({ rates: await getRates(), updatedAt: doc.updatedAt || null, updatedBy: doc.updatedByName || '', currencies: CURRENCIES })
+  } catch (err) {
+    console.error('Currency rates error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// PUT /portal/dashboard/currency-rates { rates: { USD: 280, GBP: 356, ... } } (revenue.manage)
+export async function updateCurrencyRates(req, res) {
+  try {
+    const input = req.body?.rates || {}
+    const set = {}
+    for (const c of CURRENCIES) {
+      if (c === 'PKR' || input[c] === undefined || input[c] === '') continue
+      const v = Number(input[c])
+      if (!(v > 0) || v > 100000) return res.status(400).json({ error: `Enter a rate above 0 for ${c}` })
+      set[`rates.${c}`] = Math.round(v * 10000) / 10000
+    }
+    if (!Object.keys(set).length) return res.status(400).json({ error: 'No rates to save' })
+    await CurrencyRates.updateOne(
+      { key: 'default' },
+      { $set: { ...set, updatedBy: req.userId, updatedByName: req.user?.displayName || '' } },
+      { upsert: true },
+    )
+    clearRatesCache()
+    const doc = await getRatesDoc()
+    res.json({ rates: await getRates(), updatedAt: doc.updatedAt || null, updatedBy: doc.updatedByName || '', currencies: CURRENCIES })
+  } catch (err) {
+    console.error('Update currency rates error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

@@ -10,6 +10,11 @@ import Payment from '../models/Payment.js'
 // Imported for its side effect: registers the User model so `recordedBy` populates.
 import '../models/User.js'
 import { logActivity } from '../utils/activityLogger.js'
+import {
+  AUTO_BILL_FROM, monthlyFee, karachiToday, dueDayOf, dueDateIn, isMonthDue, isoDate, dueStateOf, dayNumber,
+} from '../utils/feeDue.js'
+import { collectDues, totalsByCurrency, duesSummary } from '../services/feeDues.js'
+import { getReminderSettings, sendDayBeforeReminder, sendDailyDigest } from '../services/feeReminders.js'
 
 function computeStatus(rec) {
   if (rec.status === 'waived') return 'waived'
@@ -20,18 +25,9 @@ function computeStatus(rec) {
 
 const clampMonth = (m) => Math.min(12, Math.max(1, parseInt(m, 10)))
 
-// The monthly fee the grid bills, in the student's billing currency. This
-// academy bills its families in USD and records payments in USD, so the
-// "Billed amount" (billing.amount, in billing.currency) is the fee. "Fee
-// (local)" (billing.fee) is a rupee reference and is used only when no billed
-// amount is set; using it made a fully paid $45 month read as 12000 due.
-const monthlyFee = (s) => (s?.billing?.amount > 0 ? s.billing.amount : (s?.billing?.fee || 0))
-
-// Months are billed automatically (from the monthly fee) only from the month
-// the academy started keeping fees in the portal. Earlier months show only
-// what was recorded by hand, so years of history before the portal don't read
-// as owed (client's request, 2026-10-30). Change this to move the start.
-const AUTO_BILL_FROM = { year: 2026, month: 10 }
+// monthlyFee (billing.amount in the billing currency, falling back to the rupee
+// billing.fee) and AUTO_BILL_FROM live in utils/feeDue.js, shared with the dues
+// list, the dashboards and the reminder job.
 const AUTO_BILL_KEY = AUTO_BILL_FROM.year * 12 + (AUTO_BILL_FROM.month - 1)
 
 // GET /portal/fees/grid — per-student fee grid scoped to a time period
@@ -78,7 +74,7 @@ export async function getFeeGrid(req, res) {
     // across the whole filtered set so they stay accurate regardless of pagination;
     // the visible page is a slice of this list.
     const allStudents = await Student.find(filter)
-      .select('name rollNo status familyId billing.fee billing.amount billing.currency billing.cycle joiningDate createdAt')
+      .select('name rollNo status familyId billing.fee billing.amount billing.currency billing.cycle billing.dueDay joiningDate createdAt')
       .populate('familyId', 'familyCode primaryGuardian')
       // Group family members next to each other (incl. on-leave siblings), then
       // alphabetical within the family. familyId null (solo students) sorts first.
@@ -129,38 +125,60 @@ export async function getFeeGrid(req, res) {
 
     // Per-student figures for the selected period. Auto-fills months without a manual
     // record from the student's base fee (active students, months from joining up to today).
+    // A month is due once its due date has passed: the student's due day
+    // (billing.dueDay, else the day they joined) in that month. Before this the
+    // whole current month counted as due from the 1st.
+    const today = karachiToday()
     function computeStudent(s) {
       const studentCells = byStudent[s._id.toString()] || {}
       const baseFee = monthlyFee(s)
       const isActive = s.status !== 'left'
       const joinMonth = firstBillableMonth(s)
+      const dueDay = dueDayOf(s)
       let periodDue = 0, periodCollected = 0, periodReceivable = 0
       const autoMonths = []
+      const dueStates = {} // month → paid | waived | overdue | today | soon | upcoming | none
+      const studentCur = s.billing?.currency || 'PKR'
+      const byCur = {} // currency → { due, collected }
+      const add = (cur, k, v) => { if (!v) return; const t = byCur[cur] || (byCur[cur] = { due: 0, collected: 0 }); t[k] += v }
       for (let m = fromMonth; m <= toMonth; m++) {
         const cell = studentCells[m]
-        const withinDue = m <= monthLimit
+        const withinDue = m <= monthLimit && isMonthDue(dueDay, year, m, today)
+        const dueIso = isoDate(year, m, dueDateIn(dueDay, year, m))
         if (cell) {
           periodCollected += cell.amountPaid || 0 // money in counts even for advance months
+          add(cell.currency || studentCur, 'collected', cell.amountPaid || 0)
+          dueStates[m] = dueStateOf({ amount: cell.amount || 0, paid: cell.amountPaid || 0, waived: cell.status === 'waived', dueIso, todayIso: today.iso })
           if (cell.status === 'waived') continue
           if (withinDue) {
             periodReceivable += cell.amount || 0
             periodDue += Math.max(0, (cell.amount || 0) - (cell.amountPaid || 0))
+            add(cell.currency || studentCur, 'due', Math.max(0, (cell.amount || 0) - (cell.amountPaid || 0)))
           }
-        } else if (withinDue && isActive && baseFee > 0 && m >= joinMonth) {
+        } else if (isActive && baseFee > 0 && m >= joinMonth) {
+          dueStates[m] = dueStateOf({ amount: baseFee, paid: 0, dueIso, todayIso: today.iso })
           // No manual record and the month is on/after the joining month → auto-bill.
-          periodReceivable += baseFee
-          periodDue += baseFee
-          autoMonths.push(m)
+          if (withinDue) {
+            periodReceivable += baseFee
+            periodDue += baseFee
+            add(studentCur, 'due', baseFee)
+            autoMonths.push(m)
+          }
         }
       }
-      return { baseFee, studentCells, periodDue, periodCollected, periodReceivable, autoMonths }
+      return { baseFee, studentCells, periodDue, periodCollected, periodReceivable, autoMonths, dueDay, dueStates, byCur }
     }
 
     // Summary across the entire filtered set (not just the page).
     let sumDue = 0, sumCollected = 0, sumReceivable = 0
+    const sumByCur = {}
     for (const s of allStudents) {
       const c = computeStudent(s)
       sumDue += c.periodDue; sumCollected += c.periodCollected; sumReceivable += c.periodReceivable
+      for (const [cur, t] of Object.entries(c.byCur)) {
+        const o = sumByCur[cur] || (sumByCur[cur] = { currency: cur, due: 0, collected: 0 })
+        o.due += t.due; o.collected += t.collected
+      }
     }
 
     const records = pageStudents.map(s => {
@@ -177,6 +195,8 @@ export async function getFeeGrid(req, res) {
         familyCode: s.familyId?.familyCode || '',
         months: c.studentCells,
         autoMonths: c.autoMonths,
+        dueDay: c.dueDay,
+        dueStates: c.dueStates,
         dueTillDate: c.periodDue, // outstanding within the selected period
       }
     })
@@ -193,6 +213,9 @@ export async function getFeeGrid(req, res) {
         due: sumDue,
         receivable: sumReceivable,
         cycleCounts,
+        // Totals above add amounts in different currencies together; these don't.
+        byCurrency: Object.values(sumByCur).sort((a, b) => (b.due + b.collected) - (a.due + a.collected)),
+        today: today.iso,
         fromMonth, toMonth, currentMonth: nowMonth, currentYear: nowYear,
       },
     })
@@ -599,6 +622,9 @@ async function buildStudentFeeHistory(studentId) {
   ])
 
   const now = karachiNow()
+  const today = karachiToday()
+  const dueDay = dueDayOf(student)
+  const dueIsoOf = (y, m) => isoDate(y, m, dueDateIn(dueDay, y, m))
   const baseFee = monthlyFee(student)
   const currency = student.billing?.currency || 'PKR'
   const autoBillable = student.status !== 'left' && baseFee > 0
@@ -644,7 +670,7 @@ async function buildStudentFeeHistory(studentId) {
   let guard = 0
   while ((y < endYear || (y === endYear && m <= endMonth)) && guard++ < 600) {
     const cell = cellMap.get(`${y}-${m}`)
-    const isDueYet = y < now.year || (y === now.year && m <= now.month)
+    const isDueYet = isMonthDue(dueDay, y, m, today)
     if (cell) {
       months.push({
         year: y, month: m,
@@ -655,10 +681,14 @@ async function buildStudentFeeHistory(studentId) {
         method: cell.method || '',
         note: cell.note || '',
         paidAt: cell.paidAt || null,
+        dueDate: dueIsoOf(y, m),
+        dueState: dueStateOf({ amount: cell.amount || 0, paid: cell.amountPaid || 0, waived: cell.status === 'waived', dueIso: dueIsoOf(y, m), todayIso: today.iso }),
         auto: false,
         payments: paymentsForMonth(y, m),
       })
-    } else if (isDueYet && autoBillable && y * 12 + (m - 1) >= AUTO_BILL_KEY) {
+    } else if ((isDueYet || (y === now.year && m === now.month)) && autoBillable && y * 12 + (m - 1) >= AUTO_BILL_KEY) {
+      // The current month shows before its due date too (as upcoming), so the
+      // family sees what is coming; it isn't counted as due until the date.
       // No manual record, on/after joining and AUTO_BILL_FROM → auto-billed as pending.
       months.push({
         year: y, month: m,
@@ -667,6 +697,8 @@ async function buildStudentFeeHistory(studentId) {
         currency,
         status: 'pending',
         method: '', note: '', paidAt: null,
+        dueDate: dueIsoOf(y, m),
+        dueState: dueStateOf({ amount: baseFee, paid: 0, dueIso: dueIsoOf(y, m), todayIso: today.iso }),
         auto: true,
         payments: [],
       })
@@ -682,6 +714,7 @@ async function buildStudentFeeHistory(studentId) {
   const byCurrency = new Map()
   for (const r of months) {
     if (r.status === 'waived') continue
+    if (r.auto && (r.dueState === 'upcoming' || r.dueState === 'soon')) continue
     const c = r.currency || currency
     const t = byCurrency.get(c) || { currency: c, billed: 0, paid: 0, due: 0 }
     t.billed += r.amount || 0
@@ -712,6 +745,7 @@ async function buildStudentFeeHistory(studentId) {
       billedAmount: student.billing?.amount || 0,
       currency,
       cycle: student.billing?.cycle || 'monthly',
+      dueDay,
       familyCode: student.familyId?.familyCode || '',
     },
     months,
@@ -766,6 +800,91 @@ export async function getMyFees(req, res) {
     res.json(data)
   } catch (err) {
     console.error('My fees error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Dues by day + reminders ───
+
+// GET /portal/fees/dues?from=YYYY-MM-DD&to=YYYY-MM-DD — every student month
+// whose due date falls in the window (paid ones too, for the colour hints),
+// plus the unpaid months already past due before it. Totals per currency, and
+// in PKR at the admin's conversion rates.
+export async function getFeeDues(req, res) {
+  try {
+    const isIso = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '')
+    const today = karachiToday()
+    const fromIso = isIso(req.query.from) ? req.query.from : today.iso
+    let toIso = isIso(req.query.to) ? req.query.to : fromIso
+    if (toIso < fromIso) toIso = fromIso
+    // A window longer than ~3 months is never a calendar view; keep it cheap.
+    if (dayNumber(toIso) - dayNumber(fromIso) > 100) return res.status(400).json({ error: 'Pick a range of 100 days or less' })
+    const { items, overdue } = await collectDues({ fromIso, toIso, includeOverdue: req.query.overdue !== '0' })
+    const unpaid = items.filter(r => r.balance > 0 && r.state !== 'waived')
+    const [due, paid, past] = await Promise.all([
+      totalsByCurrency(unpaid), totalsByCurrency(items, 'paid'), totalsByCurrency(overdue),
+    ])
+    res.json({ today: today.iso, from: fromIso, to: toIso, items, overdue, totals: { due, paid, overdue: past } })
+  } catch (err) {
+    console.error('Fee dues error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /portal/fees/dues/summary — dashboard card: due today, overdue, next 7 days.
+export async function getFeeDuesSummary(req, res) {
+  try {
+    const days = Math.min(31, Math.max(1, parseInt(req.query.days, 10) || 7))
+    res.json(await duesSummary({ days }))
+  } catch (err) {
+    console.error('Fee dues summary error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+const REMINDER_FIELDS = ['dayBefore', 'dailyDigest', 'notifyStudents', 'sendHour', 'recipientRoles']
+
+// GET /portal/fees/reminders/settings
+export async function getFeeReminderSettings(_req, res) {
+  try {
+    res.json(await getReminderSettings())
+  } catch (err) {
+    console.error('Fee reminder settings error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// PUT /portal/fees/reminders/settings
+export async function updateFeeReminderSettings(req, res) {
+  try {
+    const s = await getReminderSettings()
+    for (const f of REMINDER_FIELDS) {
+      if (req.body[f] === undefined) continue
+      if (f === 'sendHour') s.sendHour = Math.min(23, Math.max(0, parseInt(req.body.sendHour, 10) || 0))
+      else if (f === 'recipientRoles') {
+        const roles = Array.isArray(req.body.recipientRoles) ? req.body.recipientRoles.filter(r => typeof r === 'string' && r) : []
+        if (!roles.length) return res.status(400).json({ error: 'Pick at least one role to receive reminders' })
+        s.recipientRoles = roles
+      } else s[f] = !!req.body[f]
+    }
+    s.updatedBy = req.userId
+    await s.save()
+    res.json(s)
+  } catch (err) {
+    console.error('Update fee reminder settings error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// POST /portal/fees/reminders/send { kind: 'day_before' | 'digest' } — send now
+export async function sendFeeReminderNow(req, res) {
+  try {
+    const kind = req.body?.kind
+    if (kind === 'day_before') return res.json(await sendDayBeforeReminder())
+    if (kind === 'digest') return res.json(await sendDailyDigest())
+    res.status(400).json({ error: 'kind must be day_before or digest' })
+  } catch (err) {
+    console.error('Send fee reminder error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
