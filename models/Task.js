@@ -17,8 +17,19 @@ const commentSchema = new mongoose.Schema({
   text: { type: String, required: true, trim: true, maxlength: 2000 },
   by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   byName: { type: String, trim: true, default: '' },
+  mentions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   at: { type: Date, default: Date.now },
 }, { _id: true })
+
+// One line of the task's history ("Ali moved it to Done").
+const activitySchema = new mongoose.Schema({
+  text: { type: String, required: true, trim: true, maxlength: 300 },
+  by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  byName: { type: String, trim: true, default: '' },
+  at: { type: Date, default: Date.now },
+}, { _id: false })
+
+export const REPEAT_FREQS = ['daily', 'weekly', 'monthly']
 
 const taskSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true, maxlength: 200 },
@@ -40,6 +51,32 @@ const taskSchema = new mongoose.Schema({
 
   checklist: { type: [checklistItemSchema], default: [] },
   comments: { type: [commentSchema], default: [] },
+  // Newest last, capped at ACTIVITY_CAP entries
+  activity: { type: [activitySchema], default: [] },
+  // People who follow the task without doing it (added by an @mention):
+  // they can open it and hear about comments.
+  watchers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+
+  // Repeating task: finishing it creates the next one (utils/taskRepeat.js).
+  repeat: {
+    freq: { type: String, enum: ['', ...REPEAT_FREQS], default: '' },
+    interval: { type: Number, min: 1, max: 52, default: 1 },
+    weekdays: [{ type: Number, min: 0, max: 6 }], // weekly: 0 = Sunday
+    monthDay: { type: Number, min: 1, max: 31 },  // monthly: the series' day, so a 31st survives February
+    until: { type: Date },
+  },
+  repeatOf: { type: mongoose.Schema.Types.ObjectId, ref: 'Task' },      // the one before it
+  repeatedInto: { type: mongoose.Schema.Types.ObjectId, ref: 'Task' },  // the next one, once made
+
+  // "Waiting on…": the task can't move until someone else does something.
+  // A flag beside the status, so a waiting task keeps its column.
+  waiting: {
+    on: { type: Boolean, default: false },
+    reason: { type: String, trim: true, maxlength: 300, default: '' },
+    who: { type: String, trim: true, maxlength: 120, default: '' },       // "Parent", "Sara's mum"…
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },        // when it is someone in the portal
+    since: { type: Date },
+  },
   tags: [{ type: String, trim: true, maxlength: 40 }],
 
   // Position inside its Kanban column (lower = higher up)
@@ -61,5 +98,10 @@ taskSchema.index({ leadId: 1 })
 taskSchema.index({ goalId: 1 })
 taskSchema.index({ studentId: 1 })
 taskSchema.index({ createdBy: 1 })
+taskSchema.index({ watchers: 1 })
+taskSchema.index({ status: 1, completedAt: -1 })
+taskSchema.index({ 'waiting.userId': 1 })
+
+export const ACTIVITY_CAP = 100
 
 export default mongoose.model('Task', taskSchema)
