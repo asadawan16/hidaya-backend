@@ -164,6 +164,15 @@ export const PERMISSIONS = {
   // coach.manager unlocks the manager-only scenarios (enrolment call, parent
   // complaint, feedback to a tutor) — tutors never see those.
   coach: ['coach.practice', 'coach.review', 'coach.manage', 'coach.manager'],
+
+  // Tasks board (Kanban / list / calendar / timeline) + weekly/monthly goals.
+  // Everyone sees and works the tasks assigned to them or created by them, and
+  // staff can add their own to-dos, without any of these.
+  // task.read — see every task (the whole board), not just their own.
+  // task.manage — create/assign tasks for anyone (staff or students), edit and
+  // delete any task, and manage goals.
+  // task.leads — link tasks to leads (from a task, or from the Leads page).
+  task: ['task.read', 'task.manage', 'task.leads'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
@@ -218,6 +227,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read',
     'demo.read', 'demo.manage',
     'coach.practice', 'coach.review', 'coach.manager',
+    'task.read', 'task.manage',
   ],
 
   coordinator: [
@@ -245,6 +255,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read',
     'demo.read', 'demo.manage',
     'coach.practice', 'coach.manager',
+    'task.read', 'task.manage',
   ],
 
   qci: [
@@ -266,6 +277,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
     'coach.practice', 'coach.review', 'coach.manager',
+    'task.read', 'task.manage',
   ],
 
   qcm: [

@@ -56,6 +56,7 @@ import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js
 import portalFeeRoutes from './routes/portalFeeRoutes.js'
 import portalClassLinkRoutes from './routes/portalClassLinkRoutes.js'
 import portalDataExportRoutes from './routes/portalDataExportRoutes.js'
+import portalTaskRoutes from './routes/portalTaskRoutes.js'
 import publicClassLinkRoutes from './routes/publicClassLinkRoutes.js'
 import publicCheckoutRoutes from './routes/publicCheckoutRoutes.js'
 import { stripeWebhook } from './controllers/stripeWebhookController.js'
@@ -68,6 +69,7 @@ import { initSocket } from './config/socket.js'
 // import requestLogger from './middleware/requestLogger.js' // disabled 2026-08-02 — see app.use note below
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
 import { runAutoSessionGeneration, autoCompleteOverrunSessions } from './controllers/portalScheduleController.js'
+import { runTaskDueReminders } from './controllers/portalTaskController.js'
 import { ALL_PERMISSIONS, RESTRICTION_PERMISSIONS } from './config/permissions.js'
 
 const app = express()
@@ -217,6 +219,7 @@ app.use('/api/portal/student-progress', portalStudentProgressRoutes)
 app.use('/api/portal/fees', portalFeeRoutes)
 app.use('/api/portal/class-links', portalClassLinkRoutes)
 app.use('/api/portal/data-export', portalDataExportRoutes)
+app.use('/api/portal/tasks', portalTaskRoutes)
 app.use('/api/portal/whatsapp', portalWhatsappRoutes)
 app.use('/api/portal/class-reminders', portalClassReminderRoutes)
 app.use('/api/portal/whatsapp-chats', portalWhatsappChatRoutes)
@@ -280,4 +283,9 @@ server.listen(PORT, () => {
   // marking that a restart interrupted. Runs on startup and every 2 min.
   sweepCoachSessions()
   setInterval(sweepCoachSessions, 2 * 60 * 1000)
+
+  // Tasks: "due today" notifications and the Recurring column's once-a-shift
+  // reminder. Every 15 min; each sends at most once a day per task.
+  setTimeout(runTaskDueReminders, 30 * 1000)
+  setInterval(runTaskDueReminders, 15 * 60 * 1000)
 })
