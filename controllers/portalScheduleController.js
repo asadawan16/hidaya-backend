@@ -10,6 +10,7 @@ import { createNotification, notifyRoles } from './portalNotificationController.
 import { emitToLiveBoard, emitToAll } from '../config/socket.js'
 import { SHIFT_WRAP_HOUR } from '../utils/shiftWindow.js'
 import { DST_SHIFT_MINUTES, shiftSlotTime, shiftSessionTime } from '../utils/dstShift.js'
+import { leaveRange, isOnLeaveOn } from '../utils/studentLeave.js'
 
 // A started class is auto-completed once it has run this many minutes past its
 // scheduled start (classes are ~30 min, so 50 min means it's clearly over-running
@@ -58,6 +59,36 @@ const addDaysStr = (iso, n) => {
 // evening/daytime → same day; after-midnight tail → the next calendar day.
 const physicalDateForSlot = (shiftDateStr, startTime) =>
   isAfterMidnightTail(startTime) ? addDaysStr(shiftDateStr, 1) : shiftDateStr
+
+// ── Students on leave ──
+// While a student is on leave (utils/studentLeave.js) their classes are left
+// off the schedule for those days, so tutors and oversight see a free slot.
+// Started / completed / missed sessions are history and always show.
+const studentsOnLeave = () => Student.find({ status: 'leave' }).select('status leaveStartDate leaveEndDate').lean()
+
+// $nor clauses dropping not-yet-held sessions on leave days.
+async function leaveSessionExclusions() {
+  return (await studentsOnLeave()).map(s => {
+    const r = leaveRange(s)
+    const date = {}
+    if (r.from) date.$gte = new Date(`${r.from}T00:00:00.000Z`)
+    if (r.to) date.$lte = new Date(`${r.to}T00:00:00.000Z`)
+    return { studentId: s._id, status: 'scheduled', ...(r.from || r.to ? { date } : {}) }
+  })
+}
+
+// $nor clauses dropping recurring slots whose next class (the next date on
+// that weekday, from the current shift day) falls in the student's leave.
+async function leaveSlotExclusions() {
+  const today = currentShiftDate()
+  const out = []
+  for (const s of await studentsOnLeave()) {
+    const days = [0, 1, 2, 3, 4, 5, 6].filter(d => isOnLeaveOn(s, addDaysStr(today, (d - dayOfWeekOf(today) + 7) % 7)))
+    if (days.length) out.push({ studentId: s._id, dayOfWeek: { $in: days } })
+  }
+  return out
+}
+const withNor = (filter, nor) => (nor.length ? { ...filter, $nor: nor } : filter)
 
 // The shift-day currently in progress in Asia/Karachi: before 7 AM PKT we are
 // still inside the previous calendar day's overnight shift.
@@ -114,10 +145,15 @@ export async function generateSessionsForDay(dateStr) {
     existingKeys.add(`${s.slotId}|shift:${isAfterMidnightTail(s.scheduledStart) ? addDaysStr(physical, -1) : physical}`)
   }
 
+  // No class is made for a student on leave that day.
+  const onLeave = new Map((await Student.find({ _id: { $in: slots.map(s => s.studentId) }, status: 'leave' })
+    .select('status leaveStartDate leaveEndDate').lean()).map(s => [String(s._id), s]))
+
   const toCreate = []
   for (const slot of slots) {
     const targetDate = physicalDateForSlot(dateStr, slot.startTime)
     if (existingKeys.has(`${slot._id}|${targetDate}`) || existingKeys.has(`${slot._id}|shift:${dateStr}`)) continue
+    if (isOnLeaveOn(onLeave.get(String(slot.studentId)), targetDate)) continue
     const [h, m] = slot.startTime.split(':').map(Number)
     const endMinutes = h * 60 + m + slot.durationMinutes
     const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`
@@ -218,9 +254,12 @@ export async function listSlots(req, res) {
     }
     if (dayOfWeek !== undefined) filter.dayOfWeek = Number(dayOfWeek)
     if (active !== undefined) filter.active = active === 'true'
+    // The week calendar and slot lists show a leave student's slots as free.
+    // Looking at one student (their week editor, their own page) still lists them.
+    if (!filter.studentId) Object.assign(filter, withNor({}, await leaveSlotExclusions()))
 
     // Staff labels (risk tags, fresh/old) are not for the student to read about themselves.
-    const studentSel = isStudentAccount(req) ? 'name rollNo status' : 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
+    const studentSel = isStudentAccount(req) ? 'name rollNo status' : 'name rollNo status performanceTags freshness leaveStartDate leaveEndDate expectedResumeDate'
     const query = () => ClassSlot.find(filter)
       .populate('studentId', studentSel)
       .populate('tutorId', 'name tutorId meetLink')
@@ -305,7 +344,7 @@ export async function createSlot(req, res) {
       })
 
       const populated = await ClassSlot.findById(slot._id)
-        .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
+        .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate leaveEndDate expectedResumeDate')
         .populate('tutorId', 'name tutorId')
         .lean()
 
@@ -618,7 +657,8 @@ export async function getSlotBoard(req, res) {
     const slotFilter = { dayOfWeek: dow, active: true }
     if (req.user.linkedStudentId) slotFilter.studentId = req.user.linkedStudentId
     else if (req.user.linkedTutorId && !seesAll) slotFilter.tutorId = req.user.linkedTutorId
-    const slots = await ClassSlot.find(slotFilter)
+    // A student on leave doesn't take a space: their slots read as free.
+    const slots = await ClassSlot.find(withNor(slotFilter, await leaveSlotExclusions()))
       .populate('studentId', 'name rollNo status')
       .sort({ startTime: 1 })
       .lean()
@@ -686,6 +726,8 @@ export async function listSessions(req, res) {
       if (dateFrom) filter.date.$gte = new Date(dateFrom)
       if (dateTo) filter.date.$lte = new Date(dateTo)
     }
+    const nor = await leaveSessionExclusions()
+    if (nor.length) filter.$nor = nor
 
     // Night-shift support: when a wrapping window is requested (startHour > endHour,
     // e.g. 20:00 → 07:00) alongside a single `date`, also pull the *next* calendar
@@ -700,7 +742,7 @@ export async function listSessions(req, res) {
     if (sort === 'date') sortObj = { date: 1, scheduledStart: 1 }
     if (sort === 'status') sortObj = { status: 1, date: -1 }
 
-    const studentSel = isStudentAccount(req) ? 'name rollNo status' : 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
+    const studentSel = isStudentAccount(req) ? 'name rollNo status' : 'name rollNo status performanceTags freshness leaveStartDate leaveEndDate expectedResumeDate'
 
     if (wraps) {
       // Unpaginated night view: the day's sessions + next-day early tail.
@@ -1030,7 +1072,7 @@ export async function getLiveBoard(req, res) {
     const scope = {}
     if (req.user.linkedStudentId) scope.studentId = req.user.linkedStudentId
 
-    const studentSel = 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
+    const studentSel = 'name rollNo status performanceTags freshness leaveStartDate leaveEndDate expectedResumeDate'
 
     // 1) Currently-live sessions (started) — green on the board.
     const activeSessions = await ClassSession.find({ status: 'started', ...scope })
@@ -1049,7 +1091,7 @@ export async function getLiveBoard(req, res) {
     const yesterday = addDaysStr(today, -1)
     const dayStart = new Date(`${yesterday}T00:00:00Z`)
     const dayEnd = new Date(`${today}T23:59:59.999Z`)
-    const scheduled = await ClassSession.find({ status: 'scheduled', date: { $gte: dayStart, $lt: dayEnd }, ...scope })
+    const scheduled = await ClassSession.find(withNor({ status: 'scheduled', date: { $gte: dayStart, $lt: dayEnd }, ...scope }, await leaveSessionExclusions()))
       .populate('studentId', studentSel)
       .populate('tutorId', 'name tutorId roomNo meetLink')
       .populate('slotId', 'track durationMinutes')
@@ -1107,7 +1149,7 @@ export async function getMyLiveSessions(req, res) {
     if (!req.user.linkedTutorId) return res.json([])
 
     const sessions = await ClassSession.find({ status: 'started', tutorId: req.user.linkedTutorId })
-      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
+      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate leaveEndDate expectedResumeDate')
       .populate('tutorId', 'name tutorId roomNo meetLink')
       .populate('slotId', 'track durationMinutes')
       .sort({ tutorStartedAt: -1 })
@@ -1191,7 +1233,7 @@ export async function getMyUnloggedSessions(req, res) {
       needsLessonLog: true,
       lessonEntryId: { $in: [null, undefined] },
     })
-      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
+      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate leaveEndDate expectedResumeDate')
       .populate('tutorId', 'name tutorId roomNo meetLink')
       .populate('slotId', 'track durationMinutes')
       .sort({ date: -1, scheduledStart: -1 })
@@ -1303,9 +1345,12 @@ export async function getBoard(req, res) {
     }
     if (status) baseScope.status = status
 
+    // Classes on a student's leave days are left off, so the slot reads as free.
+    const leaveNor = await leaveSessionExclusions()
+    if (leaveNor.length) baseScope.$nor = leaveNor
     const sFilter = { date: { $gte: dateStart, $lt: dateEnd }, ...baseScope }
 
-    const studentSel = 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate'
+    const studentSel = 'name rollNo status performanceTags freshness leaveStartDate leaveEndDate expectedResumeDate'
     let sessions = await ClassSession.find(sFilter)
       .populate('studentId', studentSel)
       .populate('tutorId', 'name tutorId')
@@ -1348,8 +1393,10 @@ export async function getBoard(req, res) {
     const tutors = await TutorProfile.find(tFilter).select('name tutorId status').sort({ name: 1 }).lean()
 
     // Recurring-slot count per tutor for this weekday
+    // (students on leave on this date don't count: their slots are free)
+    const awayIds = (await studentsOnLeave()).filter(st => isOnLeaveOn(st, dateStr)).map(st => st._id)
     const slotAgg = await ClassSlot.aggregate([
-      { $match: { dayOfWeek: dow, active: true } },
+      { $match: { dayOfWeek: dow, active: true, ...(awayIds.length ? { studentId: { $nin: awayIds } } : {}) } },
       { $group: { _id: '$tutorId', count: { $sum: 1 } } },
     ])
     const slotCounts = {}
@@ -1383,7 +1430,7 @@ export async function updateSession(req, res) {
     })
 
     const populated = await ClassSession.findById(session._id)
-      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate expectedResumeDate')
+      .populate('studentId', 'name rollNo status performanceTags freshness leaveStartDate leaveEndDate expectedResumeDate')
       .populate('tutorId', 'name tutorId')
       .populate('slotId', 'track tracks meetLink durationMinutes startTime dayOfWeek active')
       .lean()

@@ -17,6 +17,59 @@ import Role from '../models/Role.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { sendToUser, portalWelcomeEmail } from '../services/mailer.js'
 import { createNotification } from './portalNotificationController.js'
+import { karachiToday, addDaysIso } from '../utils/feeDue.js'
+import { leaveRange } from '../utils/studentLeave.js'
+
+// ─── Leave period (utils/studentLeave.js) ───
+
+// 'YYYY-MM-DD' (or a date) → UTC midnight of that day; '' / null → unset.
+function leaveDay(v) {
+  if (v === '' || v == null) return undefined
+  const iso = String(v instanceof Date ? v.toISOString() : v).slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return undefined
+  return new Date(`${iso}T00:00:00.000Z`)
+}
+
+// Sets (or clears) the leave fields from a request body. Returns an error
+// message for a period that ends before it starts.
+function applyLeave(student, data) {
+  if (student.status !== 'leave') {
+    student.leaveStartDate = undefined
+    student.leaveEndDate = undefined
+    student.expectedResumeDate = undefined
+    student.leaveAutoResume = false
+    return null
+  }
+  if (data.leaveStartDate !== undefined) student.leaveStartDate = leaveDay(data.leaveStartDate)
+  if (data.leaveEndDate !== undefined) student.leaveEndDate = leaveDay(data.leaveEndDate)
+  if (data.leaveAutoResume !== undefined) student.leaveAutoResume = !!data.leaveAutoResume
+  // No start given: the leave starts today, so earlier months stay billed.
+  if (!student.leaveStartDate) student.leaveStartDate = new Date(`${karachiToday().iso}T00:00:00.000Z`)
+  if (student.leaveStartDate && student.leaveEndDate && student.leaveEndDate < student.leaveStartDate) {
+    return 'The leave ends before it starts'
+  }
+  // Older readers use expectedResumeDate: the day after the leave ends.
+  student.expectedResumeDate = student.leaveEndDate
+    ? new Date(`${addDaysIso(student.leaveEndDate.toISOString().slice(0, 10), 1)}T00:00:00.000Z`)
+    : undefined
+  if (!student.leaveEndDate) student.leaveAutoResume = false
+  return null
+}
+
+// Classes not yet held that fall in the leave, from today on, are removed so
+// the schedule shows the slot as free (not as a cancelled class). Started,
+// completed and missed ones stay as history.
+async function clearLeaveSessions(student) {
+  const r = leaveRange(student)
+  if (!r) return 0
+  const today = karachiToday().iso
+  const from = r.from && r.from > today ? r.from : today
+  if (r.to && r.to < from) return 0
+  const date = { $gte: new Date(`${from}T00:00:00.000Z`) }
+  if (r.to) date.$lte = new Date(`${r.to}T00:00:00.000Z`)
+  const { deletedCount } = await ClassSession.deleteMany({ studentId: student._id, status: 'scheduled', date })
+  return deletedCount
+}
 
 // Generate next roll number
 async function generateRollNo() {
@@ -227,7 +280,10 @@ export async function createStudent(req, res) {
       }
     }
 
-    const student = await Student.create(data)
+    const student = new Student(data)
+    const leaveError = applyLeave(student, data)
+    if (leaveError) return res.status(400).json({ error: leaveError })
+    await student.save()
 
     // If family is linked, add student to family members array
     if (data.familyId) {
@@ -322,7 +378,6 @@ export async function updateStudent(req, res) {
       'sect', 'specialNeeds', 'familyId', 'referredBy', 'referredByStudent', 'billing',
       'status', 'email', 'phone', 'notes', 'userId',
       'performanceFlag', 'performanceTags', 'freshness',
-      'leaveStartDate', 'expectedResumeDate',
     ]
 
     for (const field of allowedFields) {
@@ -330,8 +385,11 @@ export async function updateStudent(req, res) {
         student[field] = data[field]
       }
     }
+    const leaveError = applyLeave(student, data)
+    if (leaveError) return res.status(400).json({ error: leaveError })
 
     await student.save()
+    await clearLeaveSessions(student)
 
     // Sync family members arrays when familyId changes
     const newFamilyId = student.familyId?.toString()
@@ -421,7 +479,10 @@ export async function changeStudentStatus(req, res) {
 
     const oldStatus = student.status
     student.status = status
+    const leaveError = applyLeave(student, req.body)
+    if (leaveError) return res.status(400).json({ error: leaveError })
     await student.save()
+    await clearLeaveSessions(student)
 
     await StudentStatusHistory.create({
       studentId: student._id,
@@ -805,5 +866,43 @@ export async function addManualTutorLog(req, res) {
   } catch (err) {
     console.error('Add manual tutor log error:', err)
     res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ─── Background job: back from leave ───
+// A student on leave with "make active again after the leave" ticked goes
+// back to active the day after leaveEndDate (Asia/Karachi). Runs every 30 min
+// and on startup, so a server that slept (Render free) catches up on waking.
+let leaveJobRunning = false
+export async function runLeaveAutoResume() {
+  if (leaveJobRunning) return
+  leaveJobRunning = true
+  try {
+    const today = new Date(`${karachiToday().iso}T00:00:00.000Z`)
+    const due = await Student.find({ status: 'leave', leaveAutoResume: true, leaveEndDate: { $lt: today } })
+    for (const student of due) {
+      const ended = student.leaveEndDate.toISOString().slice(0, 10)
+      student.status = 'active'
+      applyLeave(student, {})
+      await student.save()
+      await StudentStatusHistory.create({
+        studentId: student._id,
+        status: 'active',
+        effectiveDate: new Date(),
+        comment: 'Back from leave automatically',
+      })
+      await logActivity({
+        level: 'info',
+        category: 'student_management',
+        action: 'student_status_changed',
+        message: `Student ${student.rollNo} status: leave → active (leave ended ${ended})`,
+        meta: { studentId: student._id, oldStatus: 'leave', newStatus: 'active', auto: true },
+      })
+    }
+    if (due.length) console.log(`[leave] ${due.length} student(s) back from leave`)
+  } catch (err) {
+    console.error('[leave] auto-resume error:', err.message)
+  } finally {
+    leaveJobRunning = false
   }
 }

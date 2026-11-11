@@ -66,6 +66,7 @@ import { initSocket } from './config/socket.js'
 import { startPaymentCleanupJob } from './utils/cleanupPayments.js'
 import { runAutoSessionGeneration, autoCompleteOverrunSessions } from './controllers/portalScheduleController.js'
 import { runTaskDueReminders } from './controllers/portalTaskController.js'
+import { runLeaveAutoResume } from './controllers/portalStudentController.js'
 import { runFeeReminders } from './services/feeReminders.js'
 import { ALL_PERMISSIONS, RESTRICTION_PERMISSIONS } from './config/permissions.js'
 
@@ -280,4 +281,9 @@ server.listen(PORT, () => {
   const reminders = () => { runFeeReminders(); runTaskDueReminders() }
   setTimeout(reminders, 30 * 1000)
   setInterval(reminders, 15 * 60 * 1000)
+
+  // Students whose leave has ended and who were set to come back on their own
+  // go back to active. Every 30 min, and on startup.
+  setTimeout(runLeaveAutoResume, 45 * 1000)
+  setInterval(runLeaveAutoResume, 30 * 60 * 1000)
 })

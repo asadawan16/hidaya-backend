@@ -4,7 +4,10 @@ import mongoose from 'mongoose'
 // student's own account (e.g. "Revise Surah Al-Mulk for Friday's test").
 // A task can be about a lead (call / follow-up / demo), a student, and count
 // toward a weekly or monthly Goal.
-export const TASK_STATUSES = ['todo', 'in_progress', 'review', 'done']
+// 'recurring' is a standing column: a task in it is looked at every day, and
+// its assignees get a reminder each day (runTaskDueReminders). It is never
+// "done"; moving it to Done ends it.
+export const TASK_STATUSES = ['recurring', 'todo', 'in_progress', 'review', 'done']
 export const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent']
 export const TASK_TYPES = ['general', 'call', 'follow_up', 'demo', 'test', 'homework', 'meeting', 'admin', 'payment', 'other']
 
@@ -90,6 +93,11 @@ const taskSchema = new mongoose.Schema({
   // The due date the "due today" notification was last sent for, so moving
   // the date re-arms it.
   dueNotifiedFor: { type: Date },
+  // Recurring column: the shift day ('YYYY-MM-DD') the daily reminder was last
+  // sent for, and the day an assignee last ticked "Checked today".
+  dailyNotifiedOn: { type: String, default: '' },
+  dailyCheckedOn: { type: String, default: '' },
+  dailyCheckedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true })
 
 taskSchema.index({ assignees: 1, status: 1 })

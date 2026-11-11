@@ -4,6 +4,7 @@ import Student from '../models/Student.js'
 import User from '../models/User.js'
 import Role from '../models/Role.js'
 import StudentStatusHistory from '../models/StudentStatusHistory.js'
+import Task from '../models/Task.js'
 import { sendToUser } from '../services/mailer.js'
 import { logActivity } from '../utils/activityLogger.js'
 
@@ -114,6 +115,19 @@ export async function listLeads(req, res) {
       .limit(lim)
       .lean()
     const records = rows.map(withLastNote)
+
+    // Open tasks per lead on this page (count + the soonest due date), in one
+    // query, for the task chip on the list and the board.
+    const taskStats = await Task.aggregate([
+      { $match: { leadId: { $in: rows.map(r => r._id) }, status: { $ne: 'done' } } },
+      { $group: { _id: '$leadId', open: { $sum: 1 }, nextDue: { $min: '$dueDate' } } },
+    ])
+    const byLead = new Map(taskStats.map(t => [String(t._id), t]))
+    for (const r of records) {
+      const t = byLead.get(String(r._id))
+      r.openTasks = t?.open || 0
+      r.nextTaskDue = t?.nextDue || null
+    }
 
     // Stats
     const stats = await Enrollment.aggregate([

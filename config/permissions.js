@@ -150,7 +150,8 @@ export const PERMISSIONS = {
   // task.read — see every task (the whole board), not just their own.
   // task.manage — create/assign tasks for anyone (staff or students), edit and
   // delete any task, and manage goals.
-  task: ['task.read', 'task.manage'],
+  // task.leads — link tasks to leads (from a task, or from the Leads page).
+  task: ['task.read', 'task.manage', 'task.leads'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()

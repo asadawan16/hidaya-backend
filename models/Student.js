@@ -103,8 +103,14 @@ const studentSchema = new mongoose.Schema({
   // Manual fresh/old marker for board identification
   freshness: { type: String, enum: ['fresh', 'old', ''], default: '' },
 
+  // Leave period (utils/studentLeave.js): leaveStartDate..leaveEndDate, both
+  // inclusive, date-only. No end = open-ended. expectedResumeDate is kept as
+  // the day after leaveEndDate for older readers. leaveAutoResume puts the
+  // student back to active once the leave has ended.
   leaveStartDate: { type: Date },
+  leaveEndDate: { type: Date },
   expectedResumeDate: { type: Date },
+  leaveAutoResume: { type: Boolean, default: false },
 
   // Two-type staff feedback shown on the student progress page
   feedbacks: [{

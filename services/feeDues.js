@@ -10,6 +10,7 @@ import {
   AUTO_BILL_FROM, monthlyFee, karachiToday, dueDayOf, dueDateIn, isoDate, dueStateOf, addDaysIso,
 } from '../utils/feeDue.js'
 import { getRates } from './currencyRates.js'
+import { isOnLeaveOn } from '../utils/studentLeave.js'
 
 const AUTO_BILL_KEY = AUTO_BILL_FROM.year * 12 + (AUTO_BILL_FROM.month - 1)
 const keyOf = (y, m) => y * 12 + (m - 1)
@@ -34,7 +35,7 @@ export async function collectDues({ fromIso, toIso, includeOverdue = true, stude
   const filter = { status: { $ne: 'left' } }
   if (studentIds?.length) filter._id = { $in: studentIds }
   const students = await Student.find(filter)
-    .select('name rollNo status familyId billing joiningDate createdAt userId')
+    .select('name rollNo status familyId billing joiningDate createdAt userId leaveStartDate leaveEndDate')
     .populate('familyId', 'familyCode')
     .lean()
   const ids = students.map(s => s._id)
@@ -63,18 +64,19 @@ export async function collectDues({ fromIso, toIso, includeOverdue = true, stude
       const { year, month } = ymOf(k)
       const cell = myCells.get(k)
       let amount, paid, waived, cur, auto
+      const dueIso = isoDate(year, month, dueDateIn(dueDay, year, month))
       if (cell) {
         amount = cell.amount || 0
         paid = cell.amountPaid || 0
         waived = cell.status === 'waived'
-        cur = cell.currency || currency
+        cur = currency // month amounts are in the student's billing currency
         auto = false
         if (!amount && !paid) continue
-      } else if (k >= autoStart && baseFee > 0) {
+      } else if (k >= autoStart && baseFee > 0 && !isOnLeaveOn(s, dueIso, { openFrom: today.iso })) {
+        // A month whose fee falls due while the student is on leave isn't billed.
         amount = baseFee; paid = 0; waived = false; cur = currency; auto = true
       } else continue
 
-      const dueIso = isoDate(year, month, dueDateIn(dueDay, year, month))
       const state = dueStateOf({ amount, paid, waived, dueIso, todayIso: today.iso })
       const row = {
         studentId: s._id,

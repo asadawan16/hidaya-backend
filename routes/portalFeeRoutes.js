@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
   getFeeGrid, upsertFeeCell, createFeePayment, listFeePayments,
-  deleteFeePayment, updateFeePayment, listLinkablePayments, bulkUpsertReceivables, resetFeeMonths,
+  deleteFeePayment, updateFeePayment, listLinkablePayments, bulkUpsertReceivables, resetFeeMonths, reassessFeeCurrencies,
   getStudentFeeHistory, getMyFees,
   getFeeDues, getFeeDuesSummary, getFeeReminderSettings, updateFeeReminderSettings, sendFeeReminderNow,
 } from '../controllers/portalFeeController.js'
@@ -27,6 +27,7 @@ router.get('/linkable-payments', requirePermission('fee.read'), listLinkablePaym
 router.patch('/cell', requirePermission('fee.manage'), upsertFeeCell)
 router.patch('/receivables', requirePermission('fee.manage'), bulkUpsertReceivables)
 router.post('/reset', requirePermission('fee.manage'), resetFeeMonths)
+router.post('/reassess', requirePermission('fee.manage'), reassessFeeCurrencies)
 router.post('/payments', requirePermission('fee.manage'), createFeePayment)
 router.patch('/payments/:id', requirePermission('fee.manage'), updateFeePayment)
 router.delete('/payments/:id', requirePermission('fee.manage'), deleteFeePayment)

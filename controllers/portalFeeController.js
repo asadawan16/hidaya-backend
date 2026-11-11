@@ -15,6 +15,7 @@ import {
 } from '../utils/feeDue.js'
 import { collectDues, totalsByCurrency, duesSummary } from '../services/feeDues.js'
 import { getReminderSettings, sendDayBeforeReminder, sendDailyDigest } from '../services/feeReminders.js'
+import { isOnLeaveOn } from '../utils/studentLeave.js'
 
 function computeStatus(rec) {
   if (rec.status === 'waived') return 'waived'
@@ -49,9 +50,13 @@ export async function getFeeGrid(req, res) {
     if (familyId) filter.familyId = familyId
     // Enrollment status filter. 'active' = present students (active + pending),
     // 'leave' = on-leave only, 'all' = everyone except left, 'left' = left only.
+    // A leave booked ahead (e.g. all of December) doesn't take the student off
+    // the Active list before it starts: On Leave means on leave today.
+    const leaveToday = async () => (await Student.find({ status: 'leave' }).select('status leaveStartDate leaveEndDate').lean())
+      .filter(s => isOnLeaveOn(s, karachiToday().iso)).map(s => s._id)
     if (studentStatus === 'left') filter.status = 'left'
-    else if (studentStatus === 'leave') filter.status = 'leave'
-    else if (studentStatus === 'active') filter.status = { $in: ['active', 'pending'] }
+    else if (studentStatus === 'leave') filter.$and = [{ _id: { $in: await leaveToday() } }]
+    else if (studentStatus === 'active') filter.$and = [{ status: { $in: ['active', 'pending', 'leave'] } }, { _id: { $nin: await leaveToday() } }]
     else filter.status = { $ne: 'left' } // 'all' (and any fallback)
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
@@ -74,7 +79,7 @@ export async function getFeeGrid(req, res) {
     // across the whole filtered set so they stay accurate regardless of pagination;
     // the visible page is a slice of this list.
     const allStudents = await Student.find(filter)
-      .select('name rollNo status familyId billing.fee billing.amount billing.currency billing.cycle billing.dueDay joiningDate createdAt')
+      .select('name rollNo status familyId billing.fee billing.amount billing.currency billing.cycle billing.dueDay joiningDate createdAt leaveStartDate leaveEndDate')
       .populate('familyId', 'familyCode primaryGuardian')
       // Group family members next to each other (incl. on-leave siblings), then
       // alphabetical within the family. familyId null (solo students) sorts first.
@@ -147,14 +152,19 @@ export async function getFeeGrid(req, res) {
         const dueIso = isoDate(year, m, dueDateIn(dueDay, year, m))
         if (cell) {
           periodCollected += cell.amountPaid || 0 // money in counts even for advance months
-          add(cell.currency || studentCur, 'collected', cell.amountPaid || 0)
+          // Month amounts are in the student's billing currency (payments are
+          // allocated that way); some older cells carry a stale 'PKR' label.
+          add(studentCur, 'collected', cell.amountPaid || 0)
           dueStates[m] = dueStateOf({ amount: cell.amount || 0, paid: cell.amountPaid || 0, waived: cell.status === 'waived', dueIso, todayIso: today.iso })
           if (cell.status === 'waived') continue
           if (withinDue) {
             periodReceivable += cell.amount || 0
             periodDue += Math.max(0, (cell.amount || 0) - (cell.amountPaid || 0))
-            add(cell.currency || studentCur, 'due', Math.max(0, (cell.amount || 0) - (cell.amountPaid || 0)))
+            add(studentCur, 'due', Math.max(0, (cell.amount || 0) - (cell.amountPaid || 0)))
           }
+        } else if (isActive && baseFee > 0 && m >= joinMonth && isOnLeaveOn(s, dueIso, { openFrom: today.iso })) {
+          // Due while on leave: not billed, shown as "On leave".
+          dueStates[m] = 'leave'
         } else if (isActive && baseFee > 0 && m >= joinMonth) {
           dueStates[m] = dueStateOf({ amount: baseFee, paid: 0, dueIso, todayIso: today.iso })
           // No manual record and the month is on/after the joining month → auto-bill.
@@ -198,6 +208,8 @@ export async function getFeeGrid(req, res) {
         dueDay: c.dueDay,
         dueStates: c.dueStates,
         dueTillDate: c.periodDue, // outstanding within the selected period
+        leaveStartDate: s.leaveStartDate || null,
+        leaveEndDate: s.leaveEndDate || null,
       }
     })
 
@@ -358,6 +370,71 @@ export async function resetFeeMonths(req, res) {
     res.json({ ok: true, reset })
   } catch (err) {
     console.error('Reset fee months error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// POST /portal/fees/reassess { year?, studentId?, apply? } — bring saved
+// month cells back in line with each student's record (client's request,
+// 2026-11-12: after an admin edits a student's billed amount or currency, the
+// fee pages should show it). Without `apply` it only previews.
+//   - currency: every saved month takes the student's billing currency. Month
+//     amounts are entered in that currency (payments are allocated that way),
+//     so a different label is stale — many older cells say PKR for a USD fee.
+//   - amount: a month nothing has been paid against takes the current billed
+//     amount. Months with money in keep their fee (changing it would make a
+//     settled month owe the difference), and so do waived months and months
+//     set to 0 by hand (nothing billed).
+// Months without a saved cell already follow the student record.
+export async function reassessFeeCurrencies(req, res) {
+  try {
+    const { studentId, apply } = req.body || {}
+    const year = req.body?.year ? parseInt(req.body.year, 10) : null
+    const sFilter = studentId ? { _id: studentId } : {}
+    const students = await Student.find(sFilter).select('name rollNo status billing').lean()
+    const byId = new Map(students.map(s => [String(s._id), s]))
+    const cFilter = { studentId: { $in: students.map(s => s._id) } }
+    if (year) cFilter.year = year
+    const cells = await StudentFeeRecord.find(cFilter).sort({ year: 1, month: 1 }).lean()
+
+    const changes = []
+    for (const c of cells) {
+      const s = byId.get(String(c.studentId))
+      if (!s) continue
+      const currency = s.billing?.currency || 'PKR'
+      const fee = monthlyFee(s)
+      const set = {}
+      if ((c.currency || 'PKR') !== currency) set.currency = currency
+      const untouched = !(c.amountPaid > 0) && c.status !== 'waived' && c.amount > 0
+      if (untouched && fee > 0 && c.amount !== fee) set.amount = fee
+      if (!Object.keys(set).length) continue
+      changes.push({
+        _id: c._id, studentId: s._id, name: s.name, rollNo: s.rollNo || '', year: c.year, month: c.month,
+        paid: c.amountPaid || 0,
+        from: { amount: c.amount || 0, currency: c.currency || 'PKR' },
+        to: { amount: set.amount ?? (c.amount || 0), currency: set.currency || c.currency || 'PKR' },
+        set,
+      })
+    }
+
+    if (apply && changes.length) {
+      await StudentFeeRecord.bulkWrite(changes.map(ch => ({ updateOne: { filter: { _id: ch._id }, update: { $set: ch.set } } })))
+      await logActivity({
+        level: 'warning', category: 'finance', action: 'fee_currencies_reassessed',
+        message: `Fee months reassessed against student records: ${changes.length} month(s)${year ? ` in ${year}` : ''}`,
+        req,
+        // What each month was before, so a mistake can be put back by hand.
+        meta: { year, studentId: studentId || null, before: changes.slice(0, 500).map(ch => ({ id: ch._id, ...ch.from })) },
+      })
+    }
+    res.json({
+      applied: !!apply,
+      count: changes.length,
+      students: new Set(changes.map(ch => String(ch.studentId))).size,
+      changes: changes.map(({ set, ...ch }) => ch),
+    })
+  } catch (err) {
+    console.error('Reassess fee currencies error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
@@ -676,7 +753,7 @@ async function buildStudentFeeHistory(studentId) {
         year: y, month: m,
         amount: cell.amount || 0,
         amountPaid: cell.amountPaid || 0,
-        currency: cell.currency || currency,
+        currency, // the student's billing currency, not the cell's stale label
         status: cell.status,
         method: cell.method || '',
         note: cell.note || '',
@@ -709,8 +786,8 @@ async function buildStudentFeeHistory(studentId) {
 
   months.sort((a, b) => (b.year - a.year) || (b.month - a.month))
 
-  // Cells carry their own currency (a student can be re-priced from PKR to USD
-  // mid-history), so totals are grouped per currency and never summed across.
+  // Months read in the student's billing currency (see above); totals are
+  // still grouped per currency and never summed across.
   const byCurrency = new Map()
   for (const r of months) {
     if (r.status === 'waived') continue

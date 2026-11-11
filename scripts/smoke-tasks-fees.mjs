@@ -110,14 +110,50 @@ try {
   ok(res._status === 200 && gbp && gbp.manual === 30 && gbp.pkrEquiv === 12000, 'manual GBP payment shows in the currency breakdown at the new rate')
   ok(res._json.conversionRates.GBP === 400 && res._json.outstanding, 'revenue returns the rates and outstanding dues')
 
+  // ── Leave: months due while on leave aren't billed ──
+  console.log('\nLeave')
+  const onLeave = await Student.create({
+    name: 'On Leave Kid', rollNo: `LV${Date.now()}`, status: 'leave', joiningDate: new Date('2026-01-01T00:00:00.000Z'),
+    billing: { amount: 50, currency: 'USD', dueDay: today.day },
+    leaveStartDate: new Date(`${addDaysIso(today.iso, -3)}T00:00:00.000Z`), leaveEndDate: new Date(`${addDaysIso(today.iso, 10)}T00:00:00.000Z`),
+  })
+  let dues = await collectDues({ fromIso: today.iso, toIso: today.iso, includeOverdue: false, studentIds: [onLeave._id] })
+  ok(dues.items.length === 0, 'a month due during the leave is not billed')
+  await Student.updateOne({ _id: onLeave._id }, { status: 'active' })
+  dues = await collectDues({ fromIso: today.iso, toIso: today.iso, includeOverdue: false, studentIds: [onLeave._id] })
+  ok(dues.items.length === 1 && dues.items[0].currency === 'USD' && dues.items[0].amount === 50, 'back to active, the month is billed in the student\'s currency')
+  await Student.deleteOne({ _id: onLeave._id })
+
+  // ── Reassess currencies: saved months follow the student record ──
+  console.log('\nReassess currencies')
+  const re = await Student.create({ name: 'Re Priced', rollNo: `RP${Date.now()}`, status: 'active', billing: { amount: 40, currency: 'USD' } })
+  const unpaid = await StudentFeeRecord.create({ studentId: re._id, year: 2026, month: 11, amount: 30, amountPaid: 0, currency: 'PKR' })
+  const paidCell = await StudentFeeRecord.create({ studentId: re._id, year: 2026, month: 10, amount: 30, amountPaid: 30, currency: 'PKR', status: 'received' })
+  const zero = await StudentFeeRecord.create({ studentId: re._id, year: 2026, month: 9, amount: 0, amountPaid: 0, currency: 'PKR' })
+  res = await call(fee.reassessFeeCurrencies, reqAs(admin, ['fee.manage'], { body: { studentId: String(re._id) } }))
+  ok(res._status === 200 && res._json.count === 3 && !res._json.applied, 'preview lists 3 months, writes nothing')
+  ok((await StudentFeeRecord.findById(unpaid._id)).currency === 'PKR', 'preview did not write')
+  res = await call(fee.reassessFeeCurrencies, reqAs(admin, ['fee.manage'], { body: { studentId: String(re._id), apply: true } }))
+  const [u2, p2, z2] = await Promise.all([StudentFeeRecord.findById(unpaid._id), StudentFeeRecord.findById(paidCell._id), StudentFeeRecord.findById(zero._id)])
+  ok(u2.currency === 'USD' && u2.amount === 40, 'an unpaid month takes the new billed amount and currency')
+  ok(p2.currency === 'USD' && p2.amount === 30 && p2.amountPaid === 30, 'a paid month keeps its fee and payment, only the currency label follows')
+  ok(z2.currency === 'USD' && z2.amount === 0, 'a month set to 0 stays at 0')
+  res = await call(fee.reassessFeeCurrencies, reqAs(admin, ['fee.manage'], { body: { studentId: String(re._id) } }))
+  ok(res._json.count === 0, 'running it again finds nothing')
+  await StudentFeeRecord.deleteMany({ studentId: re._id })
+  await Student.deleteOne({ _id: re._id })
+
   // ── Tasks ──
   console.log('\nTasks')
-  const MANAGE = ['task.read', 'task.manage', 'student.create']
+  const MANAGE = ['task.read', 'task.manage', 'task.leads', 'student.create']
   const lead = await Enrollment.create({ name: 'Lead Person', email: 'lead@x.test', source: 'manual' })
   res = await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Call the family', type: 'call', assignees: [String(tutor._id), String(stuUser._id)], dueDate: today.iso, allDay: true, leadId: String(lead._id), checklist: [{ text: 'Ask about time' }] } }))
   ok(res._status === 201 && res._json.assignees.length === 2 && res._json.leadId?.name === 'Lead Person', 'manager creates a task for a tutor and a student, linked to a lead')
   const taskId = String(res._json._id)
   ok(await Notification.countDocuments({ type: 'task_assigned' }) === 2, 'both assignees are notified')
+  res = await call(tasks.createTask, reqAs(admin, ['task.read', 'task.manage'], { body: { title: 'No lead rights', leadId: String(lead._id) } }))
+  ok(res._status === 201 && !res._json.leadId, 'without task.leads the lead link is ignored')
+  await Task.deleteOne({ _id: res._json._id })
 
   res = await call(tasks.listTasks, reqAs(tutor, [], {}))
   ok(res._json.records.length === 1, 'the tutor sees the task assigned to them')
@@ -231,6 +267,22 @@ try {
   await call(tasks.createTaskView, reqAs(admin, MANAGE, { body: { name: 'Overdue, everyone', filters: { due: 'overdue' }, shared: true } }))
   res = await call(tasks.listTaskViews, reqAs(tutor2, [], {}))
   ok(res._json.records.length === 1 && res._json.records[0].name === 'Overdue, everyone', 'others see shared views, not private ones')
+
+  // Recurring column: a daily task, ticked "Checked today", reminded once a shift
+  res = await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Check WhatsApp leads', status: 'recurring', assignees: [String(tutor._id)] } }))
+  const dailyId = String(res._json._id)
+  ok(res._status === 201 && res._json.status === 'recurring', 'a task can sit in the Recurring column')
+  res = await call(tasks.myTaskSummary, reqAs(tutor, [], {}))
+  ok(res._json.daily.some(t => String(t._id) === dailyId && !t.checkedToday) && !res._json.undated.some(t => String(t._id) === dailyId), 'My work lists it under every day, not undated')
+  const pkHour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', hourCycle: 'h23' }).format(new Date()))
+  await tasks.runTaskDueReminders()
+  await tasks.runTaskDueReminders()
+  const dailyNotes = await Notification.countDocuments({ userId: tutor._id, title: 'Today: Check WhatsApp leads' })
+  ok(pkHour >= 19 || pkHour < 7 ? dailyNotes === 1 : dailyNotes === 0, `daily reminder sent at most once a shift (${dailyNotes} at ${pkHour}:00 PKT)`)
+  res = await call(tasks.updateTask, reqAs(tutor, [], { params: { id: dailyId }, body: { checkedToday: true } }))
+  ok(res._status === 200 && res._json.checkedToday === true && res._json.status === 'recurring', 'an assignee ticks "Checked today"; it stays recurring')
+  res = await call(tasks.listTasks, reqAs(tutor, [], {}))
+  ok(res._json.records.find(t => String(t._id) === dailyId)?.checkedToday === true, 'the board shows it checked')
 
   res = await call(tasks.deleteTask, reqAs(tutor, [], { params: { id: taskId } }))
   ok(res._status === 403, 'an assignee cannot delete')

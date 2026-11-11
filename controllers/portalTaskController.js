@@ -20,12 +20,15 @@ import { createNotification } from './portalNotificationController.js'
 import { emitToUser } from '../config/socket.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { nextDueDate, nextTaskFields } from '../utils/taskRepeat.js'
+import { SHIFT_WRAP_HOUR } from '../utils/shiftWindow.js'
 
 const { isValidObjectId } = mongoose
 const escapeRx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 const canSeeAll = (req) => req.userPermissions.has('task.read') || req.userPermissions.has('task.manage')
 const canManage = (req) => req.userPermissions.has('task.manage')
+// Linking a task to a lead is its own permission (admins by default).
+const canLinkLeads = (req) => req.userPermissions.has('task.leads')
 const isStudentOnly = (req) => (req.user.roles || []).length > 0 && req.user.roles.every(r => r.key === 'student')
 const sameId = (a, b) => String(a?._id || a) === String(b?._id || b)
 
@@ -101,7 +104,7 @@ async function notifyAssigned(task, userIds, actor) {
 
 // ─── History ───
 
-const STATUS_WORDS = { todo: 'To do', in_progress: 'In progress', review: 'Review', done: 'Done' }
+const STATUS_WORDS = { recurring: 'Recurring', todo: 'To do', in_progress: 'In progress', review: 'Review', done: 'Done' }
 function addActivity(task, user, text) {
   task.activity.push({ text, by: user?._id, byName: user?.displayName || '' })
   if (task.activity.length > ACTIVITY_CAP) task.activity = task.activity.slice(-ACTIVITY_CAP)
@@ -238,7 +241,7 @@ export async function listTasks(req, res) {
       Task.find(filter).select(LIST_SELECT).populate(POPULATE).sort({ order: 1, dueDate: 1, createdAt: -1 }).skip(skip).limit(limit).lean(),
       Task.countDocuments(filter),
     ])
-    res.json({ records, total, skip, limit, canManage: canManage(req), canSeeAll: canSeeAll(req) })
+    res.json({ records: records.map(t => withToday(t)), total, skip, limit, canManage: canManage(req), canSeeAll: canSeeAll(req) })
   } catch (err) {
     console.error('List tasks error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -253,9 +256,10 @@ export async function listTasks(req, res) {
 export async function myTaskSummary(req, res) {
   try {
     const horizon = new Date(Date.now() + 8 * 86400000)
-    const base = { assignees: req.userId, status: { $ne: 'done' } }
+    // Recurring-column tasks are listed on their own ("every day"), not by date.
+    const base = { assignees: req.userId, status: { $nin: ['done', 'recurring'] } }
     const open = { status: { $ne: 'done' } }
-    const [dated, undatedCount, undated, doneThisWeek, openCount, waitingOnMe, unowned, unownedCount] = await Promise.all([
+    const [dated, undatedCount, undated, doneThisWeek, openCount, waitingOnMe, unowned, unownedCount, daily] = await Promise.all([
       Task.find({ ...base, dueDate: { $ne: null, $lte: horizon } }).select(LIST_SELECT).populate(POPULATE).sort({ dueDate: 1 }).limit(100).lean(),
       Task.countDocuments({ ...base, dueDate: null }),
       Task.find({ ...base, dueDate: null }).select(LIST_SELECT).populate(POPULATE).sort({ createdAt: -1 }).limit(10).lean(),
@@ -264,8 +268,12 @@ export async function myTaskSummary(req, res) {
       Task.find({ ...open, 'waiting.on': true, 'waiting.userId': req.userId }).select(LIST_SELECT).populate(POPULATE).sort({ 'waiting.since': 1 }).limit(20).lean(),
       canManage(req) ? Task.find({ ...open, assignees: { $size: 0 } }).select(LIST_SELECT).populate(POPULATE).sort({ dueDate: 1, createdAt: -1 }).limit(8).lean() : [],
       canManage(req) ? Task.countDocuments({ ...open, assignees: { $size: 0 } }) : 0,
+      Task.find({ assignees: req.userId, status: 'recurring' }).select(LIST_SELECT).populate(POPULATE).sort({ order: 1 }).limit(30).lean(),
     ])
-    res.json({ tasks: dated, undated, undatedCount, openCount, doneThisWeek, waitingOnMe, unowned, unownedCount })
+    res.json({
+      tasks: dated, undated, undatedCount, openCount, doneThisWeek, waitingOnMe, unowned, unownedCount,
+      daily: daily.map(t => withToday(t)),
+    })
   } catch (err) {
     console.error('My task summary error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -278,14 +286,14 @@ export async function getTask(req, res) {
     if (!isValidObjectId(req.params.id)) return res.status(404).json({ error: 'Task not found' })
     const task = await Task.findById(req.params.id).populate(POPULATE).populate('repeatOf', 'title dueDate').lean()
     if (!task || !relation(req, task).visible) return res.status(404).json({ error: 'Task not found' })
-    res.json(task)
+    res.json(withToday(task))
   } catch (err) {
     console.error('Get task error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }
 
-function applyFields(task, body, { creating }) {
+function applyFields(task, body, { creating, canLeads }) {
   const allDay = body.allDay !== undefined ? !!body.allDay : (task.allDay ?? true)
   if (body.title !== undefined) task.title = String(body.title).trim().slice(0, 200)
   if (body.description !== undefined) task.description = String(body.description || '').slice(0, 5000)
@@ -299,6 +307,7 @@ function applyFields(task, body, { creating }) {
   if (task.startDate && task.dueDate && task.startDate > task.dueDate) task.startDate = task.dueDate
   for (const f of ['leadId', 'studentId', 'goalId']) {
     if (body[f] === undefined) continue
+    if (f === 'leadId' && !canLeads) continue
     task[f] = isValidObjectId(body[f]) ? body[f] : null
   }
   if (body.tags !== undefined) task.tags = (Array.isArray(body.tags) ? body.tags : []).map(t => String(t).trim()).filter(Boolean).slice(0, 10)
@@ -368,7 +377,7 @@ export async function createTask(req, res) {
       assignees = [String(req.userId)]
     }
     const task = new Task({ createdBy: req.userId, createdByName: req.user.displayName || '', assignees })
-    applyFields(task, body, { creating: true })
+    applyFields(task, body, { creating: true, canLeads: canLinkLeads(req) })
     applyWaiting(task, body.waiting)
     setStatus(task, body.status || 'todo', req.userId)
     addActivity(task, req.user, 'created it')
@@ -404,7 +413,7 @@ export async function updateTask(req, res) {
     const before = snapshot(task)
 
     if (rel.full) {
-      applyFields(task, body, { creating: false })
+      applyFields(task, body, { creating: false, canLeads: canLinkLeads(req) })
       if (body.assignees !== undefined) {
         const next = cleanIds(body.assignees)
         if (!rel.manager && next.some(id => !sameId(id, req.userId))) {
@@ -419,6 +428,16 @@ export async function updateTask(req, res) {
     }
     applyWaiting(task, body.waiting)
     if (body.status !== undefined) setStatus(task, body.status, req.userId)
+    // Recurring column: "Checked today" (stops today's reminder).
+    if (body.checkedToday !== undefined && task.status === 'recurring') {
+      const day = shiftDay()
+      if (body.checkedToday && task.dailyCheckedOn !== day) {
+        task.dailyCheckedOn = day; task.dailyCheckedBy = req.userId
+        addActivity(task, req.user, 'checked it for today')
+      } else if (!body.checkedToday && task.dailyCheckedOn === day) {
+        task.dailyCheckedOn = ''; task.dailyCheckedBy = undefined
+      }
+    }
     if (body.order !== undefined && Number.isFinite(Number(body.order))) task.order = Number(body.order)
     for (const line of await describeChanges(before, task)) addActivity(task, req.user, line)
     await task.save()
@@ -434,7 +453,7 @@ export async function updateTask(req, res) {
     }
     const populated = await Task.findById(task._id).populate(POPULATE).populate('repeatOf', 'title dueDate').lean()
     pushLive([...involved(task), ...before.assignees], 'task_changed', { taskId: String(task._id) })
-    res.json(populated)
+    res.json(withToday(populated))
   } catch (err) {
     console.error('Update task error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -878,6 +897,43 @@ export async function deleteGoal(req, res) {
   }
 }
 
+// The shift day in Pakistan time: the academy's night shift runs 8 PM to
+// 7 AM PKT and is labelled by the day it starts, so before 7 AM it is still
+// yesterday's shift (same rule as utils/shiftWindow.js SHIFT_WRAP_HOUR).
+const PK_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' })
+const pkHour = (d) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', hourCycle: 'h23' }).format(d))
+function shiftDay(now = new Date()) {
+  return PK_DAY.format(pkHour(now) < SHIFT_WRAP_HOUR ? new Date(now.getTime() - 86400000) : now)
+}
+// checkedToday: a Recurring task's "Checked today" tick for the current shift.
+const withToday = (t, day = shiftDay()) => (t ? { ...t, checkedToday: t.status === 'recurring' && t.dailyCheckedOn === day } : t)
+
+// The daily reminder for Recurring tasks goes out an hour before the shift
+// starts (7 PM PKT), or straight away if the server starts mid-shift.
+const DAILY_REMINDER_HOUR = 19
+
+async function sendDailyReminders() {
+  const now = new Date()
+  const hour = pkHour(now)
+  if (hour < DAILY_REMINDER_HOUR && hour >= SHIFT_WRAP_HOUR) return
+  const day = shiftDay(now)
+  const tasks = await Task.find({ status: 'recurring', 'assignees.0': { $exists: true }, dailyNotifiedOn: { $ne: day } })
+    .select('title assignees dailyCheckedOn').lean()
+  for (const t of tasks) {
+    await Task.updateOne({ _id: t._id }, { dailyNotifiedOn: day })
+    if (t.dailyCheckedOn === day) continue
+    for (const uid of t.assignees) {
+      await createNotification({
+        userId: uid,
+        type: 'task_due',
+        title: `Today: ${t.title}`,
+        body: 'A daily task. Look at it today, then tick "Checked today".',
+        payload: { taskId: String(t._id) },
+      })
+    }
+  }
+}
+
 // ─── Background job: "due today" notification for each open task ───
 // Runs every 15 minutes. All-day tasks fall due on their date; timed tasks on
 // their Pakistan-time date. dueNotifiedFor remembers which due date was
@@ -889,8 +945,9 @@ export async function runTaskDueReminders() {
   try {
     const todayPk = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date())
     const now = Date.now()
+    await sendDailyReminders()
     const tasks = await Task.find({
-      status: { $ne: 'done' },
+      status: { $nin: ['done', 'recurring'] },
       dueDate: { $gte: new Date(now - 36 * 3600000), $lte: new Date(now + 36 * 3600000) },
       'assignees.0': { $exists: true },
     }).lean()
