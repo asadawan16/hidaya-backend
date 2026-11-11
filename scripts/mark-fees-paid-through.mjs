@@ -1,11 +1,16 @@
-// One-off clear-up (client's request, 2026-11-11): mark every fee month of a
-// year up to a given month as paid. A month counts if the fee grid bills it:
-// a saved cell with something still to pay (any student), or a month billed
-// automatically from the monthly fee (not-left students, from AUTO_BILL_FROM
-// and their joining month, not while on leave). Waived months are left alone.
+// One-off clear-up (client's request, 2026-11-11/12): every student's months
+// of a year, from January (or the month they joined, if later) up to a given
+// month, show as billed and paid: their billed amount, in their billing
+// currency. For each not-left student with a billed amount:
+//   - a month with no saved cell gets one: fee = paid = the billed amount
+//   - a saved month with nothing in it (fee 0, nothing paid) is filled the same way
+//   - a saved month with a fee and something still to pay is marked paid in full
+//   - months with money already in, waived months and months on leave are left alone
+// Months before AUTO_BILL_FROM count too: they are history from before the
+// portal, which the academy says was all paid.
 //
-// Each changed month gets amountPaid = its fee, status 'received' and a note
-// saying it was marked here. No FeePayment is created: the money came in
+// Each changed month gets status 'received' and a note saying it was marked
+// here. No FeePayment is created: the money came in
 // before it was logged, so Revenue (which reads the Payments Log) is not
 // inflated. Note: "Reset" on such a month rebuilds it from the Payments Log
 // and so undoes the mark.
@@ -21,7 +26,7 @@ import path from 'path'
 import mongoose from 'mongoose'
 import Student from '../models/Student.js'
 import StudentFeeRecord from '../models/StudentFeeRecord.js'
-import { AUTO_BILL_FROM, monthlyFee, karachiToday } from '../utils/feeDue.js'
+import { monthlyFee, karachiToday } from '../utils/feeDue.js'
 import { dueDayOf, dueDateIn, isoDate } from '../utils/feeDue.js'
 import { isOnLeaveOn } from '../utils/studentLeave.js'
 
@@ -45,42 +50,36 @@ const students = await Student.find({})
 const cells = await StudentFeeRecord.find({ year: YEAR, month: { $lte: TO } }).lean()
 const cellOf = new Map(cells.map(c => [`${c.studentId}|${c.month}`, c]))
 
-const firstAutoMonth = (s) => {
-  if (YEAR < AUTO_BILL_FROM.year) return 13
-  let m = YEAR === AUTO_BILL_FROM.year ? AUTO_BILL_FROM.month : 1
+// January, or the month they joined when that is later in YEAR (13 = joined after YEAR)
+const firstMonth = (s) => {
   const jd = s.joiningDate || s.createdAt
   const d = jd ? new Date(jd) : null
-  if (d && !isNaN(d.getTime())) {
-    if (d.getUTCFullYear() > YEAR) return 13
-    if (d.getUTCFullYear() === YEAR) m = Math.max(m, d.getUTCMonth() + 1)
-  }
-  return m
+  if (!d || isNaN(d.getTime())) return 1
+  if (d.getUTCFullYear() > YEAR) return 13
+  return d.getUTCFullYear() === YEAR ? d.getUTCMonth() + 1 : 1
 }
 
-const plan = [] // { s, month, cell?, fee, currency, before }
+const plan = [] // { s, month, cell?, fee, currency }
 for (const s of students) {
   const fee = monthlyFee(s)
   const currency = s.billing?.currency || 'PKR'
-  for (let month = 1; month <= TO; month++) {
+  if (s.status === 'left' || !(fee > 0)) continue
+  for (let month = firstMonth(s); month <= TO; month++) {
+    const dueIso = isoDate(YEAR, month, dueDateIn(dueDayOf(s), YEAR, month))
+    if (isOnLeaveOn(s, dueIso, { openFrom: today.iso })) continue
     const cell = cellOf.get(`${s._id}|${month}`)
-    if (cell) {
-      // A cell's own fee wins: 0 means nothing is billed that month (set by
-      // hand), and a paid cell with no fee already reads as paid.
-      if (cell.status === 'waived') continue
-      const amount = cell.amount || 0
-      if (!(amount > 0) || (cell.amountPaid || 0) >= amount) continue
-      plan.push({ s, month, cell, fee: amount, currency: cell.currency || currency })
-    } else if (s.status !== 'left' && fee > 0 && month >= firstAutoMonth(s)) {
-      const dueIso = isoDate(YEAR, month, dueDateIn(dueDayOf(s), YEAR, month))
-      if (isOnLeaveOn(s, dueIso, { openFrom: today.iso })) continue
-      plan.push({ s, month, cell: null, fee, currency })
-    }
+    if (!cell) { plan.push({ s, month, cell: null, fee, currency }); continue }
+    if (cell.status === 'waived') continue
+    const paid = cell.amountPaid || 0
+    const amount = cell.amount || 0
+    if (!amount && !paid) plan.push({ s, month, cell, fee, currency })        // empty month
+    else if (amount > paid) plan.push({ s, month, cell, fee: amount, currency }) // still owed
   }
 }
 
 const MON = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 for (const p of plan) {
-  const was = p.cell ? `cell ${p.cell.amountPaid || 0}/${p.cell.amount || 0} ${p.cell.status}` : 'no cell (auto-billed)'
+  const was = p.cell ? `cell ${p.cell.amountPaid || 0}/${p.cell.amount || 0} ${p.cell.status}` : 'nothing saved'
   console.log(`${APPLY ? 'MARK ' : 'WOULD'}  ${(p.s.rollNo || '').padEnd(7)} ${p.s.name.padEnd(24)} ${MON[p.month]} ${YEAR}  ${p.currency} ${p.fee}  (was ${was})`)
 }
 const totals = {}
@@ -101,7 +100,7 @@ if (APPLY && plan.length) {
   for (const p of plan) {
     if (p.cell) {
       await StudentFeeRecord.updateOne({ _id: p.cell._id }, {
-        $set: { amount: p.fee, amountPaid: p.fee, status: 'received', paidAt: p.cell.paidAt || new Date(), note: p.cell.note ? `${p.cell.note} · ${NOTE}` : NOTE },
+        $set: { amount: p.fee, amountPaid: p.fee, currency: p.currency, status: 'received', paidAt: p.cell.paidAt || new Date(), note: p.cell.note ? `${p.cell.note} · ${NOTE}` : NOTE },
       })
     } else {
       await StudentFeeRecord.create({
