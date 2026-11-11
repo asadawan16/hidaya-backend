@@ -16,30 +16,41 @@
 //
 // Two kinds of scenario:
 //   conversation (default) — an AI plays the character, as described above
-//   script ('kind: script') — a unit of the Role-Play Practice Book, word for
-//     word (config/coachRolePlays.js): the character only ever says the book's
-//     lines, and the tester is checked against the teacher's lines
+//   script ('kind: script') — a scripted part, word for word: the character
+//     only ever says the script's lines, and the tester is checked against the
+//     teacher's lines. The parts live in the database (models/CoachScript.js,
+//     managed on the Scripts tab; the Role-Play Practice Book in
+//     config/coachRolePlays.js is the starting set) and become scenarios
+//     through scriptScenario() below — see services/coachScripts.js.
+//
+// COACH_SCENARIOS, SCENARIO_KEYS and getScenario() are the conversation
+// scenarios only; services/coachScripts.js#allScenarios adds the parts.
 
-import { BOOK_UNITS, BOOK_SPEAKERS, BOOK_TITLE } from './coachRolePlays.js'
+import { BOOK_SPEAKERS, BOOK_TITLE } from './coachRolePlays.js'
 
 // `summary` describes the character at that level; `scriptSummary` what the
-// level means in a scripted role-play, where the character never changes
+// level means in a scripted role-play, where the character never changes, and
+// `urduSummary` what it means when the teacher lines are shown in Urdu
 export const DIFFICULTIES = {
   very_easy: {
     label: 'Very easy', summary: 'For beginners. Very short, simple sentences, spoken slowly — with useful sentences on screen.',
     scriptSummary: 'For beginners. Your line is on the screen — read it out.',
+    urduSummary: 'For beginners. The Urdu and the first English words are on screen; the rest opens on a tap.',
   },
   easy: {
     label: 'Easy', summary: 'Patient and friendly. Speaks slowly and simply.',
     scriptSummary: 'You see the first words of your line, and can open the rest.',
+    urduSummary: 'The Urdu is on screen. A hint gives the first English words.',
   },
   normal: {
     label: 'Normal', summary: 'A typical call. Asks follow-up questions.',
     scriptSummary: 'Say your line from memory. A hint gives the first words.',
+    urduSummary: 'The Urdu only. A hint after a miss, and your English must be correct.',
   },
   hard: {
     label: 'Challenging', summary: 'Impatient, pushes back and changes topic.',
     scriptSummary: 'From memory, no hints, and the wording must be close.',
+    urduSummary: 'The Urdu only, no hints, and your English must be complete and correct.',
   },
 }
 
@@ -50,36 +61,57 @@ export const VERY_EASY_PLAY = 'The other person is a beginner in English. Speak 
 // Seconds a scripted line takes on a call, for the "about N minutes" estimate
 const SEC_PER_TEACHER_LINE = 13
 const SEC_PER_REPLY_LINE = 3
+const SEC_PER_URDU_LINE = 18 // reading the Urdu and putting it into English takes longer
 
-/** One unit of the Role-Play Practice Book → a scripted scenario ("Part N"). */
-function bookScenario(u) {
-  const lines = u.plays.flatMap(p => p.lines)
+/** Whose line a scripted part opens with (the card and the call show them) */
+function leadSpeaker(plays) {
+  const first = plays.find(p => p.lines.some(([w]) => w !== 'T'))
+  const firstWho = first?.lines.find(([w]) => w !== 'T')?.[0]
+  return firstWho === 'P' ? BOOK_SPEAKERS.P : BOOK_SPEAKERS[first?.student || 'S'] || BOOK_SPEAKERS.S
+}
+
+/**
+ * One scripted part (models/CoachScript.js, normalised by
+ * services/coachScripts.js) → a scripted scenario ("Part N"). `mode` is
+ * CoachSettings.scriptMode: in Urdu mode the teacher lines that have an Urdu
+ * prompt are shown in Urdu and said in English.
+ *   part = { key, position, title, builtIn, plays: [{ n, title, goal, student, lines: [[who, text, urdu]] }] }
+ */
+export function scriptScenario(part, mode = 'english') {
+  const plays = part.plays
+  const lines = plays.flatMap(p => p.lines)
   const teacher = lines.filter(([w]) => w === 'T').length
   const replies = lines.length - teacher
-  // Who the card and the call open with: whoever has the unit's first reply
-  const first = u.plays.find(p => p.lines.some(([w]) => w !== 'T'))
-  const firstWho = first?.lines.find(([w]) => w !== 'T')?.[0]
-  const lead = firstWho === 'P' ? BOOK_SPEAKERS.P : BOOK_SPEAKERS[first?.student || 'S']
+  const urduLines = lines.filter(([w, , u]) => w === 'T' && u).length
+  const urdu = mode === 'urdu' && urduLines > 0
+  const lead = leadSpeaker(plays)
   const who = lead === BOOK_SPEAKERS.P ? 'a parent' : 'your student'
+  const source = part.builtIn ? `Unit ${part.builtIn} of the ${BOOK_TITLE}` : 'One of Hidaya\'s role-play scripts'
+  const brief = urdu
+    ? `${source}. You are the teacher and you speak first unless ${who} does. Your line is shown in Urdu: say it in natural English, the way you learned it — do not translate word by word. The coach checks that your English says the same thing and is correct, then ${who} answers with their line. If it is not right, you get a hint and one more try — the same as practising with a partner.`
+    : `${source}, word for word. You are the teacher and you speak first unless ${who} does. Say your line in English; ${who} answers with their line from the script. If your line is not close enough, you will see the right sentence and can say it again — the same as practising with a partner.`
   return {
-    key: `book_unit_${String(u.unit).padStart(2, '0')}`,
+    key: part.key,
     kind: 'script',
     group: 'roleplay',
-    unit: u.unit,
-    unitTitle: u.title,
-    title: `Part ${u.unit} · ${u.title}`,
-    summary: `${u.plays.map(p => p.title).join(' · ')}.`,
+    unit: part.position,
+    unitTitle: part.title,
+    builtIn: part.builtIn || undefined,
+    title: `Part ${part.position} · ${part.title}`,
+    summary: `${plays.map(p => p.title).join(' · ')}.`,
     personaName: lead.name,
     personaRole: lead.role,
     initials: lead.initials,
     voice: lead.voice,
     lang: lead.lang,
     gender: lead.gender,
-    brief: `Unit ${u.unit} of the ${BOOK_TITLE}, word for word. You are the teacher and you speak first unless ${who} does. Say your line from the book in English; ${who} answers with their line from the book. If your line is not close enough, you will see the book's sentence and can say it again — the same as practising with a partner.`,
-    goals: u.plays.map(p => `${p.title}: ${p.goal}`),
-    plays: u.plays,
+    brief,
+    goals: plays.map(p => (p.goal ? `${p.title}: ${p.goal}` : p.title)),
+    plays,
     teacherLines: teacher,
-    estMin: Math.max(1, Math.round((teacher * SEC_PER_TEACHER_LINE + replies * SEC_PER_REPLY_LINE) / 60)),
+    urduLines,
+    scriptMode: urdu ? 'urdu' : 'english',
+    estMin: Math.max(1, Math.round((teacher * (urdu ? SEC_PER_URDU_LINE : SEC_PER_TEACHER_LINE) + replies * SEC_PER_REPLY_LINE) / 60)),
   }
 }
 
@@ -691,9 +723,6 @@ You calm down when the coordinator listens without interrupting, apologises sinc
       'I do not want to give you incorrect information, so I will check and confirm it for you.',
     ],
   },
-
-  // ── The Role-Play Practice Book, one scripted scenario per unit ──────────────
-  ...BOOK_UNITS.map(bookScenario),
 ]
 
 // The groups the Practice tab shows scenarios under, in this order
@@ -770,12 +799,15 @@ export function publicScenario(s) {
     voice: s.voice, lang: s.lang, gender: s.gender,
     group: groupOf(s), audience: audienceOf(s),
     kind: s.kind || 'conversation',
-    // A scripted part: its role plays (to pick where to start) and its length.
-    // The lines themselves arrive with the session.
+    // A scripted part: its role plays (to pick where to start), its length and
+    // how it runs (scriptMode). The lines themselves arrive with the session.
     ...(isScripted(s) && {
       unit: s.unit,
+      builtIn: s.builtIn,
       plays: s.plays.map(p => ({ n: p.n, title: p.title, goal: p.goal })),
       teacherLines: s.teacherLines,
+      urduLines: s.urduLines,
+      scriptMode: s.scriptMode,
       estMin: s.estMin,
     }),
   }

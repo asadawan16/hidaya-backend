@@ -18,7 +18,13 @@
  * against the book's teacher line (utils/coachScript.js); a close-enough line —
  * or a second miss — plays the book's next student / parent line(s), a first
  * miss sends back the book's sentence to say again. Reaching the end of the
- * role plays closes the call ('completed').
+ * role plays closes the call ('completed'). The parts are data the admin edits
+ * (models/CoachScript.js, controllers/portalCoachScriptController.js), so
+ * scenarios are looked up through services/coachScripts.js, not the config.
+ * In Urdu mode (CoachSettings.scriptMode) the teacher line is shown in Urdu
+ * and the tester says it in English: the script's sentence passes on the word
+ * match, anything else is judged for meaning and grammar by the AI
+ * (services/coachTranslation.js — checkLine below).
  *   POST /sessions/:id/turns     one recorded answer (raw audio body) →
  *                                Whisper → speaking measurements → the
  *                                character's reply. The audio is not stored.
@@ -46,12 +52,14 @@
 import CoachSession from '../models/CoachSession.js'
 import CoachSettings from '../models/CoachSettings.js'
 import User from '../models/User.js'
-import { COACH_SCENARIOS, DIFFICULTIES, SCENARIO_KEYS, SCENARIO_GROUPS, getScenario, publicScenario, canUseScenario, audienceOf, groupOf, isScripted } from '../config/coachScenarios.js'
+import { DIFFICULTIES, SCENARIO_GROUPS, publicScenario, canUseScenario, audienceOf, groupOf, isScripted } from '../config/coachScenarios.js'
+import { allScenarios, findScenario } from '../services/coachScripts.js'
 import { transcribe, coachAiStatus, CoachAiError, audioExtension } from '../services/coachAi.js'
 import { personaReply } from '../services/coachPersona.js'
 import { examineSession } from '../services/coachExaminer.js'
+import { judgeTranslation } from '../services/coachTranslation.js'
 import { turnMetrics, sessionMetrics } from '../utils/coachMetrics.js'
-import { buildScript, personaRun, scriptMatch, passMark, scriptLines, teacherSteps, SCRIPT_MAX_TRIES } from '../utils/coachScript.js'
+import { buildScript, personaRun, scriptMatch, passMark, scriptLines, teacherSteps, urduPassed, urduMatch, SCRIPT_MAX_TRIES } from '../utils/coachScript.js'
 import { createNotification } from './portalNotificationController.js'
 import { logActivity } from '../utils/activityLogger.js'
 
@@ -74,7 +82,11 @@ const isOwner = (req, s) => String(s.userId?._id || s.userId) === String(req.use
 function turnView(t) {
   const v = { role: t.role, text: t.text, at: t.at }
   if (t.speaker) v.speaker = t.speaker
-  if (t.check) v.check = { step: t.check.step, match: t.check.match, passed: Boolean(t.check.passed), attempt: t.check.attempt }
+  if (t.check) {
+    v.check = { step: t.check.step, match: t.check.match, passed: Boolean(t.check.passed), attempt: t.check.attempt }
+    if (t.check.judge) v.check.judge = t.check.judge
+    if (t.check.note) v.check.note = t.check.note
+  }
   if (t.role === 'tester' && t.metrics) {
     v.metrics = {
       wordCount: t.metrics.wordCount, fillerCount: t.metrics.fillerCount, fillers: t.metrics.fillers,
@@ -96,7 +108,9 @@ function scriptView(s, ended) {
     unit: sc.unit,
     unitTitle: sc.unitTitle,
     plays: sc.plays,
-    steps: sc.steps.map(x => ({ play: x.play, who: x.who, speaker: x.speaker, text: x.text })),
+    // 'urdu': teacher lines with an Urdu prompt are shown in Urdu and said in English
+    mode: sc.mode === 'urdu' ? 'urdu' : 'english',
+    steps: sc.steps.map(x => ({ play: x.play, who: x.who, speaker: x.speaker, text: x.text, ...(x.urdu && { urdu: x.urdu }) })),
     speakers: sc.speakers || {},
     pos: s.scriptPos ?? 0,
     tries: s.scriptTries ?? 0,
@@ -203,7 +217,8 @@ async function orgLimitReached(settings) {
 }
 
 // Switched on in Settings AND open to this person (manager scenarios need coach.manager)
-const enabledScenarios = (settings, req) => COACH_SCENARIOS.filter(s => !(settings.disabledScenarios || []).includes(s.key) && canUseScenario(s, req.userPermissions))
+const enabledScenarios = async (settings, req) => (await allScenarios(settings.scriptMode))
+  .filter(s => !(settings.disabledScenarios || []).includes(s.key) && canUseScenario(s, req.userPermissions))
 
 // ── Ending and marking ──────────────────────────────────────────────────────
 /**
@@ -327,17 +342,19 @@ export async function getConfig(req, res) {
   try {
     const settings = await CoachSettings.getSettings()
     const ai = coachAiStatus()
-    const [usage, orgFull, active] = await Promise.all([
+    const [usage, orgFull, active, scenarios] = await Promise.all([
       userUsage(req.userId, settings),
       orgLimitReached(settings),
       CoachSession.findOne({ userId: req.userId, status: 'active' }).select('_id endsAt scenario.title').lean(),
+      enabledScenarios(settings, req),
     ])
     res.json({
       enabled: settings.enabled,
       ready: ai.ready,
       durations: settings.durations,
       difficulties: DIFFICULTIES,
-      scenarios: enabledScenarios(settings, req).map(publicScenario),
+      scriptMode: settings.scriptMode || 'english',
+      scenarios: scenarios.map(publicScenario),
       groups: SCENARIO_GROUPS,
       usage,
       orgLimitReached: orgFull,
@@ -360,7 +377,7 @@ export async function startSession(req, res) {
     if (!coachAiStatus().ready) return res.status(503).json({ code: 'not_configured', error: 'The English Coach is not set up yet. Please ask an admin.' })
     if (consent !== true) return res.status(400).json({ code: 'consent_required', error: 'Please agree to how your recording is processed first.' })
 
-    const sc = getScenario(scenarioKey)
+    const sc = await findScenario(scenarioKey, settings.scriptMode)
     if (!sc || (settings.disabledScenarios || []).includes(sc.key) || !canUseScenario(sc, req.userPermissions)) return res.status(400).json({ error: 'Choose one of the available scenarios.' })
     if (!DIFFICULTIES[difficulty]) return res.status(400).json({ error: 'Choose a difficulty.' })
     const minutes = Number(durationMin)
@@ -390,7 +407,7 @@ export async function startSession(req, res) {
     if (isScripted(sc)) {
       const from = startPlay == null || startPlay === '' ? 0 : Number(startPlay)
       if (!Number.isInteger(from) || from < 0 || from >= sc.plays.length) return res.status(400).json({ error: 'Choose a role play to start from.' })
-      script = buildScript({ unit: sc.unit, title: sc.unitTitle, plays: sc.plays }, from)
+      script = buildScript({ unit: sc.unit, title: sc.unitTitle, plays: sc.plays }, from, { mode: sc.scriptMode })
       const teacherWords = script.steps.filter(x => x.who === 'T').reduce((n, x) => n + x.text.split(/\s+/).length, 0)
       script.minWords = Math.max(10, Math.min(settings.minTesterWords, Math.round(teacherWords * 0.6)))
       const run = personaRun(script, 0)
@@ -415,7 +432,7 @@ export async function startSession(req, res) {
           kind: script ? 'script' : undefined,
         },
         ...(script && {
-          script: { unit: script.unit, unitTitle: script.unitTitle, startPlay: script.startPlay, plays: script.plays, steps: script.steps, speakers: script.speakers, minWords: script.minWords },
+          script: { unit: script.unit, unitTitle: script.unitTitle, startPlay: script.startPlay, plays: script.plays, mode: script.mode, steps: script.steps, speakers: script.speakers, minWords: script.minWords },
           scriptPos: script.pos,
           scriptTries: 0,
         }),
@@ -454,6 +471,35 @@ function scriptState(s, testerTurn) {
     // Missed twice: the call moved on
     movedOn: Boolean(c && !c.passed && c.attempt >= SCRIPT_MAX_TRIES),
     expected: c ? s.script.steps[c.step]?.text : undefined,
+    // Urdu mode: the AI's advice on that line ("Say 'Please read slowly.'")
+    note: c?.note || undefined,
+  }
+}
+
+/**
+ * One answer to a scripted line → its check. English mode, or a line with no
+ * Urdu: the word match against the script's sentence. Urdu mode: the script's
+ * own sentence still passes on the word match; anything else is judged by the
+ * AI for meaning and grammar — and if no AI can answer right now, the word
+ * match decides, so the call never stalls on it.
+ */
+async function checkLine(s, step, said, usage) {
+  const words = scriptMatch(said, step.text)
+  const pass = passMark(s.difficulty)
+  if (s.script.mode !== 'urdu' || !step.urdu) return { match: words, passed: words >= pass }
+  if (words >= Math.max(pass, 0.8)) return { match: words, passed: true, judge: 'words' }
+  try {
+    const v = await judgeTranslation({ urdu: step.urdu, english: step.text, said })
+    usage.promptTokens += v.usage.promptTokens
+    usage.completionTokens += v.usage.completionTokens
+    return {
+      match: Math.max(words, urduMatch(v)),
+      passed: urduPassed(v, s.difficulty),
+      judge: 'ai', meaning: v.meaning, grammarOk: v.grammarOk, note: v.note,
+    }
+  } catch (err) {
+    console.warn('English Coach line check fell back to the word match:', err.message)
+    return { match: words, passed: words >= pass, judge: 'words' }
   }
 }
 
@@ -534,10 +580,9 @@ export async function addTurn(req, res) {
     if (s.script?.steps?.length) {
       // The book: check the line, then play the book's next line(s) — or ask again
       const pos = s.scriptPos ?? 0
-      const match = scriptMatch(heard.text, s.script.steps[pos].text)
+      const { match, passed, ...how } = await checkLine(s, s.script.steps[pos], heard.text, usage)
       const attempt = (s.scriptTries || 0) + 1
-      const passed = match >= passMark(s.difficulty)
-      testerTurn.check = { step: pos, match: Math.round(match * 100) / 100, passed, attempt }
+      testerTurn.check = { step: pos, match: Math.round(match * 100) / 100, passed, attempt, ...how }
       if (passed || attempt >= SCRIPT_MAX_TRIES) {
         const run = personaRun(s.script, pos + 1)
         replies = run.lines.map(l => ({ role: 'persona', text: l.text, speaker: l.speaker, provider: 'script', at: new Date() }))
@@ -673,7 +718,8 @@ export async function listSessions(req, res) {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25))
     const q = {}
     if (req.query.userId && /^[a-f\d]{24}$/i.test(req.query.userId)) q.userId = req.query.userId
-    if (req.query.scenario && SCENARIO_KEYS.includes(req.query.scenario)) q.scenarioKey = req.query.scenario
+    // Any key a part ever had — a deleted part's old tests stay findable
+    if (typeof req.query.scenario === 'string' && /^[a-z0-9_]{1,40}$/.test(req.query.scenario)) q.scenarioKey = req.query.scenario
     if (req.query.difficulty && DIFFICULTIES[req.query.difficulty]) q.difficulty = req.query.difficulty
     const statuses = ['active', 'scoring', 'scored', 'failed', 'too_short', 'abandoned']
     q.status = statuses.includes(req.query.status) ? req.query.status : { $ne: 'abandoned' }
@@ -887,6 +933,7 @@ export async function deleteSession(req, res) {
 
 async function settingsView(settings) {
   const since = new Date(Date.now() - DAY_MS)
+  const scenarios = await allScenarios(settings.scriptMode)
   const [day] = await CoachSession.aggregate([
     { $match: { createdAt: { $gte: since } } },
     {
@@ -908,10 +955,11 @@ async function settingsView(settings) {
       orgDailyLimit: settings.orgDailyLimit,
       minTesterWords: settings.minTesterWords,
       disabledScenarios: settings.disabledScenarios,
+      scriptMode: settings.scriptMode || 'english',
       updatedAt: settings.updatedAt,
     },
     allowedDurations: ALLOWED_DURATIONS,
-    scenarios: COACH_SCENARIOS.map(s => ({ key: s.key, title: s.title, summary: s.summary, personaName: s.personaName, group: groupOf(s), audience: audienceOf(s) })),
+    scenarios: scenarios.map(s => ({ key: s.key, title: s.title, summary: s.summary, personaName: s.personaName, group: groupOf(s), audience: audienceOf(s), kind: s.kind || 'conversation' })),
     groups: SCENARIO_GROUPS,
     ai: coachAiStatus(),
     last24h: day
@@ -951,9 +999,14 @@ export async function updateSettings(req, res) {
       || int('minTesterWords', 10, 400, 'Minimum words')
     if (bad) return res.status(400).json({ error: bad })
     if ('disabledScenarios' in b) {
-      const off = [...new Set((Array.isArray(b.disabledScenarios) ? b.disabledScenarios : []).filter(k => SCENARIO_KEYS.includes(k)))]
-      if (off.length >= SCENARIO_KEYS.length) return res.status(400).json({ error: 'Keep at least one scenario switched on.' })
+      const keys = (await allScenarios()).map(s => s.key)
+      const off = [...new Set((Array.isArray(b.disabledScenarios) ? b.disabledScenarios : []).filter(k => keys.includes(k)))]
+      if (off.length >= keys.length) return res.status(400).json({ error: 'Keep at least one scenario switched on.' })
       set.disabledScenarios = off
+    }
+    if ('scriptMode' in b) {
+      if (!['english', 'urdu'].includes(b.scriptMode)) return res.status(400).json({ error: 'Choose English or Urdu for the role-play scripts.' })
+      set.scriptMode = b.scriptMode
     }
     set.updatedBy = req.userId
     await CoachSettings.getSettings()

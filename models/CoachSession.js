@@ -61,6 +61,12 @@ const turnSchema = new mongoose.Schema({
       match: Number,     // 0–1, utils/coachScript.js#scriptMatch
       passed: Boolean,
       attempt: Number,   // 1 or 2
+      // Urdu mode: how the line was judged — 'words' (the script's sentence,
+      // word match) or 'ai' (meaning + grammar, services/coachTranslation.js)
+      judge: String,
+      meaning: Number,   // 0–100, the AI's "how much of the Urdu was said"
+      grammarOk: Boolean,
+      note: String,      // the AI's one-line advice for the tester
     }, { _id: false }),
     default: undefined,
   },
@@ -105,7 +111,9 @@ const coachSessionSchema = new mongoose.Schema({
       unitTitle: String,
       startPlay: Number,
       plays: [{ _id: false, n: Number, title: String, goal: String }],
-      steps: [{ _id: false, play: Number, who: String, speaker: String, text: String }],
+      // 'urdu' = teacher lines shown in Urdu, said in English (CoachSettings.scriptMode)
+      mode: String,
+      steps: [{ _id: false, play: Number, who: String, speaker: String, text: String, urdu: String }],
       speakers: mongoose.Schema.Types.Mixed,
       // Words the tester must say for the call to be marked: the Settings
       // minimum, or less when the chosen role plays are short

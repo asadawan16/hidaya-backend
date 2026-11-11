@@ -18,8 +18,16 @@ const coachSettingsSchema = new mongoose.Schema({
   orgDailyLimit: { type: Number, default: 0, min: 0, max: 1000 },
   // Fewer words than this from the tester and the call is not marked
   minTesterWords: { type: Number, default: 40, min: 10, max: 400 },
-  // Scenario keys switched off for testers (config/coachScenarios.js)
+  // Scenario keys switched off for testers (config/coachScenarios.js, and the
+  // scripted parts' keys — models/CoachScript.js)
   disabledScenarios: { type: [String], default: [] },
+  // How scripted parts run for everyone: 'english' = say the book's English
+  // line (shown or from memory); 'urdu' = the teacher line is shown in Urdu
+  // and the tester says it in English, checked for meaning and grammar
+  scriptMode: { type: String, enum: ['english', 'urdu'], default: 'english' },
+  // When the Role-Play Practice Book was copied into CoachScript — once, so a
+  // part the admin deletes stays deleted
+  scriptsSeededAt: { type: Date },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true })
 

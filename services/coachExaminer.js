@@ -79,7 +79,18 @@ function judge(v, good, poor, lowIsGood = true) {
 const VERY_EASY_FEEDBACK = 'The tester chose Very easy, the level for beginners. Mark against the same descriptors — do not inflate — but write "reasons", "summary", "strengths", "improvements" and every "explanation" in very simple English: short sentences and common words.'
 
 /** A scripted call: every book line the tester reached, each attempt at it and its match. */
-function bookSection(book) {
+function bookSection(book, mode) {
+  if (mode === 'urdu') {
+    const rows = book.map((l, i) => [
+      `${i + 1}. ${l.urdu ? `shown in Urdu: "${l.urdu}"\n   book's English: "${l.expected}"` : `book (shown in English): "${l.expected}"`}`,
+      ...l.attempts.map((a, j) => `   try ${j + 1}: "${a.text}" — ${a.judge === 'ai' ? 'judged on meaning and grammar' : 'word match'} ${Math.round((a.match || 0) * 100)}%${a.passed ? '' : ' (not accepted)'}`),
+    ].join('\n'))
+    return `
+THIS WAS AN URDU-TO-ENGLISH DRILL from Hidaya's Role-Play Practice Book. The tester played the teacher: each teacher line was shown to them in Urdu and they had to say it in natural English (not a word-for-word translation); the other side's lines were read from the book in English. Each teacher line the tester reached, the book's model English, what they said and how it was judged:
+${rows.join('\n')}
+"handling" for this call is calculated from these results — still return your own number. Any correct English that says the same thing as the Urdu is right; the book's sentence is one good way to say it. When a tester line is wrong or unnatural, base the "corrected" version on the book's English, and say in "improvements" which lines to practise.
+`
+  }
   const rows = book.map((l, i) => [
     `${i + 1}. book: "${l.expected}"`,
     ...l.attempts.map((a, j) => `   try ${j + 1}: "${a.text}" — ${Math.round((a.match || 0) * 100)}% match${a.passed ? '' : ' (not close enough)'}`),
@@ -112,7 +123,7 @@ export function examinerPrompt(session) {
   return `SCENARIO: ${sc.title} — ${sc.summary}
 The tester was told: ${sc.brief}
 Difficulty: ${level?.label || session.difficulty} (${(scripted ? level?.scriptSummary : level?.summary) || ''})
-${session.difficulty === 'very_easy' ? `${VERY_EASY_FEEDBACK}\n` : ''}${scripted ? bookSection(book) : ''}
+${session.difficulty === 'very_easy' ? `${VERY_EASY_FEEDBACK}\n` : ''}${scripted ? bookSection(book, session.script.mode) : ''}
 What good handling of this call looks like:
 ${(sc.goals || []).map(g => `- ${g}`).join('\n')}
 

@@ -14,6 +14,12 @@
  * Alaikum, InshaAllah, Ghunnah…), British/American spelling, digits and
  * hesitations. Word ORDER counts, as it does in the book ("How you are" is not
  * "How are you").
+ *
+ * Urdu mode (CoachSettings.scriptMode = 'urdu'): the teacher line is shown in
+ * Urdu and the tester says it in English. Saying the script's own sentence
+ * still passes on the word match alone; anything else is put to the AI
+ * (services/coachTranslation.js), which says whether the meaning is all there
+ * and the English is correct — urduPassed() turns that into a pass.
  */
 import { BOOK_SPEAKERS } from '../config/coachRolePlays.js'
 import { isFiller } from './coachMetrics.js'
@@ -86,18 +92,37 @@ export function scriptMatch(said, expected) {
 export const passMark = (difficulty) => SCRIPT_PASS[difficulty] ?? SCRIPT_PASS.normal
 
 /**
- * One unit of the book → what a session stores: the role plays it covers and
- * the flattened lines from `startPlay` on. Persona lines carry the speaker key
- * (BOOK_SPEAKERS) whose voice says them.
+ * Urdu mode: did a translation pass? The meaning must all be there; above Very
+ * easy the English must also be correct (the book: "do not accept a sentence
+ * merely because the meaning is similar if the grammar is clearly wrong"), and
+ * at Challenging it must be complete.
  */
-export function buildScript(unit, startPlay = 0) {
+export function urduPassed(verdict, difficulty) {
+  if (!verdict?.meaningOk) return false
+  if (difficulty === 'very_easy') return true
+  if (!verdict.grammarOk) return false
+  return difficulty !== 'hard' || verdict.meaning >= 85
+}
+
+/** Urdu mode: an AI verdict as a 0–1 "match" for the line's mark. */
+export const urduMatch = (verdict) => Math.max(0, Math.min(1, (verdict.meaning / 100) * (verdict.grammarOk ? 1 : 0.75)))
+
+/**
+ * One part → what a session stores: the role plays it covers and the
+ * flattened lines from `startPlay` on. Persona lines carry the speaker key
+ * (BOOK_SPEAKERS) whose voice says them. Lines are [who, text, urdu].
+ * `mode: 'urdu'` keeps each teacher line's Urdu prompt; a part with no Urdu
+ * at all runs in English.
+ */
+export function buildScript(unit, startPlay = 0, { mode = 'english' } = {}) {
   const from = Math.min(Math.max(0, Number(startPlay) || 0), unit.plays.length - 1)
   const plays = unit.plays.slice(from)
+  const urdu = mode === 'urdu' && plays.some(p => p.lines.some(([w, , u]) => w === 'T' && u))
   const steps = []
   const used = new Set()
   plays.forEach((p, i) => {
-    for (const [who, text] of p.lines) {
-      if (who === 'T') { steps.push({ play: i, who, text }); continue }
+    for (const [who, text, prompt] of p.lines) {
+      if (who === 'T') { steps.push({ play: i, who, text, ...(urdu && prompt && { urdu: prompt }) }); continue }
       const speaker = who === 'P' ? 'P' : (p.student || 'S')
       used.add(speaker)
       steps.push({ play: i, who, speaker, text })
@@ -108,6 +133,7 @@ export function buildScript(unit, startPlay = 0) {
     unitTitle: unit.title,
     startPlay: from,
     plays: plays.map(p => ({ n: p.n, title: p.title, goal: p.goal })),
+    mode: urdu ? 'urdu' : 'english',
     steps,
     speakers: Object.fromEntries([...used].map(k => [k, BOOK_SPEAKERS[k]])),
   }
@@ -139,7 +165,11 @@ export function scriptLines(script, turns) {
   for (const t of turns || []) {
     if (t.role !== 'tester' || !t.check || !Number.isInteger(t.check.step)) continue
     const list = byStep.get(t.check.step) || []
-    list.push({ text: t.text, match: t.check.match, passed: Boolean(t.check.passed) })
+    list.push({
+      text: t.text, match: t.check.match, passed: Boolean(t.check.passed),
+      ...(t.check.judge && { judge: t.check.judge }),
+      ...(t.check.note && { note: t.check.note }),
+    })
     byStep.set(t.check.step, list)
   }
   return [...byStep.entries()].sort((a, b) => a[0] - b[0]).map(([step, attempts]) => {
@@ -149,6 +179,7 @@ export function scriptLines(script, turns) {
       step,
       play: s.play,
       expected: s.text || '',
+      ...(s.urdu && { urdu: s.urdu }),
       attempts,
       passed: attempts.some(a => a.passed),
       firstTime: Boolean(attempts[0]?.passed),

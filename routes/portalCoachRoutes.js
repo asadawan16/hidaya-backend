@@ -6,6 +6,9 @@ import {
   getConfig, startSession, addTurn, finishSession, listMine, getSession, rescoreSession,
   listSessions, listPeople, getOverview, reviewSession, deleteSession, getSettings, updateSettings,
 } from '../controllers/portalCoachController.js'
+import {
+  listScripts, createScript, updateScript, deleteScript, restoreScript, restoreBook, reorderScripts,
+} from '../controllers/portalCoachScriptController.js'
 
 // English Coach — see controllers/portalCoachController.js for the flow.
 const router = Router()
@@ -46,5 +49,14 @@ router.patch('/sessions/:id/review', requirePermission('coach.review'), reviewSe
 router.delete('/sessions/:id', requirePermission('coach.manage'), deleteSession)
 router.get('/settings', requirePermission('coach.manage'), getSettings)
 router.put('/settings', requirePermission('coach.manage'), updateSettings)
+
+// The Scripts tab: the word-for-word parts (controllers/portalCoachScriptController.js)
+router.get('/scripts', requirePermission('coach.manage'), listScripts)
+router.post('/scripts', requirePermission('coach.manage'), createScript)
+router.put('/scripts/order', requirePermission('coach.manage'), reorderScripts)
+router.post('/scripts/restore-book', requirePermission('coach.manage'), restoreBook)
+router.put('/scripts/:scriptId', requirePermission('coach.manage'), updateScript)
+router.delete('/scripts/:scriptId', requirePermission('coach.manage'), deleteScript)
+router.post('/scripts/:scriptId/restore', requirePermission('coach.manage'), restoreScript)
 
 export default router

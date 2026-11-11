@@ -38,8 +38,9 @@ const GEMINI_BASE = process.env.COACH_GEMINI_BASE_URL || 'https://generativelang
 const STT_TIMEOUT_MS = 45_000
 // A healthy reply takes 1–2 s (character) or ~5 s (examiner); an overloaded
 // model can hang far longer, and the next one in the list is the better bet.
-const CALL_TIMEOUT_MS = { actor: 12_000, examiner: 25_000 }
-const BUDGET_MS = { actor: 30_000, examiner: 120_000 }
+// `judge` (Urdu mode's line check) runs while the tester waits, like the character.
+const CALL_TIMEOUT_MS = { actor: 12_000, judge: 12_000, examiner: 25_000 }
+const BUDGET_MS = { actor: 30_000, judge: 20_000, examiner: 120_000 }
 const GONE_FOR_MS = 6 * 60 * 60_000
 
 // Biases Whisper towards keeping hesitations, so fillers can be counted.
@@ -301,7 +302,7 @@ async function callOnce(target, opts, withFormat, timeoutMs) {
 
 /**
  * One chat completion, trying each model (and each key) in the step's ranked list.
- * @param {{purpose:'actor'|'examiner', messages:Array, temperature?:number, maxTokens?:number, jsonSchema?:object, skip?:string[]}} opts
+ * @param {{purpose:'actor'|'judge'|'examiner', messages:Array, temperature?:number, maxTokens?:number, jsonSchema?:object, skip?:string[]}} opts
  *   `skip` — providers not to use this time (e.g. one whose reply was unusable)
  */
 export async function chat(opts) {
