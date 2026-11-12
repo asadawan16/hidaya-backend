@@ -23,6 +23,7 @@ const { default: Notification } = await import('../models/Notification.js')
 const { default: Task } = await import('../models/Task.js')
 const { default: Enrollment } = await import('../models/Enrollment.js')
 const tasks = await import('../controllers/portalTaskController.js')
+const groups = await import('../controllers/portalTaskGroupController.js')
 const leads = await import('../controllers/portalLeadsController.js')
 
 // Today in Karachi as { iso: 'YYYY-MM-DD' }, and whole days added to an ISO date.
@@ -118,6 +119,28 @@ try {
   ok(res._json.length === 1 && String(res._json[0]._id) === String(tutor._id), 'without task.manage the picker only offers yourself')
   res = await call(tasks.pickAssignees, reqAs(admin, MANAGE, { query: { kind: 'student' } }))
   ok(res._json.length === 1 && res._json[0].kind === 'student', 'picker filters students')
+
+  // "Assign to all tutors / staff / students" (2026-11-12): each person is in exactly one group
+  const both = await User.create({ email: 'tc@x.test', password: 'secret123', displayName: 'Tutor Coordinator', roles: [rTutor._id, rAdmin._id] })
+  await User.create({ email: 'gone@x.test', password: 'secret123', displayName: 'Gone Tutor', roles: [rTutor._id], status: 'suspended' })
+  const groupIds = async (kind) => (await call(groups.pickAssigneeGroup, reqAs(admin, MANAGE, { query: { kind } })))._json.map(u => String(u._id)).sort()
+  ok(JSON.stringify(await groupIds('tutor')) === JSON.stringify([tutor, tutor2].map(u => String(u._id)).sort()), 'all tutors: active tutor-only accounts')
+  ok(JSON.stringify(await groupIds('staff')) === JSON.stringify([admin, both].map(u => String(u._id)).sort()), 'all staff: everyone else, incl. a tutor who also holds another role')
+  ok(JSON.stringify(await groupIds('student')) === JSON.stringify([String(stuUser._id)]), 'all students: student accounts')
+  res = await call(groups.pickAssigneeGroup, reqAs(admin, MANAGE, { query: { kind: 'everyone' } }))
+  ok(res._status === 400, 'an unknown group is refused')
+  await User.deleteOne({ _id: both._id })
+  // Adding a whole group to an existing task: one short history line, everyone notified
+  const crowd = await User.insertMany(Array.from({ length: 40 }, (_, i) => ({ email: `crowd${i}@x.test`, password: 'secret123', displayName: `Crowd Person With A Long Name ${i}`, roles: [rTutor._id] })))
+  res = await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'For everyone', assignees: [String(tutor._id)] } }))
+  const groupTask = res._json
+  res = await call(tasks.updateTask, reqAs(admin, MANAGE, { params: { id: String(groupTask._id) }, body: { assignees: [String(tutor._id), ...crowd.map(u => String(u._id))] } }))
+  ok(res._status === 200 && res._json.assignees.length === 41, 'a task can take a whole group of assignees')
+  const groupLine = (await Task.findById(groupTask._id).lean()).activity.map(a => a.text).find(t => t.startsWith('assigned '))
+  ok(/and 37 others$/.test(groupLine || ''), `history names three and counts the rest ("${groupLine}")`)
+  ok(await Notification.countDocuments({ type: 'task_assigned', 'payload.taskId': String(groupTask._id) }) === 41, 'every new assignee is notified')
+  await Task.deleteOne({ _id: groupTask._id })
+  await User.deleteMany({ _id: { $in: crowd.map(u => u._id) } })
 
   // ── 2026-11-08: repeats, waiting, mentions, bulk + undo, restore, views, windows ──
   console.log('\nTasks: repeats, waiting, mentions, bulk, views')

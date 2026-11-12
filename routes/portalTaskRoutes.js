@@ -5,6 +5,7 @@ import {
   pickAssignees, pickLeads, listGoals, createGoal, updateGoal, deleteGoal,
   bulkUpdateTasks, undoBulkUpdate, bulkDeleteTasks, restoreTasks, listTaskViews, createTaskView, deleteTaskView,
 } from '../controllers/portalTaskController.js'
+import { pickAssigneeGroup } from '../controllers/portalTaskGroupController.js'
 
 const router = Router()
 router.use(portalAuth)
@@ -14,6 +15,7 @@ router.use(portalAuth)
 router.get('/', listTasks)
 router.get('/my/summary', myTaskSummary)
 router.get('/assignees', pickAssignees)
+router.get('/assignees/everyone', requirePermission('task.manage'), pickAssigneeGroup)
 router.get('/leads', requirePermission('task.leads'), pickLeads)
 router.post('/reorder', reorderTasks)
 router.post('/bulk', bulkUpdateTasks)

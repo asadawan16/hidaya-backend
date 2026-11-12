@@ -90,15 +90,14 @@ const involved = (task) => [
 ].filter(Boolean)
 
 async function notifyAssigned(task, userIds, actor) {
-  for (const uid of userIds) {
-    if (sameId(uid, actor._id)) continue
-    await createNotification({
-      userId: uid,
-      type: 'task_assigned',
-      title: `New task: ${task.title}`,
-      body: [task.dueDate ? `Due ${dateLabel(task)}` : '', `from ${actor.displayName || 'the office'}`].filter(Boolean).join(' · '),
-      payload: { taskId: String(task._id) },
-    })
+  const title = `New task: ${task.title}`
+  const body = [task.dueDate ? `Due ${dateLabel(task)}` : '', `from ${actor.displayName || 'the office'}`].filter(Boolean).join(' · ')
+  const ids = userIds.filter(uid => !sameId(uid, actor._id))
+  // In batches, so "Assign to all students" doesn't wait on hundreds in a row.
+  for (let i = 0; i < ids.length; i += 25) {
+    await Promise.all(ids.slice(i, i + 25).map(uid => createNotification({
+      userId: uid, type: 'task_assigned', title, body, payload: { taskId: String(task._id) },
+    })))
   }
 }
 
@@ -121,10 +120,18 @@ async function describeChanges(before, task) {
   const was = before.assignees.map(String), now = task.assignees.map(String)
   const added = now.filter(id => !was.includes(id)), removed = was.filter(id => !now.includes(id))
   if (added.length || removed.length) {
-    const users = await User.find({ _id: { $in: [...added, ...removed] } }).select('displayName email').lean()
+    // "Assign to all students" can add hundreds: name three, count the rest
+    // (an activity line holds 300 characters).
+    const NAMED = 3
+    const users = await User.find({ _id: { $in: [...added.slice(0, NAMED), ...removed.slice(0, NAMED)] } }).select('displayName email').lean()
     const name = (id) => { const u = users.find(x => sameId(x._id, id)); return u?.displayName || u?.email || 'someone' }
-    if (added.length) lines.push(`assigned ${added.map(name).join(', ')}`)
-    if (removed.length) lines.push(`removed ${removed.map(name).join(', ')}`)
+    const names = (ids) => {
+      const shown = ids.slice(0, NAMED).map(name).join(', ')
+      const rest = ids.length - NAMED
+      return (rest > 0 ? `${shown} and ${rest} ${rest === 1 ? 'other' : 'others'}` : shown).slice(0, 280)
+    }
+    if (added.length) lines.push(`assigned ${names(added)}`)
+    if (removed.length) lines.push(`removed ${names(removed)}`)
   }
   if (!before.waitingOn && task.waiting?.on) lines.push(`marked it waiting${task.waiting.who ? ` on ${task.waiting.who}` : ''}${task.waiting.reason ? `: ${task.waiting.reason}` : ''}`)
   if (before.waitingOn && !task.waiting?.on) lines.push('marked it no longer waiting')
