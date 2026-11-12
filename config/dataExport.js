@@ -59,6 +59,7 @@ import StudentClassLink from '../models/StudentClassLink.js'
 import CoachSession from '../models/CoachSession.js'
 import CoachSettings from '../models/CoachSettings.js'
 import CoachScript from '../models/CoachScript.js'
+import CoachAssignment from '../models/CoachAssignment.js'
 import Task from '../models/Task.js'
 import Goal from '../models/Goal.js'
 import TaskView from '../models/TaskView.js'
@@ -126,6 +127,7 @@ export const EXPORT_COLLECTIONS = [
   { folder: 'training', file: 'english-coach-tests', label: 'English Coach tests', model: CoachSession },
   { folder: 'training', file: 'english-coach-settings', label: 'English Coach settings', model: CoachSettings },
   { folder: 'training', file: 'english-coach-scripts', label: 'English Coach scripts', model: CoachScript },
+  { folder: 'training', file: 'english-coach-assigned-tests', label: 'English Coach assigned tests', model: CoachAssignment },
 
   { folder: 'tasks', file: 'tasks', label: 'Tasks', model: Task },
   { folder: 'tasks', file: 'goals', label: 'Goals', model: Goal },

@@ -101,6 +101,15 @@ const coachSessionSchema = new mongoose.Schema({
   },
   difficulty: { type: String, enum: ['very_easy', 'easy', 'normal', 'hard'], required: true },
 
+  // A level test (a CoachSettings.levels item) or an assigned test
+  // (CoachAssignment) — started from the tester's Practice tab with the
+  // scenario, difficulty and length the admin fixed. `passScore` and
+  // `levelNumber` are what they were at the start, for the scorecard.
+  levelItemId: { type: mongoose.Schema.Types.ObjectId },
+  levelNumber: { type: Number },
+  assignmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'CoachAssignment' },
+  passScore: { type: Number },
+
   // A scripted call's snapshot of the book (utils/coachScript.js#buildScript):
   // the role plays it covers, every line in order, and the voices. `scriptPos`
   // is the next line to play or to wait for; `scriptTries` the misses on the
@@ -207,5 +216,6 @@ coachSessionSchema.index({ userId: 1 }, { unique: true, partialFilterExpression:
 coachSessionSchema.index({ userId: 1, createdAt: -1 })
 coachSessionSchema.index({ status: 1, endsAt: 1 })
 coachSessionSchema.index({ createdAt: -1 })
+coachSessionSchema.index({ levelItemId: 1, userId: 1 }, { partialFilterExpression: { levelItemId: { $exists: true } } })
 
 export default mongoose.model('CoachSession', coachSessionSchema)

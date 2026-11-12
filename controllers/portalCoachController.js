@@ -49,10 +49,12 @@
  *   examiner invents a quote      dropped (services/coachExaminer.js)
  *   clock skew                    every response carries serverNow
  */
+import mongoose from 'mongoose'
 import CoachSession from '../models/CoachSession.js'
 import CoachSettings from '../models/CoachSettings.js'
+import CoachAssignment from '../models/CoachAssignment.js'
 import User from '../models/User.js'
-import { DIFFICULTIES, SCENARIO_GROUPS, publicScenario, canUseScenario, audienceOf, groupOf, isScripted } from '../config/coachScenarios.js'
+import { DIFFICULTIES, SCENARIO_GROUPS, ALLOWED_DURATIONS, publicScenario, canUseScenario, audienceOf, groupOf, isScripted } from '../config/coachScenarios.js'
 import { allScenarios, findScenario } from '../services/coachScripts.js'
 import { transcribe, coachAiStatus, CoachAiError, audioExtension } from '../services/coachAi.js'
 import { personaReply } from '../services/coachPersona.js'
@@ -61,6 +63,7 @@ import { judgeTranslation } from '../services/coachTranslation.js'
 import { turnMetrics, sessionMetrics } from '../utils/coachMetrics.js'
 import { buildScript, personaRun, scriptMatch, passMark, scriptLines, teacherSteps, urduPassed, urduMatch, SCRIPT_MAX_TRIES } from '../utils/coachScript.js'
 import { createNotification } from './portalNotificationController.js'
+import { levelProgress, findLevelItem, onSessionScored } from '../services/coachProgress.js'
 import { logActivity } from '../utils/activityLogger.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -73,7 +76,7 @@ const SCORING_GIVE_UP_MS = 6 * 60 * 60_000 // providers down this long → faile
 export const MAX_TESTER_TURNS = 60
 const MIN_AUDIO_BYTES = 800
 export const MAX_TURN_AUDIO_SEC = 150
-export const ALLOWED_DURATIONS = [3, 5, 10, 15]
+export { ALLOWED_DURATIONS }
 
 const has = (req, p) => req.userPermissions?.has(p)
 const isOwner = (req, s) => String(s.userId?._id || s.userId) === String(req.userId)
@@ -123,6 +126,18 @@ function scriptView(s, ended) {
   }
 }
 
+/** A level test or an assigned test: what it was for, the mark it needed, and whether it got it. */
+function goalView(s) {
+  if (!s.levelItemId && !s.assignmentId) return undefined
+  const pass = s.passScore ?? 0
+  return {
+    kind: s.levelItemId ? 'level' : 'assignment',
+    level: s.levelNumber ?? null,
+    passScore: pass,
+    passed: s.status === 'scored' ? (s.result?.overall ?? 0) >= pass : null,
+  }
+}
+
 export function sessionView(s, { withTurns = true } = {}) {
   const ended = s.status !== 'active'
   const sc = s.scenario || {}
@@ -157,6 +172,7 @@ export function sessionView(s, { withTurns = true } = {}) {
     result: s.status === 'scored' ? s.result : undefined,
     scoringError: s.status === 'failed' ? s.scoringError : undefined,
     review: s.review?.at ? s.review : undefined,
+    goal: goalView(s),
     user: userView(s.userId),
     serverNow: new Date(),
   }
@@ -179,6 +195,7 @@ function summaryView(s) {
     scores: s.result?.scores,
     reviewScore: s.review?.score ?? null,
     reviewed: Boolean(s.review?.at),
+    goal: goalView(s),
     user: userView(s.userId),
   }
 }
@@ -217,8 +234,78 @@ async function orgLimitReached(settings) {
 }
 
 // Switched on in Settings AND open to this person (manager scenarios need coach.manager)
-const enabledScenarios = async (settings, req) => (await allScenarios(settings.scriptMode))
+const enabledOf = (scenarios, settings, req) => scenarios
   .filter(s => !(settings.disabledScenarios || []).includes(s.key) && canUseScenario(s, req.userPermissions))
+
+const ASSIGNMENT_SHOWN_DAYS = 14 // a passed assigned test stays on the Practice tab this long
+
+/** The tester's assigned tests: everything still to pass, and what they passed lately. */
+async function myAssignments(userId, byKey) {
+  const list = await CoachAssignment.find({
+    userId,
+    $or: [{ status: 'pending' }, { completedAt: { $gte: new Date(Date.now() - ASSIGNMENT_SHOWN_DAYS * DAY_MS) } }],
+  }).sort({ status: -1, dueAt: 1, createdAt: -1 }).limit(50).lean()
+  return list.map(a => {
+    const sc = byKey.get(a.scenarioKey)
+    return {
+      id: a._id,
+      status: a.status,
+      scenario: sc ? publicScenario(sc) : null, // null = the part was deleted; it can't be taken
+      scenarioTitle: sc?.title || a.scenarioTitle,
+      difficulty: a.difficulty,
+      durationMin: a.durationMin ?? null,
+      passScore: a.passScore || 0,
+      dueAt: a.dueAt || null,
+      note: a.note || '',
+      assignedByName: a.assignedByName || '',
+      attempts: a.attempts || 0,
+      bestScore: a.bestScore ?? null,
+      score: a.score ?? null,
+      sessionId: a.sessionId || a.lastSessionId || null,
+      completedAt: a.completedAt || null,
+      taskId: a.taskId || null,
+    }
+  })
+}
+
+/** The tester's place on the ladder, with each level's tests. Null when there are no levels. */
+async function myLevels(userId, settings, byKey) {
+  if (!settings.levels?.length) return null
+  const p = (await levelProgress([userId], settings.levels)).get(String(userId))
+  return {
+    total: p.total,
+    completed: p.completed,
+    current: p.current,
+    finished: p.finished,
+    levels: settings.levels.map((l, i) => {
+      const lp = p.levels[i]
+      return {
+        id: l._id,
+        number: i + 1,
+        title: l.title,
+        note: l.note,
+        state: lp.state,
+        complete: lp.complete,
+        items: l.items.map((it, j) => {
+          const sc = byKey.get(it.scenarioKey)
+          const ip = lp.items[j]
+          return {
+            id: it._id,
+            scenario: sc ? publicScenario(sc) : null,
+            scenarioTitle: sc?.title || 'A deleted script',
+            difficulty: it.difficulty,
+            durationMin: it.durationMin ?? null,
+            passScore: it.passScore,
+            best: ip.best,
+            tests: ip.tests,
+            passed: ip.passed,
+            bestSessionId: ip.bestSessionId,
+          }
+        }),
+      }
+    }),
+  }
+}
 
 // ── Ending and marking ──────────────────────────────────────────────────────
 /**
@@ -286,6 +373,8 @@ export async function scoreSession(id) {
       },
       { new: true },
     )
+    // Levels and assigned tests move on (services/coachProgress.js)
+    if (done) onSessionScored(done)
     // Someone who left the page gets told; someone watching the scorecard doesn't need a ping
     if (done && s.endedAt && Date.now() - s.endedAt.getTime() > 2 * 60_000) {
       createNotification({
@@ -342,12 +431,18 @@ export async function getConfig(req, res) {
   try {
     const settings = await CoachSettings.getSettings()
     const ai = coachAiStatus()
-    const [usage, orgFull, active, scenarios] = await Promise.all([
+    const all = await allScenarios(settings.scriptMode)
+    // Level and assigned tests may use a part that is off for free practice;
+    // manager-only ones still need coach.manager
+    const byKey = new Map(all.filter(s => canUseScenario(s, req.userPermissions)).map(s => [s.key, s]))
+    const [usage, orgFull, active, assignments, levels] = await Promise.all([
       userUsage(req.userId, settings),
       orgLimitReached(settings),
       CoachSession.findOne({ userId: req.userId, status: 'active' }).select('_id endsAt scenario.title').lean(),
-      enabledScenarios(settings, req),
+      myAssignments(req.userId, byKey),
+      myLevels(req.userId, settings, byKey),
     ])
+    const scenarios = enabledOf(all, settings, req)
     res.json({
       enabled: settings.enabled,
       ready: ai.ready,
@@ -356,6 +451,8 @@ export async function getConfig(req, res) {
       scriptMode: settings.scriptMode || 'english',
       scenarios: scenarios.map(publicScenario),
       groups: SCENARIO_GROUPS,
+      assignments,
+      levels,
       usage,
       orgLimitReached: orgFull,
       minTesterWords: settings.minTesterWords,
@@ -371,17 +468,47 @@ export async function getConfig(req, res) {
 
 export async function startSession(req, res) {
   try {
-    const { scenarioKey, difficulty, durationMin, consent, startPlay } = req.body || {}
+    const { consent, assignmentId, levelItemId } = req.body || {}
+    let { scenarioKey, difficulty, durationMin, startPlay } = req.body || {}
     const settings = await CoachSettings.getSettings()
     if (!settings.enabled) return res.status(403).json({ code: 'disabled', error: 'The English Coach is switched off.' })
     if (!coachAiStatus().ready) return res.status(503).json({ code: 'not_configured', error: 'The English Coach is not set up yet. Please ask an admin.' })
     if (consent !== true) return res.status(400).json({ code: 'consent_required', error: 'Please agree to how your recording is processed first.' })
 
+    // A level test or an assigned test: the admin fixed the scenario, the
+    // difficulty and maybe the length, and a script runs from its first line
+    let preset = null
+    if (assignmentId) {
+      const a = mongoose.isValidObjectId(assignmentId) ? await CoachAssignment.findOne({ _id: assignmentId, userId: req.userId }).lean() : null
+      if (!a) return res.status(404).json({ code: 'no_assignment', error: 'This test is no longer assigned to you.' })
+      if (a.status !== 'pending') return res.status(409).json({ code: 'assignment_done', error: 'You have already passed this test.' })
+      preset = { scenarioKey: a.scenarioKey, difficulty: a.difficulty, durationMin: a.durationMin, passScore: a.passScore || 0, assignmentId: a._id }
+    } else if (levelItemId) {
+      const found = findLevelItem(settings.levels, levelItemId)
+      if (!found) return res.status(404).json({ code: 'no_level_item', error: 'This level test has changed. Please reload the page.' })
+      const progress = (await levelProgress([req.userId], settings.levels)).get(String(req.userId))
+      if (found.index > progress.completed) {
+        return res.status(403).json({ code: 'level_locked', error: `Pass every test in Level ${progress.current} first.` })
+      }
+      const it = found.item
+      preset = { scenarioKey: it.scenarioKey, difficulty: it.difficulty, durationMin: it.durationMin, passScore: it.passScore, levelItemId: it._id, levelNumber: found.index + 1 }
+    }
+    if (preset) {
+      scenarioKey = preset.scenarioKey
+      difficulty = preset.difficulty
+      if (preset.durationMin) durationMin = preset.durationMin
+      startPlay = 0
+    }
+
     const sc = await findScenario(scenarioKey, settings.scriptMode)
-    if (!sc || (settings.disabledScenarios || []).includes(sc.key) || !canUseScenario(sc, req.userPermissions)) return res.status(400).json({ error: 'Choose one of the available scenarios.' })
+    const off = !preset && (settings.disabledScenarios || []).includes(sc?.key)
+    if (!sc || off || !canUseScenario(sc, req.userPermissions)) {
+      return res.status(400).json({ error: preset ? 'The script for this test has been removed. Please ask an admin.' : 'Choose one of the available scenarios.' })
+    }
     if (!DIFFICULTIES[difficulty]) return res.status(400).json({ error: 'Choose a difficulty.' })
     const minutes = Number(durationMin)
-    if (!settings.durations.includes(minutes)) return res.status(400).json({ error: 'Choose one of the available call lengths.' })
+    const lengths = preset?.durationMin ? ALLOWED_DURATIONS : settings.durations
+    if (!lengths.includes(minutes)) return res.status(400).json({ error: 'Choose one of the available call lengths.' })
 
     // A call left open whose time ran out: close it now rather than blocking a new one
     const existing = await CoachSession.findOne({ userId: req.userId, status: 'active' })
@@ -437,6 +564,11 @@ export async function startSession(req, res) {
           scriptTries: 0,
         }),
         difficulty,
+        ...(preset && {
+          passScore: preset.passScore,
+          ...(preset.levelItemId && { levelItemId: preset.levelItemId, levelNumber: preset.levelNumber }),
+          ...(preset.assignmentId && { assignmentId: preset.assignmentId }),
+        }),
         durationSec: minutes * 60,
         startedAt: now,
         endsAt: new Date(now.getTime() + minutes * 60_000),

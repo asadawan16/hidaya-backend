@@ -9,6 +9,9 @@ import {
 import {
   listScripts, createScript, updateScript, deleteScript, restoreScript, restoreBook, reorderScripts,
 } from '../controllers/portalCoachScriptController.js'
+import {
+  getLevels, saveLevels, levelTeam, listPractisers, listAssignments, createAssignments, deleteAssignment,
+} from '../controllers/portalCoachLevelController.js'
 
 // English Coach — see controllers/portalCoachController.js for the flow.
 const router = Router()
@@ -58,5 +61,14 @@ router.post('/scripts/restore-book', requirePermission('coach.manage'), restoreB
 router.put('/scripts/:scriptId', requirePermission('coach.manage'), updateScript)
 router.delete('/scripts/:scriptId', requirePermission('coach.manage'), deleteScript)
 router.post('/scripts/:scriptId/restore', requirePermission('coach.manage'), restoreScript)
+
+// Levels and assigned tests (controllers/portalCoachLevelController.js)
+router.get('/levels', requireAnyPermission('coach.manage', 'coach.review'), getLevels)
+router.put('/levels', requirePermission('coach.manage'), saveLevels)
+router.get('/levels/team', requirePermission('coach.review'), levelTeam)
+router.get('/practisers', requirePermission('coach.review'), listPractisers)
+router.get('/assignments', requirePermission('coach.review'), listAssignments)
+router.post('/assignments', requirePermission('coach.review'), createAssignments)
+router.delete('/assignments/:assignmentId', requirePermission('coach.review'), deleteAssignment)
 
 export default router

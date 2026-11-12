@@ -82,6 +82,20 @@ const taskSchema = new mongoose.Schema({
   },
   tags: [{ type: String, trim: true, maxlength: 40 }],
 
+  // An English Coach test the assignees must pass. Each assignee gets a
+  // CoachAssignment (services/coachProgress.js#syncTaskTests), and the task
+  // moves to Done by itself once every one of them has passed.
+  coachTest: {
+    type: new mongoose.Schema({
+      scenarioKey: { type: String, required: true },
+      scenarioTitle: { type: String, default: '' },
+      difficulty: { type: String, enum: ['very_easy', 'easy', 'normal', 'hard'], required: true },
+      durationMin: { type: Number },
+      passScore: { type: Number, min: 0, max: 100, default: 0 },
+    }, { _id: false }),
+    default: undefined,
+  },
+
   // Position inside its Kanban column (lower = higher up)
   order: { type: Number, default: 0 },
 

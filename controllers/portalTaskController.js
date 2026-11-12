@@ -8,6 +8,13 @@
 //     delete any task, change many at once, manage goals
 // Staff without task.manage can still add their own to-dos (assigned to
 // themselves). Students only see and work the tasks assigned to them.
+//
+// English tests: a task may carry an English Coach test (`coachTest`, set by
+// people with coach.review or coach.manage). Each assignee then gets the test
+// on their English Coach Practice tab (services/coachProgress.js keeps the
+// assignments in step with the task), the task moves to Done by itself when
+// the last of them passes (completeTaskFromTest), and an assignee can't tick
+// it done by hand while anyone still has to pass.
 import mongoose from 'mongoose'
 import Task, { TASK_STATUSES, TASK_PRIORITIES, TASK_TYPES, REPEAT_FREQS, ACTIVITY_CAP } from '../models/Task.js'
 import Goal from '../models/Goal.js'
@@ -21,6 +28,10 @@ import { emitToUser } from '../config/socket.js'
 import { logActivity } from '../utils/activityLogger.js'
 import { nextDueDate, nextTaskFields } from '../utils/taskRepeat.js'
 import { SHIFT_WRAP_HOUR } from '../utils/shiftWindow.js'
+import CoachSettings from '../models/CoachSettings.js'
+import CoachAssignment from '../models/CoachAssignment.js'
+import { allScenarios } from '../services/coachScripts.js'
+import { cleanTestSpec, syncTaskTests, dropTaskTests, taskTestPending, cannotPractise, cannotPractiseMessage } from '../services/coachProgress.js'
 
 const { isValidObjectId } = mongoose
 const escapeRx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -142,7 +153,65 @@ const snapshot = (t) => ({
   title: t.title, status: t.status, priority: t.priority, dueDate: t.dueDate,
   assignees: (t.assignees || []).map(a => String(a?._id || a)),
   waitingOn: !!t.waiting?.on, waitingUser: String(t.waiting?.userId || ''), repeatFreq: t.repeat?.freq || '',
+  coachTest: t.coachTest?.scenarioKey ? JSON.stringify(t.coachTest) : '',
 })
+
+// ─── English tests ───
+
+const canSetTests = (req) => req.userPermissions.has('coach.review') || req.userPermissions.has('coach.manage')
+
+/**
+ * `body.coachTest` → the task's test: null/false takes it off, an object sets
+ * it. Returns an error message, or null. Leaves the task alone when the body
+ * says nothing about it.
+ */
+async function applyCoachTest(task, body, req) {
+  if (body.coachTest === undefined) return null
+  if (!canSetTests(req)) return 'Only English Coach reviewers can put an English test on a task.'
+  if (!body.coachTest) { task.coachTest = undefined; return null }
+  const settings = await CoachSettings.getSettings()
+  const { spec, error } = cleanTestSpec(body.coachTest, await allScenarios(settings.scriptMode))
+  if (error) return error
+  task.coachTest = spec
+  return null
+}
+
+/** Everyone on a task with a test must be able to take it. */
+async function checkTestTakers(task) {
+  if (!task.coachTest?.scenarioKey) return null
+  if (!task.assignees?.length) return 'Assign the task to the people who should take the English test.'
+  const blocked = await cannotPractise(task.assignees)
+  return blocked.length ? cannotPractiseMessage(blocked) : null
+}
+
+/** Each assignee's progress on the task's test, for the task's own page. */
+async function testProgress(task) {
+  if (!task?.coachTest?.scenarioKey) return undefined
+  const list = await CoachAssignment.find({ taskId: task._id }).select('userId status score bestScore attempts completedAt sessionId lastSessionId').lean()
+  return list.map(a => ({
+    userId: a.userId, status: a.status, score: a.score ?? null, bestScore: a.bestScore ?? null,
+    attempts: a.attempts || 0, completedAt: a.completedAt || null, sessionId: a.sessionId || a.lastSessionId || null,
+  }))
+}
+
+/**
+ * An assignee passed the task's English test (services/coachProgress.js). The
+ * last one to pass moves the task to Done; earlier ones are noted in its history.
+ */
+export async function completeTaskFromTest(taskId, { userId, name, score, last }) {
+  const task = await Task.findById(taskId)
+  if (!task) return
+  const who = { _id: userId, displayName: name }
+  addActivity(task, who, `passed the English test (${score}/100)`)
+  const finished = last && task.status !== 'done'
+  if (finished) {
+    setStatus(task, 'done', userId)
+    addActivity(task, who, 'finished it by passing the English test')
+  }
+  await task.save()
+  if (finished) await spawnNextIfRepeating(task, who)
+  pushLive(involved(task), 'task_changed', { taskId: String(task._id) })
+}
 
 // ─── Repeats ───
 
@@ -156,6 +225,7 @@ async function spawnNextIfRepeating(task, actor) {
   await next.save()
   await Task.updateOne({ _id: task._id }, { repeatedInto: next._id })
   task.repeatedInto = next._id
+  if (next.coachTest?.scenarioKey) await syncTaskTests(next)
   return next
 }
 
@@ -167,7 +237,10 @@ async function retractNextIfUntouched(task) {
   const untouched = next && next.status === 'todo' && !next.comments?.length
     && (next.activity?.length || 0) <= 1 && !(next.checklist || []).some(i => i.done)
   if (next && !untouched) return
-  if (next) await Task.deleteOne({ _id: next._id })
+  if (next) {
+    await Task.deleteOne({ _id: next._id })
+    await dropTaskTests([next._id])
+  }
   await Task.updateOne({ _id: task._id }, { $unset: { repeatedInto: 1 } })
   task.repeatedInto = undefined
 }
@@ -293,7 +366,7 @@ export async function getTask(req, res) {
     if (!isValidObjectId(req.params.id)) return res.status(404).json({ error: 'Task not found' })
     const task = await Task.findById(req.params.id).populate(POPULATE).populate('repeatOf', 'title dueDate').lean()
     if (!task || !relation(req, task).visible) return res.status(404).json({ error: 'Task not found' })
-    res.json(withToday(task))
+    res.json(withToday({ ...task, coachTestProgress: await testProgress(task) }))
   } catch (err) {
     console.error('Get task error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -385,6 +458,8 @@ export async function createTask(req, res) {
     }
     const task = new Task({ createdBy: req.userId, createdByName: req.user.displayName || '', assignees })
     applyFields(task, body, { creating: true, canLeads: canLinkLeads(req) })
+    const testError = (await applyCoachTest(task, body, req)) || (await checkTestTakers(task))
+    if (testError) return res.status(400).json({ error: testError })
     applyWaiting(task, body.waiting)
     setStatus(task, body.status || 'todo', req.userId)
     addActivity(task, req.user, 'created it')
@@ -392,6 +467,7 @@ export async function createTask(req, res) {
     const top = await Task.findOne({ status: task.status }).sort({ order: 1 }).select('order').lean()
     task.order = (top?.order ?? 0) - 1
     await task.save()
+    if (task.coachTest?.scenarioKey) await syncTaskTests(task)
 
     await notifyAssigned(task, assignees, req.user)
     await notifyWaiting(task, req.user)
@@ -428,12 +504,18 @@ export async function updateTask(req, res) {
         }
         task.assignees = next
       }
+      const testError = (await applyCoachTest(task, body, req)) || (await checkTestTakers(task))
+      if (testError) return res.status(400).json({ error: testError })
     } else if (body.checklist !== undefined) {
       // Assignee: may only tick existing items, not rewrite the list.
       const done = new Map((Array.isArray(body.checklist) ? body.checklist : []).map(i => [String(i._id), !!i.done]))
       for (const item of task.checklist) if (done.has(String(item._id))) item.done = done.get(String(item._id))
     }
     applyWaiting(task, body.waiting)
+    // An assignee finishes a task with an English test by passing the test
+    if (body.status === 'done' && before.status !== 'done' && !rel.full && task.coachTest?.scenarioKey && await taskTestPending(task._id)) {
+      return res.status(409).json({ code: 'test_pending', error: 'This task finishes itself when the English test is passed. Open the test from the task.' })
+    }
     if (body.status !== undefined) setStatus(task, body.status, req.userId)
     // Recurring column: "Checked today" (stops today's reminder).
     if (body.checkedToday !== undefined && task.status === 'recurring') {
@@ -448,6 +530,7 @@ export async function updateTask(req, res) {
     if (body.order !== undefined && Number.isFinite(Number(body.order))) task.order = Number(body.order)
     for (const line of await describeChanges(before, task)) addActivity(task, req.user, line)
     await task.save()
+    if (before.coachTest || task.coachTest?.scenarioKey) await syncTaskTests(task)
 
     const added = task.assignees.map(String).filter(id => !before.assignees.includes(id))
     if (added.length) await notifyAssigned(task, added, req.user)
@@ -483,6 +566,7 @@ export async function reorderTasks(req, res) {
       const rel = relation(req, t)
       if (!rel.full && !rel.assignee) continue
       const wasDone = t.status === 'done'
+      if (status === 'done' && !wasDone && !rel.full && t.coachTest?.scenarioKey && await taskTestPending(t._id)) continue
       const moved = setStatus(t, status, req.userId)
       if (moved) addActivity(t, req.user, `moved it to ${STATUS_WORDS[status]}`)
       t.order = i
@@ -555,6 +639,7 @@ export async function deleteTask(req, res) {
     if (!task || !relation(req, task).visible) return res.status(404).json({ error: 'Task not found' })
     if (!relation(req, task).full) return res.status(403).json({ error: 'Only the person who created it or a manager can delete it' })
     await Task.deleteOne({ _id: task._id })
+    await dropTaskTests([task._id])
     await logActivity({ level: 'warning', category: 'portal', action: 'task_deleted', message: `Task deleted: ${task.title}`, req, meta: { taskId: task._id } })
     pushLive(involved(task), 'task_changed', { taskId: String(task._id) })
     // The whole task comes back, so the page can offer Undo (POST /restore).
@@ -612,6 +697,7 @@ export async function bulkUpdateTasks(req, res) {
       for (const line of await describeChanges(before, t)) addActivity(t, req.user, line)
       if (!t.isModified()) { undo.pop(); continue }
       await t.save()
+      if (t.coachTest?.scenarioKey) await syncTaskTests(t)
       updated++
       const added = t.assignees.map(String).filter(id => !before.assignees.includes(id))
       if (added.length) await notifyAssigned(t, added, req.user)
@@ -643,6 +729,7 @@ export async function undoBulkUpdate(req, res) {
       }
       addActivity(t, req.user, 'undid a change made to several tasks')
       await t.save()
+      if (t.coachTest?.scenarioKey) await syncTaskTests(t)
       await retractNextIfUntouched(t)
       restored++
     }
@@ -660,6 +747,7 @@ export async function bulkDeleteTasks(req, res) {
     const ids = cleanIds(req.body?.ids).slice(0, 300)
     const tasks = await Task.find({ _id: { $in: ids } }).lean()
     await Task.deleteMany({ _id: { $in: tasks.map(t => t._id) } })
+    await dropTaskTests(tasks.map(t => t._id))
     await logActivity({ level: 'warning', category: 'portal', action: 'tasks_deleted', message: `${tasks.length} tasks deleted`, req, meta: { ids } })
     pushLive(tasks.flatMap(involved), 'task_changed', {})
     res.json({ ok: true, deleted: tasks })
@@ -683,6 +771,7 @@ export async function restoreTasks(req, res) {
       const t = new Task(doc)
       addActivity(t, req.user, 'brought it back after it was deleted')
       await t.save()
+      if (t.coachTest?.scenarioKey) await syncTaskTests(t)
       restored++
       pushLive(involved(t), 'task_changed', { taskId: String(t._id) })
     }

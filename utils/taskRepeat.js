@@ -63,6 +63,7 @@ export function nextTaskFields(task, nextDue) {
     studentId: task.studentId,
     goalId: task.goalId,
     tags: task.tags,
+    coachTest: task.coachTest?.scenarioKey ? task.coachTest : undefined,
     checklist: (task.checklist || []).map(i => ({ text: i.text, done: false })),
     repeat: task.repeat,
     repeatOf: task._id,

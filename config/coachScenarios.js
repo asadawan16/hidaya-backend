@@ -54,6 +54,10 @@ export const DIFFICULTIES = {
   },
 }
 
+// Call lengths (minutes) an admin may offer in Settings, or fix for a level
+// test or an assigned test
+export const ALLOWED_DURATIONS = [3, 5, 10, 15]
+
 // How the character talks at Very easy, for every conversation scenario
 // (a scenario's own `difficulty.very_easy` replaces it)
 export const VERY_EASY_PLAY = 'The other person is a beginner in English. Speak very slowly and simply: one short sentence per reply, no more than 12 words, using only common everyday words and no idioms. Be patient and kind and accept simple answers straight away. If they struggle, ask a simple yes-or-no question. Bring up at most two of your points in the whole call.'
