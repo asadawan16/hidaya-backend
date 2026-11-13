@@ -168,9 +168,10 @@ export const PERMISSIONS = {
   // Tasks board (Kanban / list / calendar / timeline) + weekly/monthly goals.
   // Everyone sees and works the tasks assigned to them or created by them, and
   // staff can add their own to-dos, without any of these.
-  // task.read — see every task (the whole board), not just their own.
+  // task.read — see every task (the whole board), not just their own. The ONLY
+  // way to see other people's tasks — admin by default.
   // task.manage — create/assign tasks for anyone (staff or students), edit and
-  // delete any task, and manage goals.
+  // delete any task, and manage goals. Doesn't show others' tasks by itself.
   // task.leads — link tasks to leads (from a task, or from the Leads page).
   task: ['task.read', 'task.manage', 'task.leads'],
 }
@@ -227,7 +228,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read',
     'demo.read', 'demo.manage',
     'coach.practice', 'coach.review', 'coach.manager',
-    'task.read', 'task.manage',
+    'task.manage', // not task.read: they see only their own tasks (client, Nov 2026)
   ],
 
   coordinator: [
@@ -255,7 +256,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read',
     'demo.read', 'demo.manage',
     'coach.practice', 'coach.manager',
-    'task.read', 'task.manage',
+    'task.manage', // not task.read: they see only their own tasks (client, Nov 2026)
   ],
 
   qci: [
@@ -277,7 +278,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
     'coach.practice', 'coach.review', 'coach.manager',
-    'task.read', 'task.manage',
+    'task.manage', // not task.read: they see only their own tasks (client, Nov 2026)
   ],
 
   qcm: [

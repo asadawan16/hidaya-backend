@@ -1,5 +1,6 @@
 // Migration: grant the Tasks permissions to existing roles.
-//   task.read + task.manage → admin, principal, coordinator, qci
+//   task.read               → admin (see every task)
+//   task.manage             → admin, principal, coordinator, qci
 //   task.leads              → admin (link tasks to leads)
 // super_admin gains them on its own at server start (index.js sync). Uses
 // $addToSet, so nothing else is touched. Idempotent. Dry-run by default.
@@ -13,9 +14,11 @@ import Role from '../models/Role.js'
 
 const GRANTS = {
   admin: ['task.read', 'task.manage', 'task.leads'],
-  principal: ['task.read', 'task.manage'],
-  coordinator: ['task.read', 'task.manage'],
-  qci: ['task.read', 'task.manage'],
+  // Not task.read: the client wants these to see only their own tasks
+  // (13 Nov 2026) — see migrate-task-read-admin-only.mjs.
+  principal: ['task.manage'],
+  coordinator: ['task.manage'],
+  qci: ['task.manage'],
 }
 const APPLY = process.argv.includes('--apply')
 

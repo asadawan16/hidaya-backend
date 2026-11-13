@@ -3,9 +3,11 @@
 // Who sees what:
 //   - everyone: tasks assigned to them, created by them, or that they watch
 //     (an @mention makes you a watcher)
-//   - task.read: every task
+//   - task.read: every task (the only way to see other people's tasks)
 //   - task.manage: create/assign for anyone (staff, tutors, students), edit or
-//     delete any task, change many at once, manage goals
+//     delete any task, change many at once, manage goals. It does NOT show
+//     other people's tasks: a manager sees the ones they created, are on or
+//     watch (client, 13 Nov 2026: "everyone sees every task").
 // Staff without task.manage can still add their own to-dos (assigned to
 // themselves). Students only see and work the tasks assigned to them.
 //
@@ -22,6 +24,7 @@ import TaskView from '../models/TaskView.js'
 import User from '../models/User.js'
 import Role from '../models/Role.js'
 import Enrollment from '../models/Enrollment.js'
+import Notification from '../models/Notification.js'
 import '../models/Student.js'
 import { createNotification } from './portalNotificationController.js'
 import { emitToUser } from '../config/socket.js'
@@ -36,7 +39,7 @@ import { cleanTestSpec, syncTaskTests, dropTaskTests, taskTestPending, cannotPra
 const { isValidObjectId } = mongoose
 const escapeRx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-const canSeeAll = (req) => req.userPermissions.has('task.read') || req.userPermissions.has('task.manage')
+const canSeeAll = (req) => req.userPermissions.has('task.read')
 const canManage = (req) => req.userPermissions.has('task.manage')
 // Linking a task to a lead is its own permission (admins by default).
 const canLinkLeads = (req) => req.userPermissions.has('task.leads')
@@ -346,18 +349,41 @@ export async function myTaskSummary(req, res) {
       Task.countDocuments({ assignees: req.userId, status: 'done', completedAt: { $gte: new Date(Date.now() - 7 * 86400000) } }),
       Task.countDocuments(base),
       Task.find({ ...open, 'waiting.on': true, 'waiting.userId': req.userId }).select(LIST_SELECT).populate(POPULATE).sort({ 'waiting.since': 1 }).limit(20).lean(),
-      canManage(req) ? Task.find({ ...open, assignees: { $size: 0 } }).select(LIST_SELECT).populate(POPULATE).sort({ dueDate: 1, createdAt: -1 }).limit(8).lean() : [],
-      canManage(req) ? Task.countDocuments({ ...open, assignees: { $size: 0 } }) : 0,
+      canSeeAll(req) ? Task.find({ ...open, assignees: { $size: 0 } }).select(LIST_SELECT).populate(POPULATE).sort({ dueDate: 1, createdAt: -1 }).limit(8).lean() : [],
+      canSeeAll(req) ? Task.countDocuments({ ...open, assignees: { $size: 0 } }) : 0,
       Task.find({ assignees: req.userId, status: 'recurring' }).select(LIST_SELECT).populate(POPULATE).sort({ order: 1 }).limit(30).lean(),
     ])
     res.json({
       tasks: dated, undated, undatedCount, openCount, doneThisWeek, waitingOnMe, unowned, unownedCount,
       daily: daily.map(t => withToday(t)),
+      fresh: await freshlyAssigned(req.userId),
     })
   } catch (err) {
     console.error('My task summary error:', err)
     res.status(500).json({ error: 'Server error' })
   }
+}
+
+// Tasks given to this person that they haven't acknowledged yet: an unread
+// "New task" notification on a task still open and still theirs. The pop-up
+// shows these whatever their due date, and closing it marks the
+// notifications read (POST /portal/notifications/read with notificationIds).
+async function freshlyAssigned(userId) {
+  const notes = await Notification.find({ userId, type: 'task_assigned', readAt: null })
+    .sort({ createdAt: -1 }).limit(50).select('payload body createdAt').lean()
+  const byTask = new Map()
+  for (const n of notes) {
+    const id = String(n.payload?.taskId || '')
+    if (!isValidObjectId(id)) continue
+    if (!byTask.has(id)) byTask.set(id, { note: n.body || '', assignedAt: n.createdAt, notificationIds: [] })
+    byTask.get(id).notificationIds.push(String(n._id))
+  }
+  if (!byTask.size) return []
+  const tasks = await Task.find({ _id: { $in: [...byTask.keys()] }, assignees: userId, status: { $ne: 'done' } })
+    .select(LIST_SELECT).populate(POPULATE).lean()
+  return tasks
+    .map(t => ({ ...withToday(t), ...byTask.get(String(t._id)) }))
+    .sort((a, b) => new Date(b.assignedAt) - new Date(a.assignedAt))
 }
 
 // GET /portal/tasks/:id

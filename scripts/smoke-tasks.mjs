@@ -178,6 +178,40 @@ try {
   res = await call(tasks.myTaskSummary, reqAs(admin, MANAGE, {}))
   ok(res._json.unowned.some(t => String(t._id) === String(unowned._id)) && res._json.unownedCount >= 1, 'managers see tasks nobody owns')
 
+  // task.manage alone doesn't show other people's tasks; only task.read does.
+  const coord = await mk('c@x.test', 'Coordinator One', rTutor)
+  const notMine = await Task.create({ title: 'Between admin and tutor', createdBy: admin._id, assignees: [tutor._id] })
+  const coordOwn = await Task.create({ title: 'Coordinator made this', createdBy: coord._id, assignees: [tutor2._id] })
+  res = await call(tasks.listTasks, reqAs(coord, ['task.manage'], {}))
+  const coordSees = res._json.records.map(t => String(t._id))
+  ok(!res._json.canSeeAll && coordSees.includes(String(coordOwn._id)) && !coordSees.includes(String(notMine._id)), 'a manager without task.read sees only their own tasks')
+  res = await call(tasks.listTasks, reqAs(coord, ['task.manage'], { query: { scope: 'all' } }))
+  ok(!res._json.records.some(t => String(t._id) === String(notMine._id)), 'and asking for scope=all does not widen it')
+  res = await call(tasks.getTask, reqAs(coord, ['task.manage'], { params: { id: String(notMine._id) } }))
+  ok(res._status === 404, "nor can they open someone else's task")
+  res = await call(tasks.myTaskSummary, reqAs(coord, ['task.manage'], {}))
+  ok(res._json.unowned.length === 0, 'nor see unassigned tasks they did not create')
+  res = await call(tasks.listTasks, reqAs(admin, ['task.read'], {}))
+  ok(res._json.canSeeAll && res._json.records.some(t => String(t._id) === String(notMine._id)), 'task.read sees every task')
+
+  // A newly assigned task pops up for the assignee until they acknowledge it.
+  await Notification.deleteMany({ userId: tutor2._id, type: 'task_assigned' })
+  res = await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Pop me up', assignees: [String(tutor2._id)] } }))
+  const popTask = res._json
+  res = await call(tasks.myTaskSummary, reqAs(tutor2, [], {}))
+  const fresh = res._json.fresh || []
+  ok(fresh.length === 1 && String(fresh[0]._id) === String(popTask._id) && fresh[0].notificationIds.length === 1 && /Admin One/.test(fresh[0].note), 'a new undated task shows as fresh for its assignee')
+  res = await call(tasks.myTaskSummary, reqAs(admin, MANAGE, {}))
+  ok(!(res._json.fresh || []).some(t => String(t._id) === String(popTask._id)), 'but not for whoever assigned it')
+  await Notification.updateMany({ _id: { $in: fresh[0].notificationIds } }, { readAt: new Date() })
+  res = await call(tasks.myTaskSummary, reqAs(tutor2, [], {}))
+  ok(res._json.fresh.length === 0, 'and stops once its notification is read')
+  await Notification.updateMany({ _id: { $in: fresh[0].notificationIds } }, { readAt: null })
+  await Task.updateOne({ _id: popTask._id }, { status: 'done' })
+  res = await call(tasks.myTaskSummary, reqAs(tutor2, [], {}))
+  ok(res._json.fresh.length === 0, 'a task already done does not pop up')
+  await Task.deleteMany({ _id: { $in: [notMine._id, coordOwn._id, popTask._id] } })
+
   res = await call(tasks.bulkUpdateTasks, reqAs(admin, MANAGE, { body: { ids: [String(unowned._id), String(nextRep._id)], set: { priority: 'urgent', addAssignees: [String(tutor2._id)], shiftDays: 2 } } }))
   ok(res._json.updated === 2 && res._json.undo.length === 2, 'bulk change two tasks')
   const shifted = await Task.findById(nextRep._id).lean()
