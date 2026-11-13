@@ -1,7 +1,7 @@
 // Migration: grant the Tasks permissions to existing roles.
-//   task.read               → admin (see every task)
-//   task.manage             → admin, principal, coordinator, qci
-//   task.leads              → admin (link tasks to leads)
+//   task.manage (see + manage every task) + task.leads → admin
+//   task.create (create and assign tasks)               → admin, principal, coordinator, qci
+// (task.read is retired — see migrate-retire-task-read.mjs)
 // super_admin gains them on its own at server start (index.js sync). Uses
 // $addToSet, so nothing else is touched. Idempotent. Dry-run by default.
 // Everyone can already work their own tasks without any of these.
@@ -13,12 +13,10 @@ import mongoose from 'mongoose'
 import Role from '../models/Role.js'
 
 const GRANTS = {
-  admin: ['task.read', 'task.manage', 'task.leads'],
-  // Not task.read: the client wants these to see only their own tasks
-  // (13 Nov 2026) — see migrate-task-read-admin-only.mjs.
-  principal: ['task.manage'],
-  coordinator: ['task.manage'],
-  qci: ['task.manage'],
+  admin: ['task.create', 'task.manage', 'task.leads'],
+  principal: ['task.create'],
+  coordinator: ['task.create'],
+  qci: ['task.create'],
 }
 const APPLY = process.argv.includes('--apply')
 

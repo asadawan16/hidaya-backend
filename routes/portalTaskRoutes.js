@@ -11,11 +11,13 @@ const router = Router()
 router.use(portalAuth)
 
 // Every signed-in user works their own tasks; what else they see is decided
-// in the controller (task.read / task.manage). Fixed paths before /:id.
+// in the controller (task.create / task.manage). Fixed paths before /:id.
 router.get('/', listTasks)
 router.get('/my/summary', myTaskSummary)
 router.get('/assignees', pickAssignees)
-router.get('/assignees/everyone', requirePermission('task.manage'), pickAssigneeGroup)
+// Anyone who may create tasks (task.create, or task.manage which includes it)
+const creators = (req, res, next) => (['task.create', 'task.manage'].some(p => req.userPermissions.has(p)) ? next() : res.status(403).json({ error: 'Insufficient permissions' }))
+router.get('/assignees/everyone', creators, pickAssigneeGroup)
 router.get('/leads', requirePermission('task.leads'), pickLeads)
 router.post('/reorder', reorderTasks)
 router.post('/bulk', bulkUpdateTasks)

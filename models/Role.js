@@ -1,5 +1,5 @@
 import mongoose from 'mongoose'
-import { ALL_PERMISSIONS } from '../config/permissions.js'
+import { ALL_PERMISSIONS, RETIRED_PERMISSIONS } from '../config/permissions.js'
 
 const roleSchema = new mongoose.Schema({
   key: {
@@ -29,5 +29,14 @@ const roleSchema = new mongoose.Schema({
     default: false,
   },
 }, { timestamps: true })
+
+// A permission taken out of the catalog disappears from a role the next time
+// it is saved, instead of making the save fail as "invalid".
+roleSchema.pre('validate', function dropRetired(next) {
+  if (this.permissions?.some(p => RETIRED_PERMISSIONS.includes(p))) {
+    this.permissions = this.permissions.filter(p => !RETIRED_PERMISSIONS.includes(p))
+  }
+  next()
+})
 
 export default mongoose.model('Role', roleSchema)

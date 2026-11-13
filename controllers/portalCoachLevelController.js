@@ -274,7 +274,7 @@ export async function createAssignments(req, res) {
     const b = req.body || {}
     const userIds = [...new Set((Array.isArray(b.userIds) ? b.userIds : []).map(String))].filter(isValidObjectId).slice(0, 200)
     if (!userIds.length) return res.status(400).json({ error: 'Choose who should take the test.' })
-    if (b.addTask && !req.userPermissions.has('task.manage')) return res.status(403).json({ error: 'Only task managers can add tests to the Tasks board.' })
+    if (b.addTask && !['task.create', 'task.manage'].some(p => req.userPermissions.has(p))) return res.status(403).json({ error: 'Only people who can create tasks can add tests to the Tasks board.' })
     const settings = await CoachSettings.getSettings()
     const { spec, error } = cleanTestSpec(b, await allScenarios(settings.scriptMode))
     if (error) return res.status(400).json({ error })

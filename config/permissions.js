@@ -166,17 +166,26 @@ export const PERMISSIONS = {
   coach: ['coach.practice', 'coach.review', 'coach.manage', 'coach.manager'],
 
   // Tasks board (Kanban / list / calendar / timeline) + weekly/monthly goals.
-  // Everyone sees and works the tasks assigned to them or created by them, and
-  // staff can add their own to-dos, without any of these.
-  // task.read — see every task (the whole board), not just their own. The ONLY
-  // way to see other people's tasks — admin by default.
-  // task.manage — create/assign tasks for anyone (staff or students), edit and
-  // delete any task, and manage goals. Doesn't show others' tasks by itself.
+  // With none of these, a person sees only the tasks assigned to them, created
+  // by them, or that they were @mentioned in — and works the ones assigned to
+  // them (status, checklist ticks, waiting, comments). They can't create tasks.
+  // task.create — create tasks and assign them to anyone (staff, tutors,
+  // students); edit and delete the tasks they created. Only the creator (or a
+  // task.manage holder) edits a task — its assignees move it along and comment.
+  // task.manage — see EVERY task, and edit, reassign or delete any of them;
+  // change many at once, goals, shared saved views. Includes task.create.
   // task.leads — link tasks to leads (from a task, or from the Leads page).
-  task: ['task.read', 'task.manage', 'task.leads'],
+  // (task.read, "see every task", was retired on 13 Nov 2026: it had been
+  // ticked on tutor and student roles as if it meant "can use tasks".)
+  task: ['task.create', 'task.manage', 'task.leads'],
 }
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS).flat()
+
+// Keys taken out of the catalog. A role still holding one is accepted, and the
+// key is dropped the next time the role is saved (models/Role.js); nothing in
+// the code reads them any more.
+export const RETIRED_PERMISSIONS = ['task.read']
 
 // "Restriction" permissions invert the usual grant model: their PRESENCE removes
 // access rather than granting it (e.g. lesson.log_only hides the lessons list).
@@ -228,7 +237,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read',
     'demo.read', 'demo.manage',
     'coach.practice', 'coach.review', 'coach.manager',
-    'task.manage', // not task.read: they see only their own tasks (client, Nov 2026)
+    'task.create', // creates and assigns tasks; task.manage (see and edit every task) is admin's
   ],
 
   coordinator: [
@@ -256,7 +265,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read',
     'demo.read', 'demo.manage',
     'coach.practice', 'coach.manager',
-    'task.manage', // not task.read: they see only their own tasks (client, Nov 2026)
+    'task.create', // creates and assigns tasks; task.manage (see and edit every task) is admin's
   ],
 
   qci: [
@@ -278,7 +287,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     'student_progress.read', 'fee.read', 'fee.manage',
     'student.feedback_quality',
     'coach.practice', 'coach.review', 'coach.manager',
-    'task.manage', // not task.read: they see only their own tasks (client, Nov 2026)
+    'task.create', // creates and assigns tasks; task.manage (see and edit every task) is admin's
   ],
 
   qcm: [

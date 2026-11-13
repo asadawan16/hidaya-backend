@@ -1,15 +1,16 @@
 // Tasks board + goals (client's request, 2026-11-07; his branch only).
 //
-// Who sees what:
-//   - everyone: tasks assigned to them, created by them, or that they watch
-//     (an @mention makes you a watcher)
-//   - task.read: every task (the only way to see other people's tasks)
-//   - task.manage: create/assign for anyone (staff, tutors, students), edit or
-//     delete any task, change many at once, manage goals. It does NOT show
-//     other people's tasks: a manager sees the ones they created, are on or
-//     watch (client, 13 Nov 2026: "everyone sees every task").
-// Staff without task.manage can still add their own to-dos (assigned to
-// themselves). Students only see and work the tasks assigned to them.
+// Who sees and does what (config/permissions.js):
+//   - everyone: sees the tasks assigned to them, created by them, or that they
+//     watch (an @mention makes you a watcher). Assignees move a task along
+//     (status, order, checklist ticks, waiting, "checked today") and comment;
+//     watchers comment. Nobody without a permission can create a task.
+//   - task.create: create tasks and assign them to anyone; the creator alone
+//     edits, reassigns or deletes the task (plus task.manage holders).
+//   - task.manage: sees EVERY task and edits / reassigns / deletes any of
+//     them; changes many at once, goals, shared views.
+// Student accounts never hold task.create / task.manage in effect: they only
+// see and work the tasks assigned to them.
 //
 // English tests: a task may carry an English Coach test (`coachTest`, set by
 // people with coach.review or coach.manage). Each assignee then gets the test
@@ -39,11 +40,13 @@ import { cleanTestSpec, syncTaskTests, dropTaskTests, taskTestPending, cannotPra
 const { isValidObjectId } = mongoose
 const escapeRx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-const canSeeAll = (req) => req.userPermissions.has('task.read')
-const canManage = (req) => req.userPermissions.has('task.manage')
+const isStudentOnly = (req) => (req.user.roles || []).length > 0 && req.user.roles.every(r => r.key === 'student')
+const canManage = (req) => req.userPermissions.has('task.manage') && !isStudentOnly(req)
+// task.manage is the one permission that shows other people's tasks
+const canSeeAll = canManage
+const canCreate = (req) => (req.userPermissions.has('task.create') || req.userPermissions.has('task.manage')) && !isStudentOnly(req)
 // Linking a task to a lead is its own permission (admins by default).
 const canLinkLeads = (req) => req.userPermissions.has('task.leads')
-const isStudentOnly = (req) => (req.user.roles || []).length > 0 && req.user.roles.every(r => r.key === 'student')
 const sameId = (a, b) => String(a?._id || a) === String(b?._id || b)
 
 const POPULATE = [
@@ -324,7 +327,7 @@ export async function listTasks(req, res) {
       Task.find(filter).select(LIST_SELECT).populate(POPULATE).sort({ order: 1, dueDate: 1, createdAt: -1 }).skip(skip).limit(limit).lean(),
       Task.countDocuments(filter),
     ])
-    res.json({ records: records.map(t => withToday(t)), total, skip, limit, canManage: canManage(req), canSeeAll: canSeeAll(req) })
+    res.json({ records: records.map(t => withToday(t)), total, skip, limit, canManage: canManage(req), canSeeAll: canSeeAll(req), canCreate: canCreate(req) })
   } catch (err) {
     console.error('List tasks error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -475,13 +478,10 @@ async function notifyDone(task, req) {
 export async function createTask(req, res) {
   try {
     if (isStudentOnly(req)) return res.status(403).json({ error: 'Students cannot create tasks' })
+    if (!canCreate(req)) return res.status(403).json({ error: "You don't have permission to create tasks" })
     const body = req.body || {}
     if (!String(body.title || '').trim()) return res.status(400).json({ error: 'A title is required' })
-    let assignees = cleanIds(body.assignees)
-    if (!canManage(req)) {
-      if (assignees.some(id => !sameId(id, req.userId))) return res.status(403).json({ error: 'You can only add tasks for yourself' })
-      assignees = [String(req.userId)]
-    }
+    const assignees = cleanIds(body.assignees)
     const task = new Task({ createdBy: req.userId, createdByName: req.user.displayName || '', assignees })
     applyFields(task, body, { creating: true, canLeads: canLinkLeads(req) })
     const testError = (await applyCoachTest(task, body, req)) || (await checkTestTakers(task))
@@ -525,8 +525,8 @@ export async function updateTask(req, res) {
       applyFields(task, body, { creating: false, canLeads: canLinkLeads(req) })
       if (body.assignees !== undefined) {
         const next = cleanIds(body.assignees)
-        if (!rel.manager && next.some(id => !sameId(id, req.userId))) {
-          return res.status(403).json({ error: 'Only managers can assign tasks to other people' })
+        if (!canCreate(req) && next.some(id => !sameId(id, req.userId))) {
+          return res.status(403).json({ error: "You don't have permission to assign tasks to other people" })
         }
         task.assignees = next
       }
@@ -791,8 +791,8 @@ export async function restoreTasks(req, res) {
     let restored = 0
     for (const doc of list) {
       if (!isValidObjectId(doc?._id)) continue
-      // Non-managers: only their own tasks, still assigned only to themselves.
-      if (!canManage(req) && (!sameId(doc.createdBy, req.userId) || (doc.assignees || []).some(a => !sameId(a, req.userId)))) continue
+      // Without task.manage: only tasks they created (and without task.create, only ones still just theirs)
+      if (!canManage(req) && (!sameId(doc.createdBy, req.userId) || (!canCreate(req) && (doc.assignees || []).some(a => !sameId(a, req.userId))))) continue
       if (await Task.exists({ _id: doc._id })) continue
       const t = new Task(doc)
       addActivity(t, req.user, 'brought it back after it was deleted')
@@ -862,18 +862,18 @@ const kindOf = (u) => {
 }
 
 // GET /portal/tasks/assignees?q=&ids=&kind=staff|tutor|student — anyone a task
-// can be assigned to. Without task.manage it only ever returns yourself.
+// can be assigned to. Without task.create it only ever returns yourself.
 export async function pickAssignees(req, res) {
   try {
     const { q, ids, kind } = req.query
     const filter = { status: 'active' }
-    if (!canManage(req)) filter._id = req.userId
+    if (!canCreate(req)) filter._id = req.userId
     else if (ids) filter._id = { $in: cleanIds(String(ids).split(',')).slice(0, 50) }
     if (q && !ids) {
       const rx = new RegExp(escapeRx(q), 'i')
       filter.$or = [{ displayName: rx }, { email: rx }]
     }
-    if (kind && !ids && canManage(req)) {
+    if (kind && !ids && canCreate(req)) {
       const studentRole = await Role.findOne({ key: 'student' }).select('_id').lean()
       const tutorRole = await Role.findOne({ key: 'tutor' }).select('_id').lean()
       if (kind === 'student' && studentRole) filter.roles = studentRole._id
