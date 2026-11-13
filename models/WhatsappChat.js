@@ -16,6 +16,12 @@ const whatsappChatSchema = new mongoose.Schema({
   waId: { type: String, required: true, unique: true },
   // WhatsApp profile name from the newest inbound message that carried one
   contactName: { type: String, default: '' },
+  // The name the number is saved under in the academy's contact book
+  // (models/WhatsappContact.js — typed in the portal, synced from the office
+  // phone, or from an uploaded contacts file) and where it came from:
+  // 'portal' | 'phone' | 'import'. Copied here so the list can show and search it.
+  savedName: { type: String, default: '' },
+  nameSource: { type: String, default: '' },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', default: null, index: true },
 
   lastMessage: { type: mongoose.Schema.Types.ObjectId, ref: 'WhatsappMessage', default: null },

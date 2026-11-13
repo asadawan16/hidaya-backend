@@ -115,6 +115,31 @@ export function requestAppSync(phoneNumberId, token, syncType) {
   })
 }
 
+/*
+ * The Meta app's own webhook subscription — which fields Meta sends to our
+ * callback URL. Asked with the app's token (app id|secret). Setting it makes
+ * Meta call the callback's GET handshake with `verifyToken` straight away.
+ */
+const appToken = () => {
+  const secret = process.env.WHATSAPP_APP_SECRET
+  if (!secret) throw new GraphError('WHATSAPP_APP_SECRET is not set on the server')
+  return `${META_APP_ID}|${secret}`
+}
+
+export async function getAppSubscription(object = 'whatsapp_business_account') {
+  const data = await graph(`${META_APP_ID}/subscriptions`, { token: appToken() })
+  const sub = (data?.data || []).find(s => s.object === object)
+  if (!sub) return null
+  return { callbackUrl: sub.callback_url || '', active: sub.active !== false, fields: (sub.fields || []).map(f => f.name) }
+}
+
+export function setAppSubscription({ callbackUrl, verifyToken, fields, object = 'whatsapp_business_account' }) {
+  return graph(`${META_APP_ID}/subscriptions`, {
+    method: 'POST', token: appToken(),
+    query: { object, callback_url: callbackUrl, verify_token: verifyToken, fields: fields.join(','), include_values: 'true' },
+  })
+}
+
 // ── Messaging + templates ───────────────────────────────────────────────────
 // Returns Meta's wamid; statuses for it arrive later on the webhook.
 export async function sendMessage(phoneNumberId, token, payload) {

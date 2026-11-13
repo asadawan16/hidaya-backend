@@ -4,7 +4,8 @@ import WhatsappConnection from '../models/WhatsappConnection.js'
 import Student from '../models/Student.js'
 import ClassReminder from '../models/ClassReminder.js'
 import { emitToRole, emitToUser } from '../config/socket.js'
-import { touchChat, announceChatFor } from '../utils/whatsappChats.js'
+import { touchChat, announceChatFor, announceChat } from '../utils/whatsappChats.js'
+import { recordPhoneContacts, refreshChatNames } from '../utils/whatsappContacts.js'
 
 /*
  * WhatsApp Cloud API webhook — GET /api/whatsapp/webhook (Meta's one-off
@@ -89,6 +90,13 @@ function safeEqual(a, b) {
  *                       app on the office phone (stored as `out`, source 'app')
  *   history             coexistence: the phone's past chats, replayed once after
  *                       onboarding (source 'history', no live socket events)
+ *   smb_app_state_sync  coexistence: the office phone's contacts — the names
+ *                       numbers are saved under (models/WhatsappContact.js).
+ *                       Once after onboarding, then whenever one is added,
+ *                       edited or deleted on the phone.
+ *
+ * Meta only sends the last three when the app's webhook subscribes to those
+ * fields (WhatsApp page → Number & setup checks and turns them on).
  */
 export async function processWebhookPayload(payload) {
   if (payload?.object !== 'whatsapp_business_account') return
@@ -112,6 +120,9 @@ export async function processWebhookPayload(payload) {
         }
       } else if (change.field === 'history') {
         await recordHistory(value.history || [], phoneNumberId)
+      } else if (change.field === 'smb_app_state_sync') {
+        const keys = await recordPhoneContacts(value.state_sync || [])
+        for (const chatId of await refreshChatNames(keys)) announceChat(chatId)
       }
     }
   }

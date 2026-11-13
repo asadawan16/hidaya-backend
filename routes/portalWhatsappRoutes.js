@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
   getConnection, connect, connectManual, resync, disconnect, listMessages, send, getTemplates, addTemplate,
+  getWebhookFields, enableWebhookFields,
 } from '../controllers/portalWhatsappController.js'
 import {
   getReminderSettings, updateReminderSettings, createRecommendedTemplate,
@@ -16,6 +17,8 @@ router.get('/connection', getConnection)
 router.post('/connect', connect)
 router.post('/connect-manual', connectManual)
 router.post('/sync', resync)
+router.get('/webhook-fields', getWebhookFields)
+router.post('/webhook-fields', enableWebhookFields)
 router.delete('/connection', disconnect)
 router.get('/messages', listMessages)
 router.post('/messages', send)

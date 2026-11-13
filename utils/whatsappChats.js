@@ -1,6 +1,7 @@
 import WhatsappChat from '../models/WhatsappChat.js'
 import WhatsappMessage from '../models/WhatsappMessage.js'
 import { getPortalNamespace } from '../config/socket.js'
+import { contactFor, nameOf } from './whatsappContacts.js'
 
 /*
  * Keeps WhatsappChat (the chat list) in step with WhatsappMessage.
@@ -31,12 +32,13 @@ export const visibleSince = (chat) => (chat?.clearedAt ? { timestamp: { $gt: cha
 export async function syncChat(waId, { contactName = '' } = {}) {
   const existing = await WhatsappChat.findOne({ waId }).select('clearedAt archivedAt').lean()
   const since = visibleSince(existing)
-  const [last, lastIn, named, linked, unreadCount] = await Promise.all([
+  const [last, lastIn, named, linked, unreadCount, contact] = await Promise.all([
     WhatsappMessage.findOne({ waId, ...since }).sort({ timestamp: -1, _id: -1 }).select('_id timestamp').lean(),
     WhatsappMessage.findOne({ waId, direction: 'in', ...since }).sort({ timestamp: -1 }).select('timestamp source').lean(),
     contactName ? null : WhatsappMessage.findOne({ waId, direction: 'in', contactName: { $nin: ['', null] } }).sort({ timestamp: -1 }).select('contactName').lean(),
     WhatsappMessage.findOne({ waId, studentId: { $ne: null } }).sort({ timestamp: -1 }).select('studentId').lean(),
     WhatsappMessage.countDocuments({ waId, ...UNREAD, ...since }),
+    contactFor(waId),
   ])
   if (!last) {
     // Removed from the portal and nothing new since: keep the row (it holds the
@@ -64,6 +66,9 @@ export async function syncChat(waId, { contactName = '' } = {}) {
   }
   const name = contactName || named?.contactName
   if (name) set.contactName = name
+  const saved = nameOf(contact)
+  set.savedName = saved.name
+  set.nameSource = saved.source
   if (linked?.studentId) set.studentId = linked.studentId
 
   try {

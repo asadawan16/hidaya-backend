@@ -15,6 +15,9 @@ import {
   GraphError, sendMessage, listTemplates, markMessageRead, uploadMedia, downloadMedia,
 } from '../services/whatsappGraph.js'
 import { plainFailure, plainWhatsappError } from '../utils/whatsappErrors.js'
+import {
+  setCustomName, refreshChatNames, importContacts, contactBookSummary, cleanName, IMPORT_MAX, NAME_MAX,
+} from '../utils/whatsappContacts.js'
 
 /*
  * /api/portal/whatsapp-chats — the team's WhatsApp, as the academy.
@@ -39,6 +42,11 @@ import { plainFailure, plainWhatsappError } from '../utils/whatsappErrors.js'
  *
  * Both are enforced HERE; the page only renders what it is given.
  *
+ * Names: a chat is shown under the name its number is saved under in the
+ * academy's contact book (typed here, synced from the office phone, or from an
+ * uploaded contacts file — utils/whatsappContacts.js), else the student's name,
+ * else the WhatsApp profile name. Only the full view can change them.
+ *
  * Reading is shared: the chat list is a team inbox, so a message one person
  * reads is read for everyone. Staff never mark a fee message read — they
  * can't see it — so it stays unread until someone with the full view opens it.
@@ -61,9 +69,12 @@ function describeStudent(student) {
 
 function describeChat(chat, { full, student, unread }) {
   const contactName = safeName(chat.contactName, full)
+  const savedName = safeName(chat.savedName, full)
   return {
     _id: chat._id,
-    name: student?.name || contactName || (full ? `+${chat.waId}` : 'Unknown contact'),
+    name: savedName || student?.name || contactName || (full ? `+${chat.waId}` : 'Unknown contact'),
+    savedName,
+    nameSource: savedName ? (chat.nameSource || '') : '',
     label: student ? (contactLabelFor(student, chat.waId) || 'Contact') : '',
     contactName,
     student: describeStudent(student),
@@ -157,11 +168,14 @@ export async function listChats(req, res) {
     if (term) {
       const re = new RegExp(escapeRe(term), 'i')
       const students = await Student.find({ $or: [{ name: re }, { rollNo: re }] }).select('_id').limit(300).lean()
-      const or = [{ studentId: { $in: students.map(s => s._id) } }, { contactName: re }]
+      const or = [{ studentId: { $in: students.map(s => s._id) } }]
       // Only the full view may find a chat by its number — for staff, digit
-      // searches would be a way to test what someone's number is
+      // searches would be a way to test what someone's number is (a saved or
+      // profile name can have the number in it too)
       const digits = term.replace(/\D/g, '')
-      if (full && digits.length >= 3) or.push({ waId: new RegExp(digits) })
+      if (full || digits.length < 3) or.push({ contactName: re }, { savedName: re })
+      // A number typed the local way ("0300 123…") still finds the international waId
+      if (full && digits.length >= 3) or.push({ waId: new RegExp(digits.replace(/^0+/, '') || digits) })
       and.push({ $or: or })
     }
 
@@ -592,6 +606,66 @@ export async function removeChat(req, res) {
     res.json({ removed: true })
   } catch (err) {
     console.error('Remove WhatsApp chat error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// ── Contact names (full inbox only — the names are the whole team's) ────────
+
+// PUT /:id/name { name } — save this number under a name ('' goes back to the
+// phone's / file's / profile name)
+export async function renameChat(req, res) {
+  const raw = req.body?.name
+  if (raw != null && typeof raw !== 'string') return res.status(400).json({ error: 'Type a name' })
+  if (String(raw || '').trim().length > NAME_MAX) return res.status(400).json({ error: `Keep the name under ${NAME_MAX} characters` })
+  try {
+    const chat = await loadChat(req, res)
+    if (!chat) return
+    const key = await setCustomName(chat.waId, raw || '', req.userId)
+    if (!key) return res.status(400).json({ error: "This chat's number can't be saved" })
+    await refreshChatNames([key])
+    announceChat(chat._id)
+    const fresh = await WhatsappChat.findById(chat._id).lean()
+    const name = cleanName(raw)
+    await logActivity({
+      level: 'info', category: 'portal', action: 'whatsapp_contact_named',
+      message: name ? `WhatsApp contact +${chat.waId} saved as "${name}"` : `Saved name removed from WhatsApp contact +${chat.waId}`, req,
+    })
+    res.json({ savedName: fresh?.savedName || '', nameSource: fresh?.nameSource || '' })
+  } catch (err) {
+    console.error('Rename WhatsApp chat error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// POST /contacts/import { contacts: [{ name, phone }], overwrite } — a contacts
+// file the browser has already read (.vcf / .csv; up to IMPORT_MAX numbers a call)
+export async function importContactList(req, res) {
+  const { contacts, overwrite } = req.body || {}
+  if (!Array.isArray(contacts) || !contacts.length) return res.status(400).json({ error: 'No contacts were found in that file' })
+  if (contacts.length > IMPORT_MAX) return res.status(413).json({ error: `Send at most ${IMPORT_MAX.toLocaleString('en')} contacts at a time` })
+  try {
+    const result = await importContacts(contacts, { overwrite: overwrite === true })
+    const renamed = await refreshChatNames(result.keys)
+    for (const id of renamed) announceChat(id)
+    await logActivity({
+      level: 'info', category: 'portal', action: 'whatsapp_contacts_imported',
+      message: `WhatsApp contacts file: ${result.added} added, ${result.updated} updated, ${renamed.length} chat name(s) changed`, req,
+    })
+    const { keys, ...counts } = result
+    res.json({ ...counts, chatsRenamed: renamed.length, summary: await contactBookSummary() })
+  } catch (err) {
+    console.error('Import WhatsApp contacts error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /contacts/summary — how many saved names there are, and from where
+export async function getContactSummary(_req, res) {
+  try {
+    res.json(await contactBookSummary())
+  } catch (err) {
+    console.error('WhatsApp contact summary error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

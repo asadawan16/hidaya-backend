@@ -12,8 +12,10 @@ import { touchChat, syncChat, announceChat } from '../utils/whatsappChats.js'
 import {
   META_APP_ID, WHATSAPP_ES_CONFIG_ID, GRAPH_VERSION, GraphError,
   exchangeCodeForToken, inspectToken, listPhoneNumbers, getPhoneNumber, subscribeApp, unsubscribeApp, requestAppSync,
-  sendMessage, listTemplates, createTemplate,
+  sendMessage, listTemplates, createTemplate, getAppSubscription, setAppSubscription,
 } from '../services/whatsappGraph.js'
+import WhatsappContact from '../models/WhatsappContact.js'
+import { phoneKey, nameOf } from '../utils/whatsappContacts.js'
 
 /*
  * /api/portal/whatsapp — connect the academy's WhatsApp Business number via
@@ -356,6 +358,10 @@ export async function listMessages(req, res) {
       WhatsappMessage.countDocuments({ direction: 'out', status: 'failed' }),
     ])
     for (const m of messages) if (m.status === 'failed') m.failedReason = plainFailure(m)
+    // The name each number is saved under (contact book), for the conversation chips
+    const keys = [...new Set(messages.map(m => phoneKey(m.waId)).filter(Boolean))]
+    const book = new Map((keys.length ? await WhatsappContact.find({ key: { $in: keys } }).lean() : []).map(c => [c.key, nameOf(c).name]))
+    for (const m of messages) m.savedName = book.get(phoneKey(m.waId)) || ''
     res.json({ messages, stats: { sent, received, read, failed } })
   } catch (err) {
     console.error('List WhatsApp messages error:', err)
@@ -477,6 +483,64 @@ export async function addTemplate(req, res) {
   } catch (err) {
     if (err instanceof GraphError) return res.status(502).json({ error: senderError(err, sender), code: err.code })
     console.error('Create WhatsApp template error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+/*
+ * Which webhook fields the Meta app sends us. Without smb_message_echoes,
+ * history and smb_app_state_sync, a number shared with the office phone still
+ * receives messages, but nothing typed on the phone, none of its past chats and
+ * none of its saved contact names ever reach the portal. GET reports what is
+ * on; POST turns on what is missing (keeping everything already on).
+ */
+export const PHONE_FIELDS = [
+  { field: 'messages', label: 'Messages from families' },
+  { field: 'smb_message_echoes', label: 'Messages typed on the office phone' },
+  { field: 'smb_app_state_sync', label: "The phone's saved contact names" },
+  { field: 'history', label: "The phone's past chats" },
+]
+
+function describeFields(sub) {
+  const on = new Set(sub?.fields || [])
+  return {
+    configured: Boolean(sub?.callbackUrl),
+    active: Boolean(sub?.active),
+    callbackUrl: sub?.callbackUrl || '',
+    fields: PHONE_FIELDS.map(f => ({ ...f, on: on.has(f.field) })),
+    missing: PHONE_FIELDS.filter(f => !on.has(f.field)).map(f => f.field),
+  }
+}
+
+export async function getWebhookFields(_req, res) {
+  try {
+    res.json(describeFields(await getAppSubscription()))
+  } catch (err) {
+    if (err instanceof GraphError) return res.status(502).json({ error: `Couldn't ask Meta: ${err.message}` })
+    console.error('WhatsApp webhook fields error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+export async function enableWebhookFields(req, res) {
+  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN
+  if (!verifyToken) return res.status(503).json({ error: 'The server has no WHATSAPP_VERIFY_TOKEN, so Meta cannot confirm the webhook' })
+  try {
+    const sub = await getAppSubscription()
+    if (!sub?.callbackUrl) {
+      return res.status(409).json({ error: "The Meta app has no webhook address yet. Set it up once in the Meta app's WhatsApp → Configuration page, then try again." })
+    }
+    const fields = [...new Set([...(sub.fields || []), ...PHONE_FIELDS.map(f => f.field)])]
+    await setAppSubscription({ callbackUrl: sub.callbackUrl, verifyToken, fields })
+    const fresh = describeFields(await getAppSubscription())
+    await logActivity({
+      level: 'info', category: 'portal', action: 'whatsapp_webhook_fields',
+      message: `WhatsApp webhook fields turned on: ${PHONE_FIELDS.map(f => f.field).join(', ')}`, req,
+    })
+    res.json(fresh)
+  } catch (err) {
+    if (err instanceof GraphError) return res.status(502).json({ error: `Meta refused: ${err.message}` })
+    console.error('Enable WhatsApp webhook fields error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

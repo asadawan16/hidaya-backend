@@ -53,6 +53,7 @@ import Complaint from '../models/Complaint.js'
 import WhatsappMessage from '../models/WhatsappMessage.js'
 import ClassReminder from '../models/ClassReminder.js'
 import WhatsappReminderSettings from '../models/WhatsappReminderSettings.js'
+import WhatsappContact from '../models/WhatsappContact.js'
 import ClassLink from '../models/ClassLink.js'
 import ClassLinkSettings from '../models/ClassLinkSettings.js'
 import StudentClassLink from '../models/StudentClassLink.js'
@@ -120,6 +121,7 @@ export const EXPORT_COLLECTIONS = [
   { folder: 'communication', file: 'whatsapp-messages', label: 'WhatsApp messages', model: WhatsappMessage },
   { folder: 'communication', file: 'whatsapp-class-reminders', label: 'WhatsApp class reminders', model: ClassReminder },
   { folder: 'communication', file: 'whatsapp-reminder-settings', label: 'WhatsApp reminder settings', model: WhatsappReminderSettings },
+  { folder: 'communication', file: 'whatsapp-contacts', label: 'WhatsApp contact names', model: WhatsappContact },
   { folder: 'communication', file: 'class-links', label: 'Class links board', model: ClassLink },
   { folder: 'communication', file: 'class-link-settings', label: 'Class links settings', model: ClassLinkSettings },
   { folder: 'communication', file: 'student-class-links', label: 'Student class pages', model: StudentClassLink },
