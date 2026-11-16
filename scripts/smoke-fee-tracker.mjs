@@ -97,6 +97,9 @@ try {
   await mk('HID60', 'Future', { joiningDate: new Date('2026-12-01'), billing: { fee: 8000 } })
   // Left — never listed.
   await mk('HID70', 'Gone', { status: 'left' })
+  // Pays by 2CO (card subscription) → always at the bottom; quarterly → after the monthly families.
+  const card = await mk('HID05', 'Card Payer', { billing: { fee: 6000, paymentMethod: '2CO' } })
+  const quarterly = await mk('HID08', 'Quarterly', { billing: { fee: 6000, paymentMethod: 'SC', cycle: 'quarterly' } })
   // Family 3: everything settled (Nov waived) → nothing due, not listed.
   const settled = await mk('HID80', 'Settled', { familyId: f3._id, billing: { fee: 9000 } })
 
@@ -118,8 +121,8 @@ try {
 
   console.log('\nThe November board')
   let b = await board(boss)
-  ok(b.rows.length === 3, 'three rows: family 1, family 2, the solo student', b.rows.map(r => r.lead.rollNo))
-  ok(b.rows.map(r => r.lead.rollNo).join() === 'HID12,HID30,HID50', 'sorted by roll number like the sheet')
+  ok(b.rows.length === 5, 'five rows: family 1, family 2, the solo student, the quarterly and the 2CO payer', b.rows.map(r => r.lead.rollNo))
+  ok(b.rows.map(r => r.lead.rollNo).join() === 'HID12,HID30,HID50,HID08,HID05', 'monthly families first by roll number, then other cycles, 2CO at the bottom', b.rows.map(r => r.lead.rollNo))
   ok(!rowOf(b, 'HID60') && !rowOf(b, 'HID70') && !rowOf(b, 'HID80'), 'not-yet-joined, left and fully-settled students are off the list')
 
   let r1 = rowOf(b, 'HID30')
@@ -130,7 +133,7 @@ try {
   ok(zp.owed.map(o => o.month).join() === '10,11' && zp.owedTotal === 14000, 'Zara owes October (pending, base fee) and November', zp.owed)
   const ap = r1.members.find(m => m.rollNo === 'HID31')
   ok(ap.owed.map(o => o.month).join() === '11' && ap.owedTotal === 5000, 'Ali owes November only (October waived NSY)', ap.owed)
-  ok(r1.owedTotal === 19000 && r1.expected === 19000 && !r1.expectedCustom, 'expected defaults to what is owed')
+  ok(r1.owedTotal === 19000 && r1.expected === null, 'expected is manual: empty until the office types it (owed shown separately)')
   ok(r1.state === 'due' && !r1.linkSent, 'not reminded yet → due')
   ok(r1.mode === 'SC' && r1.monthlyFee === 12000, 'mode and monthly fee from the students')
 
@@ -141,10 +144,24 @@ try {
   const rs = rowOf(b, 'HID50')
   ok(rs.key === `s:${solo._id}` && rs.familyCode === '', 'a student with no family is a row of their own')
   ok(rs.owedTotal === 40000 && rs.members[0].owed.length === 4, 'solo owes Aug–Nov (from joining)')
-  ok(b.summary.due === 2 && b.summary.sent === 0 && b.summary.received === 1, 'summary counts', b.summary)
-  ok(b.summary.expected === 59000, 'expected total = due + sent rows', b.summary.expected)
+  ok(b.summary.due === 4 && b.summary.sent === 0 && b.summary.received === 1, 'summary counts', b.summary)
+  ok(b.summary.expected === 0 && b.summary.expectedTyped === 0, 'nothing typed → expected total 0', b.summary.expected)
+  ok(b.summary.owed === 19000 + 40000 + 66000 + 66000, 'what the portal says is owed is reported separately', b.summary.owed)
   ok(b.summary.portalAmounts[0]?.amount === 3000, 'Fee Management money for the month is reported separately')
   ok(b.modes.includes('SC') && b.modes.includes('Wise'), 'modes for the receipt form')
+
+  console.log('\nYear view')
+  ok(b.columns.length === 12 && b.columns[0].month === 1 && b.columns[11].month === 12 && b.columns[11].year === 2026, 'November shows January–December, like the sheet')
+  const zy = rowOf(b, 'HID30').members.find(m => m.rollNo === 'HID30').year
+  ok(zy[0].state === 'paid' && zy[0].amount === 7000, 'Zara January: paid in Fee Management')
+  ok(zy[9].state === 'owed' && zy[9].amount === 7000 && zy[10].state === 'owed', 'Zara October and November: unpaid amounts')
+  ok(zy[11].state === 'future', 'December is still to come')
+  const ay = rowOf(b, 'HID30').members.find(m => m.rollNo === 'HID31').year
+  ok(ay.slice(0, 9).every(c => c.state === 'nsy'), 'Ali: NSY before he joined (Jan–Sep)')
+  ok(ay[9].state === 'waived' && ay[9].note === 'NSY', "Ali October: Fee Management's waived NSY note")
+  ok(ay[10].state === 'owed' && ay[10].amount === 5000, 'Ali November: unpaid')
+  const jan27 = await board(boss, 'year=2027&month=1')
+  ok(jan27.columns[0].year === 2026 && jan27.columns[0].month === 3 && jan27.columns[11].year === 2027 && jan27.columns[11].month === 2, 'January 2027 shows March 2026 – February 2027')
 
   console.log('\nLink sent, expected, ignore')
   let res = await call(boss, 'PATCH', '/entry', { year: 2026, month: 11, groupKey: r1.key, linkSent: true })
@@ -153,7 +170,8 @@ try {
   ok(res.status === 200 && res.data.expected === 18000 && res.data.linkSent, 'type over the expected amount (link sent kept)')
   b = await board(boss)
   r1 = rowOf(b, 'HID30')
-  ok(r1.state === 'sent' && r1.expected === 18000 && r1.expectedCustom, 'row is now "link sent" with the typed amount')
+  ok(r1.state === 'sent' && r1.expected === 18000, 'row is now "link sent" with the typed amount')
+  ok(b.summary.expected === 18000 && b.summary.expectedTyped === 1, 'expected total = what was typed')
   res = await call(boss, 'PATCH', '/entry', { year: 2026, month: 11, groupKey: r1.key, expected: null })
   ok(res.data.expected === null, 'expected can be reset')
   ok((await call(boss, 'PATCH', '/entry', { year: 2026, month: 11, groupKey: r1.key, expected: -5 })).status === 400, 'negative expected refused')
@@ -164,7 +182,7 @@ try {
   await call(boss, 'PATCH', '/entry', { year: 2026, month: 11, groupKey: rs.key, ignored: true })
   b = await board(boss)
   ok(rowOf(b, 'HID50').ignored && b.summary.ignored === 1, 'ignored for the month')
-  ok(b.summary.expected === 19000 && b.summary.due === 0 && b.summary.sent === 1, 'ignored rows leave the totals', b.summary)
+  ok(b.summary.due === 2 && b.summary.sent === 1 && b.summary.owed === 19000 + 66000 + 66000, 'ignored rows leave the totals', b.summary)
   await call(boss, 'PATCH', '/entry', { year: 2026, month: 11, groupKey: rs.key, ignored: false })
 
   console.log('\nMark received')
@@ -201,6 +219,8 @@ try {
   ok(rs2.state === 'received' && !rs2.receipts[0].own && rs2.receipts[0].amount === 10000, "the solo student's November is settled by family 1's payment (only their share shown)")
   ok(rs2.owedTotal === 30000, 'the solo student still owes Aug–Oct', rs2.owedTotal)
   ok(b.summary.receivedAmounts.length === 1 && b.summary.receivedAmounts[0].amount === 29000, 'received total counts the payment once')
+  const zy2 = rowOf(b, 'HID30').members.find(m => m.rollNo === 'HID30').year
+  ok(zy2[9].state === 'tracker' && zy2[10].state === 'tracker', 'year view: the months the receipt covers show as received on the tracker')
 
   res = await call(boss, 'GET', `/student/${solo._id}?${NOV}`)
   ok(res.status === 200 && res.data.member.owed.map(o => o.month).join() === '8,9,10', 'a student\'s unpaid months for "Add another student"', res.data?.member?.owed)

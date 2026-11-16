@@ -77,7 +77,8 @@ function joinIdx(s) {
  *   - otherwise the agreed amount (the month's own receivable, else the base
  *     fee) less anything paid                → owed ('owed' / 'partial')
  */
-function studentPosition(s, cells, covered, M, startIdx) {
+function studentPosition(s, cells, covered, win) {
+  const { M, startIdx } = win
   const baseFee = s.billing?.fee || 0
   const owed = []
   let thisMonth = { state: 'none', paid: 0, currency: 'PKR', note: '' }
@@ -103,45 +104,90 @@ function studentPosition(s, cells, covered, M, startIdx) {
     _id: s._id,
     name: s.name,
     rollNo: s.rollNo || '',
+    year: yearView(s, cells, covered, win),
     status: s.status,
     joiningDate: s.joiningDate || null,
     baseFee,
     billedAmount: s.billing?.amount || 0,
     billedCurrency: s.billing?.currency || 'PKR',
     mode: s.billing?.paymentMethod || '',
+    cycle: s.billing?.cycle || 'monthly', // unset → monthly (the schema default)
     owed,
     owedTotal: owed.reduce((sum, o) => sum + o.amount, 0),
     thisMonth,
   }
 }
 
-// The months the tracker looks at for month M.
+/**
+ * One cell per year-view column, like the client's sheet: a month before the
+ * student joined reads NSY; a waived month shows its Fee Management note (DA =
+ * didn't attend, NSY = not started yet, DNA, BD…); an unpaid month its amount.
+ *   state: nsy | waived | paid | tracker | owed | partial | none | nodata | future
+ */
+function yearView(s, cells, covered, { M, colStart, colEnd }) {
+  const baseFee = s.billing?.fee || 0
+  const joined = joinIdx(s)
+  const tracked = toIdx(TRACK_FROM.year, TRACK_FROM.month)
+  const out = []
+  for (let i = colStart; i <= colEnd; i++) {
+    const cell = cells?.get(i)
+    const note = cell?.note || ''
+    let state, amount = 0
+    if (covered?.has(i)) state = 'tracker'
+    else if (cell?.status === 'waived') state = 'waived'
+    else if (cell?.status === 'received') { state = 'paid'; amount = cell.amountPaid || 0 }
+    else if (i < joined) state = 'nsy'
+    else if (i > M) state = 'future'
+    else if (i < tracked && !cell) state = 'nodata' // before the portal's fee records begin
+    else {
+      const paid = cell?.amountPaid || 0
+      const agreed = cell?.amount > 0 ? cell.amount : baseFee
+      amount = Math.max(0, agreed - paid)
+      state = amount > 0 ? (paid > 0 ? 'partial' : 'owed') : (paid > 0 ? 'paid' : 'none')
+      if (state === 'paid') amount = paid
+    }
+    out.push({ state, amount, note })
+  }
+  return out
+}
+
+// The months the tracker looks at for month M, and the year view's columns:
+// the twelve months ending one month after M (January–December for November).
 function windowOf(year, month) {
   const M = toIdx(year, month)
   const startIdx = Math.max(toIdx(TRACK_FROM.year, TRACK_FROM.month), M - (LOOKBACK_MONTHS - 1))
-  return { M, startIdx, start: fromIdx(startIdx) }
+  const colStart = M - 10, colEnd = M + 1
+  return { M, startIdx, start: fromIdx(startIdx), colStart, colEnd }
+}
+
+export function yearColumns(year, month) {
+  const { colStart, colEnd } = windowOf(year, month)
+  const cols = []
+  for (let i = colStart; i <= colEnd; i++) cols.push(fromIdx(i))
+  return cols
 }
 
 // Fee Management cells and tracker receipts for the window. `ids` null = every
 // student (the board), which lets these run alongside the student query
 // instead of after it.
 function fetchFeeData(year, month, ids) {
-  const { start } = windowOf(year, month)
+  const { start, colStart, colEnd } = windowOf(year, month)
   const scope = ids ? { studentId: { $in: ids } } : {}
+  const fromYear = Math.min(start.year, fromIdx(colStart).year)
   return Promise.all([
-    StudentFeeRecord.find({ ...scope, year: { $gte: start.year, $lte: year } })
+    StudentFeeRecord.find({ ...scope, year: { $gte: fromYear, $lte: fromIdx(colEnd).year } })
       .select('studentId year month amount amountPaid currency status note').lean(),
     FeeTrackerReceipt.find({
       $or: [
         { year, month },
-        { ...(ids ? { 'lines.studentId': { $in: ids } } : {}), 'lines.months.year': { $gte: start.year } },
+        { ...(ids ? { 'lines.studentId': { $in: ids } } : {}), 'lines.months.year': { $gte: fromYear } },
       ],
     }).sort({ paidAt: 1, createdAt: 1 }).lean(),
   ]).then(([cells, receipts]) => ({ cells, receipts }))
 }
 
 function positionsFrom(students, cells, receipts, year, month) {
-  const { M, startIdx } = windowOf(year, month)
+  const win = windowOf(year, month)
   const cellMap = new Map()
   for (const c of cells) {
     const k = String(c.studentId)
@@ -159,9 +205,16 @@ function positionsFrom(students, cells, receipts, year, month) {
   const positions = new Map()
   for (const s of students) {
     const k = String(s._id)
-    positions.set(k, studentPosition(s, cellMap.get(k), coveredMap.get(k), M, startIdx))
+    positions.set(k, studentPosition(s, cellMap.get(k), coveredMap.get(k), win))
   }
   return positions
+}
+
+// 2CO (2Checkout) is the card-subscription route — those families sit at the bottom.
+const is2CO = (mode) => /^\s*2\s*co\b/i.test(String(mode || ''))
+function sortGroup(row) {
+  if (is2CO(row.mode)) return 2
+  return row.members.some(m => m.cycle !== 'monthly') && !row.members.some(m => m.cycle === 'monthly') ? 1 : 0
 }
 
 const sumByCurrency = (pairs) => {
@@ -262,8 +315,9 @@ export async function buildBoard(year, month) {
       allOnLeave: g.members.every(m => m.status === 'leave'),
       anyOnLeave: g.members.some(m => m.status === 'leave'),
       owedTotal,
-      expected: entry?.expected ?? owedTotal,
-      expectedCustom: entry?.expected != null,
+      // Typed by the office, or null (client, 16 Nov 2026: "expected ko manual kr den").
+      // owedTotal is what the portal computes, shown alongside as a hint.
+      expected: entry?.expected ?? null,
       linkSent: !!entry?.linkSent,
       linkSentAt: entry?.linkSentAt || null,
       ignored: !!entry?.ignored,
@@ -275,7 +329,10 @@ export async function buildBoard(year, month) {
     })
   }
 
-  rows.sort((a, b) => rollNum(a.lead.rollNo) - rollNum(b.lead.rollNo) || a.lead.name.localeCompare(b.lead.name))
+  // The client's order (16 Nov 2026): families paying monthly first, other
+  // billing cycles (quarterly…) next, and everyone paying by 2CO together at
+  // the bottom; roll number within each group, like the sheet.
+  rows.sort((a, b) => sortGroup(a) - sortGroup(b) || rollNum(a.lead.rollNo) - rollNum(b.lead.rollNo) || a.lead.name.localeCompare(b.lead.name))
 
   const live = rows.filter(r => !r.ignored)
   const summary = {
@@ -285,7 +342,10 @@ export async function buildBoard(year, month) {
     received: live.filter(r => r.state === 'received').length,
     ignored: rows.length - live.length,
     // The office's expected amounts are in the local fee (PKR), like the sheet.
-    expected: live.filter(r => r.state === 'due' || r.state === 'sent').reduce((sum, r) => sum + r.expected, 0),
+    // Only what the office has typed — the sheet's red "Due" total.
+    expected: live.filter(r => r.state === 'due' || r.state === 'sent').reduce((sum, r) => sum + (r.expected || 0), 0),
+    expectedTyped: live.filter(r => (r.state === 'due' || r.state === 'sent') && r.expected != null).length,
+    owed: live.filter(r => r.state === 'due' || r.state === 'sent').reduce((sum, r) => sum + r.owedTotal, 0),
     // Money marked received on the tracker from this month's rows, per currency.
     receivedAmounts: sumByCurrency(receipts.filter(r => r.year === year && r.month === month)),
     // Money already in Fee Management for this month on rows with no tracker receipt.
@@ -294,7 +354,7 @@ export async function buildBoard(year, month) {
 
   const modes = [...new Set(students.map(s => (s.billing?.paymentMethod || '').trim()).filter(Boolean))].sort()
 
-  return { year, month, rows, summary, modes, window: { from: start, to: { year, month } }, trackFrom: TRACK_FROM }
+  return { year, month, rows, summary, modes, columns: yearColumns(year, month), window: { from: start, to: { year, month } }, trackFrom: TRACK_FROM }
 }
 
 // GET /portal/fee-tracker?year=&month=
