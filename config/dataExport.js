@@ -35,6 +35,8 @@ import Certificate from '../models/Certificate.js'
 import EmployeeOfMonth from '../models/EmployeeOfMonth.js'
 import StudentFeeRecord from '../models/StudentFeeRecord.js'
 import FeePayment from '../models/FeePayment.js'
+import FeeTrackerEntry from '../models/FeeTrackerEntry.js'
+import FeeTrackerReceipt from '../models/FeeTrackerReceipt.js'
 import Invoice from '../models/Invoice.js'
 import Payment from '../models/Payment.js'
 import PaymentLink from '../models/PaymentLink.js'
@@ -102,6 +104,8 @@ export const EXPORT_COLLECTIONS = [
 
   { folder: 'finance', file: 'student-fee-records', label: 'Fee records', model: StudentFeeRecord },
   { folder: 'finance', file: 'fee-payments', label: 'Fee payments', model: FeePayment },
+  { folder: 'finance', file: 'fee-tracker-rows', label: 'Fee Tracker (link sent / ignored)', model: FeeTrackerEntry },
+  { folder: 'finance', file: 'fee-tracker-receipts', label: 'Fee Tracker receipts', model: FeeTrackerReceipt },
   { folder: 'finance', file: 'invoices', label: 'Invoices', model: Invoice },
   { folder: 'finance', file: 'payments', label: 'Online payments', model: Payment },
   { folder: 'finance', file: 'payment-links', label: 'Payment links', model: PaymentLink },

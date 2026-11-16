@@ -54,6 +54,7 @@ import portalLeaveRoutes from './routes/portalLeaveRoutes.js'
 import portalBadgeRoutes from './routes/portalBadgeRoutes.js'
 import portalStudentProgressRoutes from './routes/portalStudentProgressRoutes.js'
 import portalFeeRoutes from './routes/portalFeeRoutes.js'
+import portalFeeTrackerRoutes from './routes/portalFeeTrackerRoutes.js'
 import portalClassLinkRoutes from './routes/portalClassLinkRoutes.js'
 import portalDataExportRoutes from './routes/portalDataExportRoutes.js'
 import portalTaskRoutes from './routes/portalTaskRoutes.js'
@@ -217,6 +218,7 @@ app.use('/api/portal/leaves', portalLeaveRoutes)
 app.use('/api/portal/badges', portalBadgeRoutes)
 app.use('/api/portal/student-progress', portalStudentProgressRoutes)
 app.use('/api/portal/fees', portalFeeRoutes)
+app.use('/api/portal/fee-tracker', portalFeeTrackerRoutes)
 app.use('/api/portal/class-links', portalClassLinkRoutes)
 app.use('/api/portal/data-export', portalDataExportRoutes)
 app.use('/api/portal/tasks', portalTaskRoutes)

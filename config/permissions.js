@@ -142,7 +142,10 @@ export const PERMISSIONS = {
   // Manual fee management (yearly grid, mark months received/pending, link payments)
   // fee.receivables — gates the Receivables tab + the summary KPI cards on the Fee
   // Management page (super-admin only by default).
-  fee: ['fee.read', 'fee.manage', 'fee.receivables'],
+  // fee.tracker — the Fee Tracker page (/portal/fee-tracker): the monthly
+  // fee-chasing list (link sent / received / ignore) and its receipts.
+  // Super-admin only by default, like fee.receivables.
+  fee: ['fee.read', 'fee.manage', 'fee.receivables', 'fee.tracker'],
 
   // Demo trial classes (tracking + statuses)
   demo: ['demo.read', 'demo.manage'],
@@ -206,11 +209,11 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   super_admin: ALL_PERMISSIONS.filter(p => !RESTRICTION_PERMISSIONS.includes(p)),
 
   // Admin gets everything except role deletion, the super-admin-only Fee
-  // receivables view/KPIs, and the public class-links board (and never the
+  // receivables view/KPIs and Fee Tracker, and the public class-links board (and never the
   // opt-in restriction permissions). Of the per-person WhatsApp grants it keeps
   // the full inbox, which is the admin's by design; reminders and the
   // own-students level are for tutors.
-  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'class_link.read', 'class_link.manage', 'data.export', 'whatsapp.manage', 'whatsapp.reminder', 'whatsapp.chat_own', ...RESTRICTION_PERMISSIONS].includes(p)),
+  admin: ALL_PERMISSIONS.filter(p => !['role.delete', 'fee.receivables', 'fee.tracker', 'class_link.read', 'class_link.manage', 'data.export', 'whatsapp.manage', 'whatsapp.reminder', 'whatsapp.chat_own', ...RESTRICTION_PERMISSIONS].includes(p)),
 
   principal: [
     'student.read', 'student.approve', 'enrollment.read', 'enrollment.update',
