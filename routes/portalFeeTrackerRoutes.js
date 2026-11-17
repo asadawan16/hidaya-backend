@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { portalAuth, requirePermission } from '../middleware/portalAuth.js'
 import {
-  getBoard, getStudentPosition, updateEntry,
+  getBoard, getStudentPosition, getRowDetail, updateEntry,
   createReceipt, listReceipts, getReceipt, deleteReceipt,
 } from '../controllers/portalFeeTrackerController.js'
 
@@ -13,6 +13,7 @@ router.use(portalAuth, requirePermission('fee.tracker'))
 
 router.get('/', getBoard)
 router.get('/student/:id', getStudentPosition)
+router.get('/rows/:groupKey', getRowDetail)
 router.patch('/entry', updateEntry)
 router.get('/receipts', listReceipts)
 router.post('/receipts', createReceipt)

@@ -240,6 +240,71 @@ const receiptSummary = (r) => ({
   familyCode: r.familyCode,
 })
 
+/**
+ * One family's (or solo student's) row for month year/month: its members'
+ * positions, the receipts that settle it, and its state. null = nothing due
+ * and nothing received this month (the row is off the list).
+ */
+function rowFrom(g, receipts, entry, year, month) {
+  g.members.sort((a, b) => rollNum(a.rollNo) - rollNum(b.rollNo) || a.name.localeCompare(b.name))
+  const memberIds = new Set(g.members.map(m => String(m._id)))
+  const lead = g.members.find(m => m.status === 'active') || g.members[0]
+
+  // Receipts that settle this row for the month: the ones marked from it, and
+  // anyone else's payment that covered one of its students for this month.
+  const rowReceipts = []
+  for (const r of receipts) {
+    const own = r.groupKey === g.key && r.year === year && r.month === month
+    const share = (r.lines || [])
+      .filter(l => memberIds.has(String(l.studentId)))
+    const coversMonth = share.some(l => (l.months || []).some(x => x.year === year && x.month === month))
+    if (!own && !coversMonth) continue
+    rowReceipts.push({
+      ...receiptSummary(r),
+      own,
+      // A payment marked from another row shows only this family's part of it.
+      amount: own ? r.amount : share.reduce((sum, l) => sum + (l.amount || 0), 0),
+    })
+  }
+
+  const owedTotal = g.members.reduce((sum, m) => sum + m.owedTotal, 0)
+  const portalPaid = sumByCurrency(g.members
+    .filter(m => m.thisMonth.state === 'paid' || m.thisMonth.state === 'partial')
+    .map(m => ({ currency: m.thisMonth.currency, amount: m.thisMonth.paid })))
+
+  let state
+  if (rowReceipts.length) state = 'received'
+  else if (owedTotal > 0) state = entry?.linkSent ? 'sent' : 'due'
+  else if (portalPaid.length) state = 'received' // recorded in Fee Management
+  else return null // nothing due this month
+
+  return {
+    key: g.key,
+    familyId: g.family?._id || null,
+    familyCode: g.family?.familyCode || '',
+    guardian: g.family?.primaryGuardian?.name || '',
+    lead: { _id: lead._id, name: lead.name, rollNo: lead.rollNo },
+    members: g.members,
+    joiningDate: lead.joiningDate,
+    mode: lead.mode || g.members.find(m => m.mode)?.mode || '',
+    monthlyFee: g.members.reduce((sum, m) => sum + m.baseFee, 0),
+    allOnLeave: g.members.every(m => m.status === 'leave'),
+    anyOnLeave: g.members.some(m => m.status === 'leave'),
+    owedTotal,
+    // Typed by the office, or null (client, 16 Nov 2026: "expected ko manual kr den").
+    // owedTotal is what the portal computes, shown alongside as a hint.
+    expected: entry?.expected ?? null,
+    linkSent: !!entry?.linkSent,
+    linkSentAt: entry?.linkSentAt || null,
+    ignored: !!entry?.ignored,
+    note: entry?.note || '',
+    state,
+    receivedFrom: rowReceipts.length ? 'tracker' : state === 'received' ? 'portal' : '',
+    receipts: rowReceipts,
+    portalPaid,
+  }
+}
+
 /** The month's board: one row per family (or solo student) with something due or received. */
 export async function buildBoard(year, month) {
   const M = toIdx(year, month)
@@ -269,64 +334,8 @@ export async function buildBoard(year, month) {
 
   const rows = []
   for (const g of groups.values()) {
-    g.members.sort((a, b) => rollNum(a.rollNo) - rollNum(b.rollNo) || a.name.localeCompare(b.name))
-    const memberIds = new Set(g.members.map(m => String(m._id)))
-    const lead = g.members.find(m => m.status === 'active') || g.members[0]
-    const entry = entryMap.get(g.key)
-
-    // Receipts that settle this row for the month: the ones marked from it, and
-    // anyone else's payment that covered one of its students for this month.
-    const rowReceipts = []
-    for (const r of receipts) {
-      const own = r.groupKey === g.key && r.year === year && r.month === month
-      const share = (r.lines || [])
-        .filter(l => memberIds.has(String(l.studentId)))
-      const coversMonth = share.some(l => (l.months || []).some(x => x.year === year && x.month === month))
-      if (!own && !coversMonth) continue
-      rowReceipts.push({
-        ...receiptSummary(r),
-        own,
-        // A payment marked from another row shows only this family's part of it.
-        amount: own ? r.amount : share.reduce((sum, l) => sum + (l.amount || 0), 0),
-      })
-    }
-
-    const owedTotal = g.members.reduce((sum, m) => sum + m.owedTotal, 0)
-    const portalPaid = sumByCurrency(g.members
-      .filter(m => m.thisMonth.state === 'paid' || m.thisMonth.state === 'partial')
-      .map(m => ({ currency: m.thisMonth.currency, amount: m.thisMonth.paid })))
-
-    let state
-    if (rowReceipts.length) state = 'received'
-    else if (owedTotal > 0) state = entry?.linkSent ? 'sent' : 'due'
-    else if (portalPaid.length) state = 'received' // recorded in Fee Management
-    else continue // nothing due this month
-
-    rows.push({
-      key: g.key,
-      familyId: g.family?._id || null,
-      familyCode: g.family?.familyCode || '',
-      guardian: g.family?.primaryGuardian?.name || '',
-      lead: { _id: lead._id, name: lead.name, rollNo: lead.rollNo },
-      members: g.members,
-      joiningDate: lead.joiningDate,
-      mode: lead.mode || g.members.find(m => m.mode)?.mode || '',
-      monthlyFee: g.members.reduce((sum, m) => sum + m.baseFee, 0),
-      allOnLeave: g.members.every(m => m.status === 'leave'),
-      anyOnLeave: g.members.some(m => m.status === 'leave'),
-      owedTotal,
-      // Typed by the office, or null (client, 16 Nov 2026: "expected ko manual kr den").
-      // owedTotal is what the portal computes, shown alongside as a hint.
-      expected: entry?.expected ?? null,
-      linkSent: !!entry?.linkSent,
-      linkSentAt: entry?.linkSentAt || null,
-      ignored: !!entry?.ignored,
-      note: entry?.note || '',
-      state,
-      receivedFrom: rowReceipts.length ? 'tracker' : state === 'received' ? 'portal' : '',
-      receipts: rowReceipts,
-      portalPaid,
-    })
+    const row = rowFrom(g, receipts, entryMap.get(g.key), year, month)
+    if (row) rows.push(row)
   }
 
   // The client's order (16 Nov 2026): families paying monthly first, other
@@ -389,6 +398,159 @@ export async function getStudentPosition(req, res) {
     })
   } catch (err) {
     console.error('Fee tracker student error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
+// GET /portal/fee-tracker/rows/:groupKey?year=&month= — one family's (or solo
+// student's) fee record for the detail page: the row as the board shows it,
+// each child's year, every receipt that touched them, and what the office did
+// each month (link sent, expected, ignore, note). A student who belongs to a
+// family resolves to the family's row, with `focus` naming that student.
+export async function getRowDetail(req, res) {
+  try {
+    const period = parsePeriod(req.query)
+    if (!period) return res.status(400).json({ error: 'Pick a valid month' })
+    let groupKey = String(req.params.groupKey || '')
+    if (!GROUP_KEY.test(groupKey)) return res.status(404).json({ error: 'Not found' })
+    const { year, month } = period
+
+    let focus = null
+    if (groupKey[0] === 's') {
+      const s = await Student.findById(groupKey.slice(2)).select('familyId').lean()
+      if (!s) return res.status(404).json({ error: 'That student no longer exists' })
+      if (s.familyId) { focus = String(s._id); groupKey = `f:${s.familyId}` }
+    }
+
+    let family = null
+    let all
+    const fields = 'name rollNo status familyId billing joiningDate createdAt'
+    if (groupKey[0] === 'f') {
+      family = await Family.findById(groupKey.slice(2))
+        .select('familyCode primaryGuardian.name primaryGuardian.phone primaryGuardian.email').lean()
+      if (!family) return res.status(404).json({ error: 'That family no longer exists' })
+      all = await Student.find({ familyId: family._id }).select(fields).lean()
+    } else {
+      all = await Student.find({ _id: groupKey.slice(2) }).select(fields).lean()
+    }
+    if (!all.length) return res.status(404).json({ error: 'Nobody on this record' })
+
+    // The same students the board would list; anyone who has left is named
+    // separately (their old receipts still show below).
+    const listed = all.filter(s => ['active', 'leave', 'pending'].includes(s.status))
+    const ids = all.map(s => s._id)
+    const [{ cells, receipts }, entries, allReceipts] = await Promise.all([
+      fetchFeeData(year, month, listed.map(s => s._id)),
+      FeeTrackerEntry.find({ groupKey }).populate('updatedBy', 'displayName').sort({ year: -1, month: -1 }).lean(),
+      FeeTrackerReceipt.find({ $or: [{ groupKey }, { 'lines.studentId': { $in: ids } }] })
+        .populate('recordedBy', 'displayName').sort({ paidAt: -1, createdAt: -1 }).lean(),
+    ])
+
+    const students = listed.map(s => ({ ...s, familyId: family }))
+    const positions = positionsFrom(students, cells, receipts, year, month)
+    const g = { key: groupKey, family, members: students.map(s => positions.get(String(s._id))) }
+    const entry = entries.find(e => e.year === year && e.month === month)
+    const row = g.members.length ? rowFrom(g, receipts, entry, year, month) : null
+
+    const memberIds = new Set(ids.map(String))
+    const receiptRows = allReceipts.map(r => {
+      const share = (r.lines || []).filter(l => memberIds.has(String(l.studentId)))
+      const own = r.groupKey === groupKey
+      return {
+        ...receiptSummary(r),
+        reference: r.reference || '',
+        note: r.note || '',
+        year: r.year,
+        month: r.month,
+        recordedBy: r.recordedBy?.displayName || '',
+        createdAt: r.createdAt,
+        own,
+        // Only this record's part of a payment marked from someone else's row.
+        share: own ? r.amount : share.reduce((sum, l) => sum + (l.amount || 0), 0),
+        lines: (own ? r.lines : share).map(l => ({
+          studentId: l.studentId, name: l.name, rollNo: l.rollNo, months: l.months, amount: l.amount,
+        })),
+        otherLines: own ? 0 : (r.lines || []).length - share.length,
+      }
+    })
+
+    // Per year-view month: what the office did and what was owed.
+    const columns = yearColumns(year, month)
+    const entryOf = new Map(entries.map(e => [toIdx(e.year, e.month), e]))
+    const months = columns.map((c, i) => {
+      const e = entryOf.get(toIdx(c.year, c.month))
+      const owed = g.members.reduce((sum, m) => {
+        const cell = m.year[i]
+        return sum + (cell && (cell.state === 'owed' || cell.state === 'partial') ? cell.amount : 0)
+      }, 0)
+      return {
+        ...c,
+        owed,
+        linkSent: !!e?.linkSent,
+        linkSentAt: e?.linkSentAt || null,
+        expected: e?.expected ?? null,
+        ignored: !!e?.ignored,
+        note: e?.note || '',
+        updatedBy: e?.updatedBy?.displayName || '',
+        updatedAt: e?.updatedAt || null,
+      }
+    })
+
+    // Activity, newest first: link-sent ticks, ignores, notes and payments.
+    const activity = []
+    for (const e of entries) {
+      const by = e.updatedBy?.displayName || ''
+      if (e.linkSent && e.linkSentAt) activity.push({ kind: 'link', at: e.linkSentAt, year: e.year, month: e.month, by })
+      if (e.ignored) activity.push({ kind: 'ignored', at: e.updatedAt, year: e.year, month: e.month, by })
+      if (e.note) activity.push({ kind: 'note', at: e.updatedAt, year: e.year, month: e.month, text: e.note, by })
+    }
+    for (const r of receiptRows) {
+      activity.push({
+        kind: 'receipt', at: r.paidAt || r.createdAt, year: r.year, month: r.month,
+        receiptId: r._id, receiptNo: r.receiptNo, amount: r.share, currency: r.currency, mode: r.mode, by: r.recordedBy,
+      })
+    }
+    activity.sort((a, b) => new Date(b.at) - new Date(a.at))
+
+    const lead = g.members.find(m => m.status === 'active') || g.members[0] || all[0]
+    res.json({
+      year, month,
+      groupKey,
+      focus,
+      family: family ? {
+        _id: family._id,
+        familyCode: family.familyCode || '',
+        guardian: family.primaryGuardian?.name || '',
+        phone: family.primaryGuardian?.phone || '',
+        email: family.primaryGuardian?.email || '',
+      } : null,
+      lead: { _id: lead._id, name: lead.name, rollNo: lead.rollNo || '' },
+      members: g.members,
+      leftMembers: all.filter(s => !listed.includes(s)).map(s => ({ _id: s._id, name: s.name, rollNo: s.rollNo || '', status: s.status })),
+      // null when nothing is due or received this month (off the list).
+      row,
+      entry: {
+        linkSent: !!entry?.linkSent,
+        linkSentAt: entry?.linkSentAt || null,
+        expected: entry?.expected ?? null,
+        ignored: !!entry?.ignored,
+        note: entry?.note || '',
+      },
+      columns,
+      months,
+      receipts: receiptRows,
+      activity: activity.slice(0, 60),
+      totals: {
+        owed: g.members.reduce((sum, m) => sum + m.owedTotal, 0),
+        owedMonths: new Set(g.members.flatMap(m => m.owed.map(o => toIdx(o.year, o.month)))).size,
+        monthlyFee: g.members.reduce((sum, m) => sum + m.baseFee, 0),
+        received: sumByCurrency(receiptRows.map(r => ({ currency: r.currency, amount: r.share }))),
+        receipts: receiptRows.length,
+      },
+      trackFrom: TRACK_FROM,
+    })
+  } catch (err) {
+    console.error('Fee tracker detail error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 }

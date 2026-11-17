@@ -240,6 +240,32 @@ try {
   ok(res.status === 200 && res.data.records.length === 2, 'list of the month\'s receipts')
   ok((await call(boss, 'GET', `/receipts/${rec1._id}`)).data.receiptNo === 'FT-2026-0001', 'read one receipt back to reprint it')
 
+  console.log('\nDetail page')
+  await call(boss, 'PATCH', '/entry', { year: 2026, month: 11, groupKey: r1.key, note: 'Mother asked for the link on WhatsApp' })
+  res = await call(boss, 'GET', `/rows/${r1.key}?${NOV}`)
+  let d = res.data
+  ok(res.status === 200 && d.groupKey === r1.key && d.family.familyCode === 'FAM-1' && d.family.guardian === 'Mrs Tahir', "a family's record opens with its code and guardian")
+  ok(d.members.length === 2 && d.row?.state === 'received' && d.row.owedTotal === 0, 'same row as the board: both children, received this month')
+  ok(d.columns.length === 12 && d.months.length === 12 && d.members[0].year.length === 12, 'a year of months, matching the year view')
+  const novM = d.months.find(m => m.year === 2026 && m.month === 11)
+  ok(novM.linkSent && novM.linkSentAt && novM.note === 'Mother asked for the link on WhatsApp', "November's link-sent time and note are on the record")
+  ok(d.receipts.length === 1 && d.receipts[0].receiptNo === 'FT-2026-0001' && d.receipts[0].own && d.receipts[0].share === 29000, "the family's own receipt, in full")
+  ok(d.receipts[0].recordedBy === 'Boss Owner', 'with who marked it')
+  ok(d.activity.some(a => a.kind === 'link') && d.activity.some(a => a.kind === 'receipt') && d.activity.some(a => a.kind === 'note'), 'activity: link sent, note and payment')
+  ok(d.totals.received.length === 1 && d.totals.received[0].amount === 29000 && d.totals.receipts === 1, 'lifetime received on the tracker')
+  res = await call(boss, 'GET', `/rows/s:${zara._id}?${NOV}`)
+  ok(res.status === 200 && res.data.groupKey === r1.key && res.data.focus === String(zara._id), "a child's own link opens the family's record, focused on that child")
+  res = await call(boss, 'GET', `/rows/s:${solo._id}?${NOV}`)
+  d = res.data
+  ok(res.status === 200 && !d.family && d.members.length === 1 && d.members[0].owedTotal === 30000, 'a solo student opens on their own, still owing Aug–Oct')
+  ok(d.receipts.length === 1 && !d.receipts[0].own && d.receipts[0].share === 10000 && d.receipts[0].lines.length === 1 && d.receipts[0].otherLines === 2,
+    "another family's payment shows only this student's share and line")
+  res = await call(boss, 'GET', `/rows/f:${f3._id}?${NOV}`)
+  ok(res.status === 200 && res.data.row === null && res.data.members.length === 1, 'a settled family still opens (nothing due this month)')
+  ok((await call(boss, 'GET', `/rows/f:${new mongoose.Types.ObjectId()}?${NOV}`)).status === 404, 'an unknown family → 404')
+  ok((await call(boss, 'GET', `/rows/nope?${NOV}`)).status === 404, 'a malformed key → 404')
+  ok((await call(admin, 'GET', `/rows/${r1.key}?${NOV}`)).status === 403, 'admin cannot open a record')
+
   console.log('\nFee Management is untouched')
   ok(await StudentFeeRecord.countDocuments() === feeCells, 'no fee records written')
   ok(await FeePayment.countDocuments() === feePayments, 'no fee payments written')
