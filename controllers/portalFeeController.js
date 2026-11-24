@@ -264,27 +264,96 @@ export async function bulkUpsertReceivables(req, res) {
   }
 }
 
-// Apply a FeePayment's allocations to the corresponding month cells
-async function applyAllocations(payment, userId) {
-  for (const alloc of payment.allocations) {
-    const student = await Student.findById(alloc.studentId).select('familyId').lean()
-    const month = clampMonth(alloc.month)
-    let rec = await StudentFeeRecord.findOne({ studentId: alloc.studentId, year: alloc.year, month })
+const cellKey = (a) => `${a.studentId}|${a.year}|${clampMonth(a.month)}`
+
+// Sum a payment's allocations per month cell (one payment may list the same
+// student + month twice).
+function sumByCell(allocations = []) {
+  const map = new Map()
+  for (const a of allocations) {
+    const k = cellKey(a)
+    const cur = map.get(k) || { studentId: a.studentId, year: a.year, month: clampMonth(a.month), amount: 0 }
+    cur.amount += a.amount || 0
+    map.set(k, cur)
+  }
+  return map
+}
+
+// A cell that holds nothing — no fee, no money, no payment, no note. A payment
+// logged against a month with no record creates one of these; left behind after
+// that payment is edited away or removed, it would stop the month being
+// auto-billed, so it is deleted instead (the month goes back to how it was).
+const isEmptyCell = (rec) => !rec.amount && !rec.amountPaid && !(rec.payments || []).length
+  && !rec.note && rec.status === 'pending'
+
+/**
+ * Move a payment's money between month cells. `before` is what the payment
+ * allocated until now (empty for a new payment), `payment` is the payment as it
+ * now stands (null when it is removed). Each cell moves by the DIFFERENCE only —
+ * so a month the payment no longer covers loses exactly its share, a month it
+ * still covers is untouched, and an amount typed into a cell by hand survives
+ * an edit that didn't change that month.
+ */
+async function syncPaymentCells(paymentId, before, payment, userId) {
+  const oldCells = sumByCell(before)
+  const newCells = sumByCell(payment?.allocations)
+  const keys = new Set([...oldCells.keys(), ...newCells.keys()])
+  const pid = String(paymentId)
+
+  for (const k of keys) {
+    const was = oldCells.get(k)
+    const now = newCells.get(k)
+    const ref = now || was
+    let rec = await StudentFeeRecord.findOne({ studentId: ref.studentId, year: ref.year, month: ref.month })
     if (!rec) {
-      rec = new StudentFeeRecord({ studentId: alloc.studentId, year: alloc.year, month, familyId: student?.familyId, currency: payment.currency })
+      if (!now) continue // nothing to roll back
+      const student = await Student.findById(ref.studentId).select('familyId').lean()
+      rec = new StudentFeeRecord({ studentId: ref.studentId, year: ref.year, month: ref.month, familyId: student?.familyId, currency: payment.currency })
     }
-    rec.amountPaid = Math.max(0, (rec.amountPaid || 0) + (alloc.amount || 0))
-    rec.currency = payment.currency
-    rec.method = payment.method
-    rec.paidAt = payment.paidAt
+    rec.amountPaid = Math.max(0, (rec.amountPaid || 0) - (was?.amount || 0) + (now?.amount || 0))
+    const others = (rec.payments || []).filter(p => String(p) !== pid)
+    if (now) {
+      rec.payments = [...others, payment._id]
+      rec.currency = payment.currency
+      rec.method = payment.method
+      rec.paidAt = payment.paidAt
+    } else {
+      // This payment no longer touches the month: the method / date shown on the
+      // cell come from the latest payment still on it, or are cleared.
+      rec.payments = others
+      const latest = others.length
+        ? await FeePayment.findOne({ _id: { $in: others } }).sort({ paidAt: -1 }).select('method paidAt').lean()
+        : null
+      rec.method = latest?.method || ''
+      rec.paidAt = latest?.paidAt || (rec.amountPaid > 0 ? rec.paidAt : undefined)
+    }
     rec.recordedBy = userId
-    if (!rec.payments) rec.payments = []
-    rec.payments.push(payment._id)
-    if (!rec.familyId) rec.familyId = student?.familyId
+    if (!rec.familyId) {
+      const student = await Student.findById(ref.studentId).select('familyId').lean()
+      rec.familyId = student?.familyId
+    }
     rec.status = computeStatus(rec)
-    await rec.save()
+    if (rec.status === 'pending' && !rec.amountPaid) rec.paidAt = undefined
+
+    if (!rec.isNew && isEmptyCell(rec)) await StudentFeeRecord.deleteOne({ _id: rec._id })
+    else await rec.save()
   }
 }
+
+// Shared by create and edit: validate the body into clean allocations.
+function cleanAllocationsFrom(allocations) {
+  if (!Array.isArray(allocations)) return []
+  return allocations
+    .filter(a => a.studentId && a.month && a.year)
+    .map(a => ({ studentId: a.studentId, year: parseInt(a.year, 10), month: clampMonth(a.month), amount: Math.max(0, Number(a.amount) || 0) }))
+}
+
+const populatePayment = (id) => FeePayment.findById(id)
+  .populate('allocations.studentId', 'name rollNo')
+  .populate('familyId', 'familyCode')
+  .populate('recordedBy', 'displayName')
+  .populate('linkedPaymentId', 'studentName amount gatewayTransactionId')
+  .lean()
 
 // POST /portal/fees/payments — record a manual payment across months/students
 export async function createFeePayment(req, res) {
@@ -293,9 +362,7 @@ export async function createFeePayment(req, res) {
     if (!amount || amount <= 0) return res.status(400).json({ error: 'A positive amount is required' })
     if (!Array.isArray(allocations) || allocations.length === 0) return res.status(400).json({ error: 'At least one allocation (student + month) is required' })
 
-    const cleanAllocations = allocations
-      .filter(a => a.studentId && a.month && a.year)
-      .map(a => ({ studentId: a.studentId, year: parseInt(a.year, 10), month: clampMonth(a.month), amount: Math.max(0, Number(a.amount) || 0) }))
+    const cleanAllocations = cleanAllocationsFrom(allocations)
     if (cleanAllocations.length === 0) return res.status(400).json({ error: 'Allocations must include studentId, month and year' })
 
     // Prevent double-linking a gateway payment
@@ -318,7 +385,7 @@ export async function createFeePayment(req, res) {
       recordedBy: req.userId,
     })
 
-    await applyAllocations(payment, req.userId)
+    await syncPaymentCells(payment._id, [], payment, req.userId)
 
     await logActivity({
       level: 'info', category: 'finance', action: 'fee_payment_recorded',
@@ -326,11 +393,7 @@ export async function createFeePayment(req, res) {
       req, meta: { feePaymentId: payment._id },
     })
 
-    const populated = await FeePayment.findById(payment._id)
-      .populate('allocations.studentId', 'name rollNo')
-      .populate('familyId', 'familyCode')
-      .lean()
-    res.status(201).json(populated)
+    res.status(201).json(await populatePayment(payment._id))
   } catch (err) {
     console.error('Create fee payment error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -376,23 +439,85 @@ export async function listFeePayments(req, res) {
   }
 }
 
+// PUT /portal/fees/payments/:id — edit a recorded payment in place. The SAME
+// payment is changed (never a second one added), and every month it covered
+// before or covers now is moved by the difference — so a month taken off the
+// payment stops showing it as paid, in the grid, the payments log, the student's
+// history and the Fee Tracker alike.
+export async function updateFeePayment(req, res) {
+  try {
+    const current = await FeePayment.findById(req.params.id).lean()
+    if (!current) return res.status(404).json({ error: 'Fee payment not found' })
+
+    const { amount, currency, method, reference, payerName, paidAt, linkedPaymentId, allocations, note } = req.body
+    if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'A positive amount is required' })
+    const cleanAllocations = cleanAllocationsFrom(allocations)
+    if (cleanAllocations.length === 0) return res.status(400).json({ error: 'At least one allocation (student + month) is required' })
+    if (currency !== undefined && !FeePayment.schema.path('currency').enumValues.includes(currency)) {
+      return res.status(400).json({ error: 'Unknown currency' })
+    }
+    if (method !== undefined && !FeePayment.schema.path('method').enumValues.includes(method)) {
+      return res.status(400).json({ error: 'Unknown payment method' })
+    }
+    let paidAtDate
+    if (paidAt) {
+      paidAtDate = new Date(paidAt)
+      if (isNaN(paidAtDate.getTime())) return res.status(400).json({ error: 'Invalid payment date' })
+    }
+
+    const set = { amount: Number(amount), allocations: cleanAllocations }
+    if (currency !== undefined) set.currency = currency
+    if (method !== undefined) set.method = method
+    if (reference !== undefined) set.reference = String(reference || '').trim()
+    if (payerName !== undefined) set.payerName = String(payerName || '').trim()
+    if (note !== undefined) set.note = String(note || '').trim()
+    if (paidAtDate) set.paidAt = paidAtDate
+    const unset = {}
+    if (linkedPaymentId !== undefined && String(linkedPaymentId || '') !== String(current.linkedPaymentId || '')) {
+      if (linkedPaymentId) {
+        const taken = await FeePayment.findOne({ linkedPaymentId, _id: { $ne: current._id } }).lean()
+        if (taken) return res.status(400).json({ error: 'This gateway payment is already linked to a fee record' })
+        set.linkedPaymentId = linkedPaymentId
+      } else {
+        unset.linkedPaymentId = 1
+      }
+    }
+
+    // Claim the edit against the version that was read: a double-click or two
+    // people saving at once can't both roll the old months back (which would
+    // take the money off twice and add it on twice).
+    const update = { $set: set, $inc: { __v: 1 } }
+    if (Object.keys(unset).length) update.$unset = unset
+    const before = await FeePayment.findOneAndUpdate(
+      { _id: current._id, __v: current.__v ?? { $exists: false } }, update, { new: false, runValidators: true },
+    ).lean()
+    if (!before) return res.status(409).json({ error: 'This payment was just changed by someone else. Reload and try again.' })
+
+    const payment = await FeePayment.findById(current._id).lean()
+    await syncPaymentCells(payment._id, before.allocations, payment, req.userId)
+
+    await logActivity({
+      level: 'info', category: 'finance', action: 'fee_payment_updated',
+      message: `Fee payment edited: ${before.currency} ${before.amount} (${before.allocations.length} month(s)) → ${payment.currency} ${payment.amount} (${payment.allocations.length} month(s))`,
+      req, meta: { feePaymentId: payment._id },
+    })
+    res.json(await populatePayment(payment._id))
+  } catch (err) {
+    console.error('Update fee payment error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+}
+
 // DELETE /portal/fees/payments/:id — remove a payment and roll back its cells
 export async function deleteFeePayment(req, res) {
   try {
-    const payment = await FeePayment.findById(req.params.id)
+    // Delete first, then roll back from the deleted copy: a second request for
+    // the same payment finds nothing, so the months are never rolled back twice.
+    const payment = await FeePayment.findOneAndDelete({ _id: req.params.id }).lean()
     if (!payment) return res.status(404).json({ error: 'Fee payment not found' })
 
-    for (const alloc of payment.allocations) {
-      const rec = await StudentFeeRecord.findOne({ studentId: alloc.studentId, year: alloc.year, month: clampMonth(alloc.month) })
-      if (!rec) continue
-      rec.amountPaid = Math.max(0, (rec.amountPaid || 0) - (alloc.amount || 0))
-      rec.payments = (rec.payments || []).filter(p => p.toString() !== payment._id.toString())
-      rec.status = computeStatus(rec)
-      if (rec.status === 'pending') rec.paidAt = undefined
-      await rec.save()
-    }
+    await syncPaymentCells(payment._id, payment.allocations, null, req.userId)
 
-    await FeePayment.deleteOne({ _id: payment._id })
     await logActivity({
       level: 'warning', category: 'finance', action: 'fee_payment_deleted',
       message: `Fee payment removed (${payment.currency} ${payment.amount})`,
