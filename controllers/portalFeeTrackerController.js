@@ -602,6 +602,39 @@ export async function updateEntry(req, res) {
   }
 }
 
+// A receipt line in the student's own currency (client, 27 Nov 2026): the
+// office records rupees, the receipt shows what the family is billed in. The
+// student page keeps the local fee in billing.fee (PKR) and what the family
+// pays in billing.amount + billing.currency, so the line converts with that
+// ratio — a full month comes out at exactly the billed amount, no exchange
+// rate. A rupee-billed student, or one without both figures, stays in PKR; a
+// receipt recorded in another currency is already in it.
+const round2 = (n) => Math.round(n * 100) / 100
+function billedLine(line, receiptCurrency, billing) {
+  if (receiptCurrency !== 'PKR') return { billedCurrency: receiptCurrency, billedAmount: line.amount }
+  const cur = billing?.currency || 'PKR'
+  const fee = Number(billing?.fee) || 0
+  const billed = Number(billing?.amount) || 0
+  if (cur === 'PKR' || !fee || !billed) return { billedCurrency: 'PKR', billedAmount: line.amount }
+  return { billedCurrency: cur, billedAmount: round2((Number(line.amount) || 0) * billed / fee) }
+}
+
+// Receipts saved before lines carried their billed amount: work it out from
+// the students' billing now, so every receipt prints in the student's currency.
+async function withBilledLines(receipts) {
+  const list = Array.isArray(receipts) ? receipts : [receipts]
+  const missing = new Set()
+  for (const r of list) for (const l of r.lines || []) if (!l.billedCurrency) missing.add(String(l.studentId))
+  if (missing.size) {
+    const students = await Student.find({ _id: { $in: [...missing] } }).select('billing').lean()
+    const billing = new Map(students.map(s => [String(s._id), s.billing]))
+    for (const r of list) {
+      r.lines = (r.lines || []).map(l => (l.billedCurrency ? l : { ...l, ...billedLine(l, r.currency || 'PKR', billing.get(String(l.studentId))) }))
+    }
+  }
+  return receipts
+}
+
 // FT-2026-0001, numbered per year. The number comes from a counter that only
 // goes up, so a deleted receipt's number is never given to another payment
 // (it may already be in a parent's hands). The counter starts from the
@@ -658,7 +691,7 @@ export async function createReceipt(req, res) {
       lines.push({ studentId: sid, months, amount: Math.round(amount * 100) / 100 })
     }
 
-    const students = await Student.find({ _id: { $in: lines.map(l => l.studentId) } }).select('name rollNo').lean()
+    const students = await Student.find({ _id: { $in: lines.map(l => l.studentId) } }).select('name rollNo billing').lean()
     const byId = new Map(students.map(s => [String(s._id), s]))
     for (const l of lines) {
       const s = byId.get(l.studentId)
@@ -673,6 +706,8 @@ export async function createReceipt(req, res) {
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Enter the amount received' })
 
     const currency = CURRENCIES.includes(req.body.currency) ? req.body.currency : 'PKR'
+    // What each line prints as on the receipt, fixed now so a later fee change can't alter it.
+    for (const l of lines) Object.assign(l, billedLine(l, currency, byId.get(l.studentId)?.billing))
     let paidAt = req.body.paidAt ? new Date(req.body.paidAt) : new Date()
     if (isNaN(paidAt.getTime())) paidAt = new Date()
 
@@ -740,7 +775,7 @@ export async function listReceipts(req, res) {
       .populate('recordedBy', 'displayName')
       .sort({ paidAt: -1, createdAt: -1 })
       .lean()
-    res.json({ records })
+    res.json({ records: await withBilledLines(records) })
   } catch (err) {
     console.error('Fee tracker receipts error:', err)
     res.status(500).json({ error: 'Server error' })
@@ -753,7 +788,7 @@ export async function getReceipt(req, res) {
     if (!isId(req.params.id)) return res.status(404).json({ error: 'Receipt not found' })
     const r = await FeeTrackerReceipt.findById(req.params.id).populate('recordedBy', 'displayName').lean()
     if (!r) return res.status(404).json({ error: 'Receipt not found' })
-    res.json(r)
+    res.json(await withBilledLines(r))
   } catch (err) {
     console.error('Fee tracker receipt read error:', err)
     res.status(500).json({ error: 'Server error' })

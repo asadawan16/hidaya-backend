@@ -18,6 +18,12 @@ const lineSchema = new mongoose.Schema({
   rollNo: { type: String, trim: true, default: '' },
   months: { type: [monthSchema], default: [] },
   amount: { type: Number, default: 0, min: 0 },
+  // What the printed receipt shows for this line: the amount in the student's
+  // own billing currency, worked out from the rupee amount with the student's
+  // rate (billed amount / local fee) when the payment was saved (client,
+  // 27 Nov 2026). Older receipts have neither; they are worked out on read.
+  billedCurrency: { type: String, enum: ['PKR', 'USD', 'EUR', 'GBP', 'CAD'] },
+  billedAmount: { type: Number, min: 0 },
 }, { _id: false })
 
 const feeTrackerReceiptSchema = new mongoose.Schema({

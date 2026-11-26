@@ -297,6 +297,28 @@ try {
     lines: [{ studentId: faliq._id, months: [{ year: 2026, month: 12 }], amount: 30 }],
   })
   ok(res.status === 201 && res.data.receiptNo === 'FT-2026-0003', 'the next receipt is 0003, not the deleted 0002', res.data?.receiptNo)
+
+  // The office records rupees; the receipt shows each student's own currency.
+  console.log('\nReceipt in the student\'s currency')
+  const usd = await mk('HID90', 'Dollar Kid', { billing: { fee: 11091, amount: 40, currency: 'USD', paymentMethod: '3rd PARTY' } })
+  res = await call(boss, 'POST', '/receipts', {
+    year: 2026, month: 11, groupKey: `s:${usd._id}`, currency: 'PKR',
+    lines: [
+      { studentId: usd._id, months: [{ year: 2026, month: 10 }, { year: 2026, month: 11 }], amount: 22182 },
+      { studentId: solo._id, months: [{ year: 2026, month: 12 }], amount: 10000 },
+    ],
+  })
+  const conv = res.data
+  ok(res.status === 201 && conv.currency === 'PKR' && conv.amount === 32182, 'recorded in rupees', conv)
+  ok(conv.lines[0].billedCurrency === 'USD' && conv.lines[0].billedAmount === 80, 'a USD 40 student\'s PKR 22,182 prints as USD 80', conv.lines[0])
+  ok(conv.lines[1].billedCurrency === 'PKR' && conv.lines[1].billedAmount === 10000, 'a rupee-billed student stays in PKR', conv.lines[1])
+  await FeeTrackerReceipt.updateOne({ _id: conv._id }, { $unset: { 'lines.$[].billedCurrency': 1, 'lines.$[].billedAmount': 1 } })
+  res = await call(boss, 'GET', `/receipts/${conv._id}`)
+  ok(res.data.lines[0].billedCurrency === 'USD' && res.data.lines[0].billedAmount === 80, 'an older receipt is worked out from the student\'s billing when read', res.data.lines[0])
+  res = await call(boss, 'GET', `/receipts?${NOV}`)
+  ok(res.data.records.find(r => String(r._id) === String(conv._id))?.lines[0].billedCurrency === 'USD', 'and in the receipts list')
+  const gbp = res.data.records.find(r => r.currency === 'GBP')
+  ok(gbp.lines.every(l => l.billedCurrency === 'GBP' && l.billedAmount === l.amount), 'a receipt recorded in GBP stays as recorded')
 } catch (err) {
   fail++
   console.error('Smoke crashed:', err)
