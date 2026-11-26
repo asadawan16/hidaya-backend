@@ -88,9 +88,12 @@ const taskSchema = new mongoose.Schema({
   // Reminders (client, 26 Nov 2026). A dated task reminds its assignees on
   // the due day, and also `daysBefore` days ahead when set; `off` sends none.
   // A Recurring-column task reminds at 7 PM PKT on each of its days.
+  // `time` ('HH:MM', Pakistan time, client 27 Nov 2026) is when on those days
+  // the reminder goes out; '' = the start of the day (7 PM for Recurring).
   reminder: {
     off: { type: Boolean, default: false },
     daysBefore: { type: Number, min: 0, max: 7, default: 0 },
+    time: { type: String, default: '', match: /^(?:(?:[01]\d|2[0-3]):[0-5]\d)?$/ },
   },
   // Recurring column: the days of the week it is for (0 = Sunday). Empty =
   // every day. On other days it isn't reminded and has nothing to tick.

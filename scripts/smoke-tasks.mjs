@@ -352,6 +352,50 @@ try {
   ok(pkH >= 19 || pkH < 7 ? todayNotes === 1 : todayNotes === 0, `a reminder on its own day (${todayNotes} at ${pkH}:00 PKT)`)
   await Task.deleteMany({ _id: { $in: [notToday._id, isToday._id, allWeek._id] } })
 
+  // ── 2026-11-27: reminder time, the assignee's tasks awaiting approval ──
+  console.log('\nTasks: reminder time, awaiting approval')
+  const hm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+  const pkNowMin = (() => { const [h, m] = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date()).split(':').map(Number); return h * 60 + m })()
+  res = await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Timed', assignees: [String(tutor2._id)], reminder: { time: '09:30' } } }))
+  ok(res._json.reminder?.time === '09:30', 'a reminder time is saved')
+  const timed = res._json
+  res = await call(tasks.updateTask, reqAs(admin, MANAGE, { params: { id: String(timed._id) }, body: { reminder: { daysBefore: 1 } } }))
+  ok(res._json.reminder?.time === '09:30' && res._json.reminder?.daysBefore === 1, 'changing the reminder without a time keeps the time')
+  res = await call(tasks.updateTask, reqAs(admin, MANAGE, { params: { id: String(timed._id) }, body: { reminder: { time: '25:00' } } }))
+  ok(res._json.reminder?.time === '', 'a time that is not a time is dropped')
+  ok((res._json.activity || []).some(a => /remind/.test(a.text || '')), 'the history records the reminder change')
+  await Task.deleteOne({ _id: timed._id })
+
+  if (pkNowMin >= 60 && pkNowMin < 23 * 60) {
+    const later = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Later today', assignees: [String(tutor2._id)], dueDate: today.iso, allDay: true, reminder: { time: hm(pkNowMin + 45) } } })))._json
+    const earlier = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Earlier today', assignees: [String(tutor2._id)], dueDate: today.iso, allDay: true, reminder: { time: hm(pkNowMin - 45) } } })))._json
+    await tasks.runTaskDueReminders()
+    ok(!(await Notification.exists({ 'payload.taskId': String(later._id), type: 'task_due' })), 'a due-day reminder waits for its time')
+    ok(await Notification.countDocuments({ 'payload.taskId': String(earlier._id), type: 'task_due' }) === 1, 'and goes out once its time has come')
+    await Task.deleteMany({ _id: { $in: [later._id, earlier._id] } })
+  } else console.log('  (due-day time checks skipped near midnight PKT)')
+
+  const inShift = (pkNowMin - 7 * 60 + 1440) % 1440
+  if (inShift >= 60 && inShift < 1440 - 60) {
+    const atShift = (m) => hm((m + 7 * 60) % 1440)
+    const rLater = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Routine later', status: 'recurring', assignees: [String(tutor2._id)], reminder: { time: atShift(inShift + 45) } } })))._json
+    const rEarlier = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Routine earlier', status: 'recurring', assignees: [String(tutor2._id)], reminder: { time: atShift(inShift - 45) } } })))._json
+    await tasks.runTaskDueReminders()
+    ok(!(await Notification.exists({ 'payload.taskId': String(rLater._id), type: 'task_due' })) && !(await Task.findById(rLater._id)).dailyNotifiedOn, 'a routine reminder waits for its time (and is not marked sent)')
+    ok(await Notification.countDocuments({ 'payload.taskId': String(rEarlier._id), type: 'task_due' }) === 1, 'a routine reminder goes out at its own time, not only at 7 PM')
+    await Task.deleteMany({ _id: { $in: [rLater._id, rEarlier._id] } })
+  } else console.log('  (routine time checks skipped near 7 AM PKT)')
+
+  const wait = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Awaiting approval', assignees: [String(tutor2._id)] } })))._json
+  await call(tasks.updateTask, reqAs(tutor2, [], { params: { id: String(wait._id) }, body: { status: 'done' } }))
+  res = await call(tasks.myTaskSummary, reqAs(tutor2, [], {}))
+  ok(res._json.awaitingApproval.some(t => String(t._id) === String(wait._id)) && !res._json.tasks.concat(res._json.undated).some(t => String(t._id) === String(wait._id)),
+    "the assignee's summary lists it as awaiting approval, not as open work")
+  await call(tasks.updateTask, reqAs(admin, MANAGE, { params: { id: String(wait._id) }, body: { status: 'done' } }))
+  res = await call(tasks.myTaskSummary, reqAs(tutor2, [], {}))
+  ok(!res._json.awaitingApproval.some(t => String(t._id) === String(wait._id)), 'once approved it leaves that list')
+  await Task.deleteOne({ _id: wait._id })
+
   // Leads list: open-task count + soonest due date per lead
   await Task.updateOne({ _id: taskId }, { status: 'todo' })
   res = await call(leads.listLeads, reqAs(admin, ['student.create'], { query: {} }))

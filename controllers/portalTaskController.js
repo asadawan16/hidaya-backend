@@ -19,6 +19,7 @@
 //
 // Reminders: `reminder.off`, or `reminder.daysBefore` (0-7) for an early one
 // as well as the due-day one; Recurring-column tasks only on `recurDays`.
+// `reminder.time` ('HH:MM' PKT) is the time of day they go out.
 //
 // English tests: a task may carry an English Coach test (`coachTest`, set by
 // people with coach.review or coach.manage). Each assignee then gets the test
@@ -173,7 +174,13 @@ async function describeChanges(before, task) {
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const daysKey = (t) => [...(t.recurDays || [])].sort().join(',')
-const reminderKey = (t) => `${t.reminder?.off ? 'off' : 'on'}:${t.reminder?.daysBefore || 0}`
+const reminderKey = (t) => `${t.reminder?.off ? 'off' : 'on'}:${t.reminder?.daysBefore || 0}:${t.reminder?.time || ''}`
+const TIME_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/
+// '19:30' → '7:30 PM'
+const timeWords = (hm) => {
+  const [h, m] = hm.split(':').map(Number)
+  return `${h % 12 || 12}${m ? `:${String(m).padStart(2, '0')}` : ''} ${h < 12 ? 'AM' : 'PM'}`
+}
 const daysWords = (days) => {
   const list = [...new Set(days || [])].sort()
   if (!list.length || list.length === 7) return 'every day'
@@ -181,9 +188,11 @@ const daysWords = (days) => {
 }
 function reminderWords(t) {
   if (t.reminder?.off) return 'turned its reminders off'
+  const at = t.reminder?.time ? ` at ${timeWords(t.reminder.time)}` : ''
+  if (t.status === 'recurring') return `set its reminder${at || ' to 7 PM'}`
   const n = t.reminder?.daysBefore || 0
-  if (!n) return 'set it to remind on the due day'
-  return `set it to remind ${n === 1 ? 'a day' : `${n} days`} before and on the due day`
+  if (!n) return `set it to remind on the due day${at}`
+  return `set it to remind ${n === 1 ? 'a day' : `${n} days`} before and on the due day${at}`
 }
 // 'YYYY-MM-DD' → its day of the week (0 = Sunday)
 const weekdayOf = (iso) => new Date(`${iso}T00:00:00.000Z`).getUTCDay()
@@ -383,7 +392,8 @@ export async function myTaskSummary(req, res) {
     const open = { status: { $ne: 'done' } }
     // Review: the creator's own tasks, or (task.manage) everyone's
     const toReviewFilter = { status: 'review', ...(canSeeAll(req) ? {} : { createdBy: req.userId }) }
-    const [dated, undatedCount, undated, doneThisWeek, openCount, waitingOnMe, unowned, unownedCount, daily, toReview, toReviewCount] = await Promise.all([
+    const mineInReview = { assignees: req.userId, status: 'review' }
+    const [dated, undatedCount, undated, doneThisWeek, openCount, waitingOnMe, unowned, unownedCount, daily, toReview, toReviewCount, awaitingApproval] = await Promise.all([
       Task.find({ ...base, dueDate: { $ne: null, $lte: horizon } }).select(LIST_SELECT).populate(POPULATE).sort({ dueDate: 1 }).limit(100).lean(),
       Task.countDocuments({ ...base, dueDate: null }),
       Task.find({ ...base, dueDate: null }).select(LIST_SELECT).populate(POPULATE).sort({ createdAt: -1 }).limit(10).lean(),
@@ -395,12 +405,14 @@ export async function myTaskSummary(req, res) {
       Task.find({ assignees: req.userId, status: 'recurring' }).select(LIST_SELECT).populate(POPULATE).sort({ order: 1 }).limit(30).lean(),
       Task.find(toReviewFilter).select(LIST_SELECT).populate(POPULATE).sort({ updatedAt: 1 }).limit(8).lean(),
       Task.countDocuments(toReviewFilter),
+      // Mine, marked done and not approved yet: the pop-up keeps them in view
+      Task.find(mineInReview).select(LIST_SELECT).populate(POPULATE).sort({ updatedAt: -1 }).limit(10).lean(),
     ])
     res.json({
       tasks: dated, undated, undatedCount, openCount, doneThisWeek, waitingOnMe, unowned, unownedCount,
       // Only the routine tasks that are for today
       daily: daily.map(t => withToday(t)).filter(t => t.dayOn),
-      toReview, toReviewCount,
+      toReview, toReviewCount, awaitingApproval,
       fresh: await freshlyAssigned(req.userId),
     })
   } catch (err) {
@@ -466,7 +478,9 @@ function applyFields(task, body, { creating, canLeads }) {
   if (cl) task.checklist = cl
   if (body.reminder !== undefined) {
     const r = body.reminder || {}
-    task.reminder = { off: !!r.off, daysBefore: Math.min(7, Math.max(0, parseInt(r.daysBefore, 10) || 0)) }
+    // A missing time keeps the one already set, so an older client can't wipe it.
+    const time = r.time === undefined ? (task.reminder?.time || '') : (TIME_RE.test(String(r.time)) ? String(r.time) : '')
+    task.reminder = { off: !!r.off, daysBefore: Math.min(7, Math.max(0, parseInt(r.daysBefore, 10) || 0)), time }
   }
   if (body.recurDays !== undefined) {
     const days = [...new Set((Array.isArray(body.recurDays) ? body.recurDays : []).map(Number).filter(d => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
@@ -1136,18 +1150,26 @@ const withToday = (t, day = shiftDay()) => (t ? {
   dayOn: t.status === 'recurring' && isOnDay(t, day),
 } : t)
 
-// The daily reminder for Recurring tasks goes out an hour before the shift
-// starts (7 PM PKT), or straight away if the server starts mid-shift.
-const DAILY_REMINDER_HOUR = 19
+// The daily reminder for Recurring tasks goes out at the task's reminder
+// time, by default an hour before the shift starts (7 PM PKT) — or straight
+// away if the server starts later in the shift.
+const DAILY_REMINDER_TIME = '19:00'
+const PK_HM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+// Minutes since midnight, Pakistan time.
+const pkMinutes = (d) => { const [h, m] = PK_HM.format(d).split(':').map(Number); return h * 60 + m }
+const minutesOf = (hm) => { const [h, m] = hm.split(':').map(Number); return h * 60 + m }
+// Minutes into the shift day, which starts at 7 AM (so 2 AM comes after 7 PM).
+const shiftMinutes = (min) => (min - SHIFT_WRAP_HOUR * 60 + 1440) % 1440
 
 async function sendDailyReminders() {
   const now = new Date()
-  const hour = pkHour(now)
-  if (hour < DAILY_REMINDER_HOUR && hour >= SHIFT_WRAP_HOUR) return
   const day = shiftDay(now)
+  const nowInShift = shiftMinutes(pkMinutes(now))
   const tasks = await Task.find({ status: 'recurring', 'assignees.0': { $exists: true }, dailyNotifiedOn: { $ne: day } })
     .select('title assignees dailyCheckedOn recurDays reminder').lean()
   for (const t of tasks) {
+    // Not yet: its time in this shift hasn't come.
+    if (nowInShift < shiftMinutes(minutesOf(t.reminder?.time || DAILY_REMINDER_TIME))) continue
     await Task.updateOne({ _id: t._id }, { dailyNotifiedOn: day })
     // Only on its own days ("every Wednesday"), and not when reminders are off.
     if (t.dailyCheckedOn === day || t.reminder?.off || !isOnDay(t, day)) continue
@@ -1169,6 +1191,7 @@ async function sendDailyReminders() {
 // announced, so rescheduling a task announces it again on the new day.
 // A task with reminder.daysBefore also gets one early reminder, from that many
 // days ahead (earlyNotifiedFor, same idea); reminder.off sends neither.
+// reminder.time holds both back until that time (Pakistan) on the day.
 // Tasks in Review are the reviewer's, so they aren't chased either.
 let jobRunning = false
 export async function runTaskDueReminders() {
@@ -1178,6 +1201,7 @@ export async function runTaskDueReminders() {
     const todayPk = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date())
     const now = Date.now()
     await sendDailyReminders()
+    const nowMin = pkMinutes(new Date(now))
     const tasks = await Task.find({
       status: { $nin: ['done', 'recurring', 'review'] },
       dueDate: { $gte: new Date(now - 36 * 3600000), $lte: new Date(now + (7 * 24 + 36) * 3600000) },
@@ -1190,6 +1214,8 @@ export async function runTaskDueReminders() {
         : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date(t.dueDate))
       const ahead = Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${todayPk}T00:00:00Z`)) / 86400000)
       const early = t.reminder?.daysBefore || 0
+      // A reminder time waits for that time of day (none = as the day starts).
+      if (t.reminder?.time && nowMin < minutesOf(t.reminder.time) && ahead >= 0 && ahead <= early) continue
       if (ahead > 0 && ahead <= early) {
         if (t.earlyNotifiedFor && new Date(t.earlyNotifiedFor).getTime() === new Date(t.dueDate).getTime()) continue
         await Task.updateOne({ _id: t._id }, { earlyNotifiedFor: t.dueDate })
