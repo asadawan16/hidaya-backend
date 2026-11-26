@@ -152,6 +152,7 @@ export const EXCLUDED = [
   { model: 'WhatsappConnection', reason: 'holds the encrypted WhatsApp API token; reconnect from the portal' },
   { model: 'WhatsappChat', reason: 'chat-list summary derived from the WhatsApp messages; rebuilt automatically' },
   { model: 'DataExport', reason: 'the history of these exports' },
+  { model: 'Counter', reason: 'receipt-number high-water marks; restarted from the highest receipt number on restore' },
 ]
 
 // The reminder pops when the newest export is older than this.

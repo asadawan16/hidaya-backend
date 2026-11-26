@@ -118,6 +118,10 @@ const taskSchema = new mongoose.Schema({
 
   completedAt: { type: Date },
   completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  // Who marked it done and sent it to Review, and when (a shared task has
+  // several assignees; the reviewer is told which one).
+  submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  submittedAt: { type: Date },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   createdByName: { type: String, trim: true, default: '' },
 

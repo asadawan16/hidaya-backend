@@ -16,6 +16,7 @@ import Family from '../models/Family.js'
 import StudentFeeRecord from '../models/StudentFeeRecord.js'
 import FeeTrackerEntry from '../models/FeeTrackerEntry.js'
 import FeeTrackerReceipt from '../models/FeeTrackerReceipt.js'
+import Counter from '../models/Counter.js'
 import { logActivity } from '../utils/activityLogger.js'
 
 // The portal's fee records begin in January 2026 (when the fee sheet was
@@ -601,13 +602,19 @@ export async function updateEntry(req, res) {
   }
 }
 
-// FT-2026-0001, numbered per year. A clash (two saves at once) retries.
+// FT-2026-0001, numbered per year. The number comes from a counter that only
+// goes up, so a deleted receipt's number is never given to another payment
+// (it may already be in a parent's hands). The counter starts from the
+// highest number already issued. A clash (two saves at once) retries.
 async function nextReceiptNo(year) {
   const prefix = `FT-${year}-`
+  const key = `fee-tracker-receipt-${year}`
   const last = await FeeTrackerReceipt.findOne({ receiptNo: { $regex: `^${prefix}\\d+$` } })
     .sort({ receiptNo: -1 }).select('receiptNo').lean()
-  const n = last ? parseInt(last.receiptNo.slice(prefix.length), 10) + 1 : 1
-  return `${prefix}${String(n).padStart(4, '0')}`
+  const issued = last ? parseInt(last.receiptNo.slice(prefix.length), 10) || 0 : 0
+  await Counter.updateOne({ key }, { $max: { seq: issued } }, { upsert: true })
+  const c = await Counter.findOneAndUpdate({ key }, { $inc: { seq: 1 } }, { new: true }).lean()
+  return `${prefix}${String(c.seq).padStart(4, '0')}`
 }
 
 // POST /portal/fee-tracker/receipts — mark a payment received. One payment can

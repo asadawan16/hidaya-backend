@@ -387,7 +387,8 @@ try {
   } else console.log('  (routine time checks skipped near 7 AM PKT)')
 
   const wait = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Awaiting approval', assignees: [String(tutor2._id)] } })))._json
-  await call(tasks.updateTask, reqAs(tutor2, [], { params: { id: String(wait._id) }, body: { status: 'done' } }))
+  res = await call(tasks.updateTask, reqAs(tutor2, [], { params: { id: String(wait._id) }, body: { status: 'done' } }))
+  ok(String(res._json.submittedBy?._id) === String(tutor2._id) && res._json.submittedAt, 'it records who sent it for review')
   res = await call(tasks.myTaskSummary, reqAs(tutor2, [], {}))
   ok(res._json.awaitingApproval.some(t => String(t._id) === String(wait._id)) && !res._json.tasks.concat(res._json.undated).some(t => String(t._id) === String(wait._id)),
     "the assignee's summary lists it as awaiting approval, not as open work")

@@ -288,6 +288,15 @@ try {
   ok(r1.state === 'sent' && r1.owedTotal === 19000, 'family 1 is back to "link sent" and owing')
   ok(rowOf(b, 'HID50').owedTotal === 40000, 'the solo student owes November again')
   ok((await call(boss, 'DELETE', `/receipts/${rec1._id}`)).status === 404, 'deleting twice → 404')
+
+  // A deleted receipt's number may already be with a parent: never reuse it.
+  const last = (await call(boss, 'GET', `/receipts?${NOV}`)).data.records.find(r => r.receiptNo === 'FT-2026-0002')
+  ok((await call(boss, 'DELETE', `/receipts/${last._id}`)).status === 200, 'remove the newest receipt (0002)')
+  res = await call(boss, 'POST', '/receipts', {
+    year: 2026, month: 11, groupKey: r2.key, currency: 'GBP',
+    lines: [{ studentId: faliq._id, months: [{ year: 2026, month: 12 }], amount: 30 }],
+  })
+  ok(res.status === 201 && res.data.receiptNo === 'FT-2026-0003', 'the next receipt is 0003, not the deleted 0002', res.data?.receiptNo)
 } catch (err) {
   fail++
   console.error('Smoke crashed:', err)

@@ -62,6 +62,7 @@ const POPULATE = [
   { path: 'assignees', select: 'displayName email linkedStudentId roles', populate: { path: 'roles', select: 'key name' } },
   { path: 'watchers', select: 'displayName email' },
   { path: 'waiting.userId', select: 'displayName email' },
+  { path: 'submittedBy', select: 'displayName email' },
   { path: 'leadId', select: 'name phone email status' },
   { path: 'studentId', select: 'name rollNo' },
   { path: 'goalId', select: 'title period startDate endDate' },
@@ -523,6 +524,7 @@ function setStatus(task, status, userId) {
   if (status === 'done' && task.waiting?.on) task.waiting = { on: false, reason: '', who: '' }
   if (status === 'done') { task.completedAt = new Date(); task.completedBy = userId }
   else { task.completedAt = undefined; task.completedBy = undefined }
+  if (status === 'review') { task.submittedBy = userId; task.submittedAt = new Date() }
   return true
 }
 
