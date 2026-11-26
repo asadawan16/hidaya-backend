@@ -12,6 +12,14 @@
 // Student accounts never hold task.create / task.manage in effect: they only
 // see and work the tasks assigned to them.
 //
+// Review (client, 26 Nov 2026): an assignee who can't edit the task (not its
+// creator, no task.manage) doesn't finish it. Their "Mark as done" puts it in
+// Review and tells the creator and every task.manage holder, who move it to
+// Done or send it back. Student accounts still tick their own homework done.
+//
+// Reminders: `reminder.off`, or `reminder.daysBefore` (0-7) for an early one
+// as well as the due-day one; Recurring-column tasks only on `recurDays`.
+//
 // English tests: a task may carry an English Coach test (`coachTest`, set by
 // people with coach.review or coach.manage). Each assignee then gets the test
 // on their English Coach Practice tab (services/coachProgress.js keeps the
@@ -59,6 +67,9 @@ const POPULATE = [
 ]
 // The board and lists don't need a task's whole history.
 const LIST_SELECT = '-activity'
+
+// An assignee who can't approve their own work sends it for review instead.
+const needsReview = (req, rel) => !rel.full && !isStudentOnly(req)
 
 const mineFilter = (userId) => ({ $or: [{ assignees: userId }, { createdBy: userId }, { watchers: userId }] })
 
@@ -130,7 +141,7 @@ function addActivity(task, user, text) {
 async function describeChanges(before, task) {
   const lines = []
   if (before.title !== task.title) lines.push(`renamed it to "${task.title}"`)
-  if (before.status !== task.status) lines.push(`moved it to ${STATUS_WORDS[task.status] || task.status}`)
+  if (before.status !== task.status) lines.push(task.status === 'review' ? 'marked it done and sent it for review' : `moved it to ${STATUS_WORDS[task.status] || task.status}`)
   if (before.priority !== task.priority) lines.push(`set priority to ${task.priority}`)
   const due = (d) => (d ? new Date(d).getTime() : 0)
   if (due(before.dueDate) !== due(task.dueDate)) lines.push(task.dueDate ? `set the due date to ${dateLabel(task)}` : 'removed the due date')
@@ -153,12 +164,36 @@ async function describeChanges(before, task) {
   if (!before.waitingOn && task.waiting?.on) lines.push(`marked it waiting${task.waiting.who ? ` on ${task.waiting.who}` : ''}${task.waiting.reason ? `: ${task.waiting.reason}` : ''}`)
   if (before.waitingOn && !task.waiting?.on) lines.push('marked it no longer waiting')
   if (before.repeatFreq !== (task.repeat?.freq || '')) lines.push(task.repeat?.freq ? `set it to repeat ${task.repeat.freq}` : 'stopped it repeating')
+  if (before.recurDays !== daysKey(task)) lines.push(`set it for ${daysWords(task.recurDays)}`)
+  if (before.reminder !== reminderKey(task)) lines.push(reminderWords(task))
   return lines
 }
+
+// ─── Reminders ───
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const daysKey = (t) => [...(t.recurDays || [])].sort().join(',')
+const reminderKey = (t) => `${t.reminder?.off ? 'off' : 'on'}:${t.reminder?.daysBefore || 0}`
+const daysWords = (days) => {
+  const list = [...new Set(days || [])].sort()
+  if (!list.length || list.length === 7) return 'every day'
+  return list.map(d => `${DAY_NAMES[d]}s`).join(', ')
+}
+function reminderWords(t) {
+  if (t.reminder?.off) return 'turned its reminders off'
+  const n = t.reminder?.daysBefore || 0
+  if (!n) return 'set it to remind on the due day'
+  return `set it to remind ${n === 1 ? 'a day' : `${n} days`} before and on the due day`
+}
+// 'YYYY-MM-DD' → its day of the week (0 = Sunday)
+const weekdayOf = (iso) => new Date(`${iso}T00:00:00.000Z`).getUTCDay()
+// A Recurring-column task is "on" today when today is one of its days.
+const isOnDay = (t, day) => !(t.recurDays?.length) || t.recurDays.includes(weekdayOf(day))
 const snapshot = (t) => ({
   title: t.title, status: t.status, priority: t.priority, dueDate: t.dueDate,
   assignees: (t.assignees || []).map(a => String(a?._id || a)),
   waitingOn: !!t.waiting?.on, waitingUser: String(t.waiting?.userId || ''), repeatFreq: t.repeat?.freq || '',
+  recurDays: daysKey(t), reminder: reminderKey(t),
   coachTest: t.coachTest?.scenarioKey ? JSON.stringify(t.coachTest) : '',
 })
 
@@ -342,10 +377,13 @@ export async function listTasks(req, res) {
 export async function myTaskSummary(req, res) {
   try {
     const horizon = new Date(Date.now() + 8 * 86400000)
-    // Recurring-column tasks are listed on their own ("every day"), not by date.
-    const base = { assignees: req.userId, status: { $nin: ['done', 'recurring'] } }
+    // Recurring-column tasks are listed on their own (on their days), not by
+    // date; ones sent for review are the reviewer's now, not the assignee's.
+    const base = { assignees: req.userId, status: { $nin: ['done', 'recurring', 'review'] } }
     const open = { status: { $ne: 'done' } }
-    const [dated, undatedCount, undated, doneThisWeek, openCount, waitingOnMe, unowned, unownedCount, daily] = await Promise.all([
+    // Review: the creator's own tasks, or (task.manage) everyone's
+    const toReviewFilter = { status: 'review', ...(canSeeAll(req) ? {} : { createdBy: req.userId }) }
+    const [dated, undatedCount, undated, doneThisWeek, openCount, waitingOnMe, unowned, unownedCount, daily, toReview, toReviewCount] = await Promise.all([
       Task.find({ ...base, dueDate: { $ne: null, $lte: horizon } }).select(LIST_SELECT).populate(POPULATE).sort({ dueDate: 1 }).limit(100).lean(),
       Task.countDocuments({ ...base, dueDate: null }),
       Task.find({ ...base, dueDate: null }).select(LIST_SELECT).populate(POPULATE).sort({ createdAt: -1 }).limit(10).lean(),
@@ -355,10 +393,14 @@ export async function myTaskSummary(req, res) {
       canSeeAll(req) ? Task.find({ ...open, assignees: { $size: 0 } }).select(LIST_SELECT).populate(POPULATE).sort({ dueDate: 1, createdAt: -1 }).limit(8).lean() : [],
       canSeeAll(req) ? Task.countDocuments({ ...open, assignees: { $size: 0 } }) : 0,
       Task.find({ assignees: req.userId, status: 'recurring' }).select(LIST_SELECT).populate(POPULATE).sort({ order: 1 }).limit(30).lean(),
+      Task.find(toReviewFilter).select(LIST_SELECT).populate(POPULATE).sort({ updatedAt: 1 }).limit(8).lean(),
+      Task.countDocuments(toReviewFilter),
     ])
     res.json({
       tasks: dated, undated, undatedCount, openCount, doneThisWeek, waitingOnMe, unowned, unownedCount,
-      daily: daily.map(t => withToday(t)),
+      // Only the routine tasks that are for today
+      daily: daily.map(t => withToday(t)).filter(t => t.dayOn),
+      toReview, toReviewCount,
       fresh: await freshlyAssigned(req.userId),
     })
   } catch (err) {
@@ -422,6 +464,14 @@ function applyFields(task, body, { creating, canLeads }) {
   if (body.tags !== undefined) task.tags = (Array.isArray(body.tags) ? body.tags : []).map(t => String(t).trim()).filter(Boolean).slice(0, 10)
   const cl = cleanChecklist(body.checklist)
   if (cl) task.checklist = cl
+  if (body.reminder !== undefined) {
+    const r = body.reminder || {}
+    task.reminder = { off: !!r.off, daysBefore: Math.min(7, Math.max(0, parseInt(r.daysBefore, 10) || 0)) }
+  }
+  if (body.recurDays !== undefined) {
+    const days = [...new Set((Array.isArray(body.recurDays) ? body.recurDays : []).map(Number).filter(d => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
+    task.recurDays = days.length === 7 ? [] : days
+  }
   if (body.repeat !== undefined) {
     const r = body.repeat || {}
     if (!REPEAT_FREQS.includes(r.freq)) {
@@ -471,6 +521,59 @@ async function notifyDone(task, req) {
       body: `${req.user.displayName || 'Someone'} marked it done`,
       payload: { taskId: String(task._id) },
     })
+  }
+}
+
+// The creator and everyone holding task.manage: the people who can move a
+// task out of Review.
+async function reviewerIds(task, actorId) {
+  const roles = await Role.find({ permissions: 'task.manage', key: { $ne: 'student' } }).select('_id').lean()
+  const managers = roles.length
+    ? await User.find({ roles: { $in: roles.map(r => r._id) }, status: 'active' }).select('_id').lean()
+    : []
+  return [...new Set([task.createdBy, ...managers.map(u => u._id)].filter(Boolean).map(String))]
+    .filter(id => id !== String(actorId))
+}
+
+async function notifyReview(task, req) {
+  for (const uid of await reviewerIds(task, req.userId)) {
+    await createNotification({
+      userId: uid,
+      type: 'task_updated',
+      title: `To check: ${task.title}`,
+      body: `${req.user.displayName || 'Someone'} marked it done. Move it to Done, or send it back.`,
+      payload: { taskId: String(task._id) },
+    })
+  }
+}
+
+// Out of Review: the assignees hear whether it was accepted or sent back.
+async function notifyReviewed(task, req, accepted) {
+  const ids = (task.assignees || []).map(String).filter(id => id !== String(req.userId))
+  for (let i = 0; i < ids.length; i += 25) {
+    await Promise.all(ids.slice(i, i + 25).map(uid => createNotification({
+      userId: uid,
+      type: 'task_updated',
+      title: accepted ? `Approved: ${task.title}` : `Sent back: ${task.title}`,
+      body: accepted
+        ? `${req.user.displayName || 'Someone'} checked it and moved it to Done`
+        : `${req.user.displayName || 'Someone'} moved it back to ${STATUS_WORDS[task.status]}. Open it to see the comments.`,
+      payload: { taskId: String(task._id) },
+    })))
+  }
+}
+
+// After a status change: tell whoever needs to know, and make the next
+// repeat (or take it back).
+async function afterStatusChange(task, from, req, rel) {
+  if (from === task.status) return
+  if (task.status === 'review' && needsReview(req, rel)) await notifyReview(task, req)
+  if (from === 'review' && rel.full && task.status !== 'recurring') await notifyReviewed(task, req, task.status === 'done')
+  if (task.status === 'done') {
+    await notifyDone(task, req)
+    await spawnNextIfRepeating(task, req.user)
+  } else if (from === 'done') {
+    await retractNextIfUntouched(task)
   }
 }
 
@@ -542,9 +645,13 @@ export async function updateTask(req, res) {
     if (body.status === 'done' && before.status !== 'done' && !rel.full && task.coachTest?.scenarioKey && await taskTestPending(task._id)) {
       return res.status(409).json({ code: 'test_pending', error: 'This task finishes itself when the English test is passed. Open the test from the task.' })
     }
-    if (body.status !== undefined) setStatus(task, body.status, req.userId)
+    if (body.status !== undefined) {
+      // An assignee's "done" goes to Review for the creator / a manager to check.
+      const wanted = body.status === 'done' && before.status !== 'done' && needsReview(req, rel) ? 'review' : body.status
+      setStatus(task, wanted, req.userId)
+    }
     // Recurring column: "Checked today" (stops today's reminder).
-    if (body.checkedToday !== undefined && task.status === 'recurring') {
+    if (body.checkedToday !== undefined && task.status === 'recurring' && isOnDay(task, shiftDay())) {
       const day = shiftDay()
       if (body.checkedToday && task.dailyCheckedOn !== day) {
         task.dailyCheckedOn = day; task.dailyCheckedBy = req.userId
@@ -561,12 +668,7 @@ export async function updateTask(req, res) {
     const added = task.assignees.map(String).filter(id => !before.assignees.includes(id))
     if (added.length) await notifyAssigned(task, added, req.user)
     if (task.waiting?.on && (!before.waitingOn || String(task.waiting.userId || '') !== before.waitingUser)) await notifyWaiting(task, req.user)
-    if (before.status !== 'done' && task.status === 'done') {
-      await notifyDone(task, req)
-      await spawnNextIfRepeating(task, req.user)
-    } else if (before.status === 'done' && task.status !== 'done') {
-      await retractNextIfUntouched(task)
-    }
+    await afterStatusChange(task, before.status, req, rel)
     const populated = await Task.findById(task._id).populate(POPULATE).populate('repeatOf', 'title dueDate').lean()
     pushLive([...involved(task), ...before.assignees], 'task_changed', { taskId: String(task._id) })
     res.json(withToday(populated))
@@ -591,16 +693,15 @@ export async function reorderTasks(req, res) {
       if (!t) continue
       const rel = relation(req, t)
       if (!rel.full && !rel.assignee) continue
-      const wasDone = t.status === 'done'
-      if (status === 'done' && !wasDone && !rel.full && t.coachTest?.scenarioKey && await taskTestPending(t._id)) continue
-      const moved = setStatus(t, status, req.userId)
-      if (moved) addActivity(t, req.user, `moved it to ${STATUS_WORDS[status]}`)
+      const from = t.status
+      if (status === 'done' && from !== 'done' && !rel.full && t.coachTest?.scenarioKey && await taskTestPending(t._id)) continue
+      // An assignee's drop on Done sends it for review instead.
+      const target = status === 'done' && from !== 'done' && needsReview(req, rel) ? 'review' : status
+      const moved = setStatus(t, target, req.userId)
+      if (moved) addActivity(t, req.user, target === 'review' && status === 'done' ? 'marked it done and sent it for review' : `moved it to ${STATUS_WORDS[target]}`)
       t.order = i
       if (t.isModified()) { await t.save(); touched.push(t) }
-      if (!wasDone && t.status === 'done') {
-        await notifyDone(t, req)
-        await spawnNextIfRepeating(t, req.user)
-      } else if (wasDone && t.status !== 'done') await retractNextIfUntouched(t)
+      await afterStatusChange(t, from, req, rel)
     }
     pushLive(touched.flatMap(involved), 'task_changed', {})
     res.json({ ok: true, updated: touched.length })
@@ -1027,8 +1128,13 @@ const pkHour = (d) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/
 function shiftDay(now = new Date()) {
   return PK_DAY.format(pkHour(now) < SHIFT_WRAP_HOUR ? new Date(now.getTime() - 86400000) : now)
 }
-// checkedToday: a Recurring task's "Checked today" tick for the current shift.
-const withToday = (t, day = shiftDay()) => (t ? { ...t, checkedToday: t.status === 'recurring' && t.dailyCheckedOn === day } : t)
+// checkedToday: a Recurring task's "Checked today" tick for the current shift;
+// dayOn: whether the current shift is one of its days.
+const withToday = (t, day = shiftDay()) => (t ? {
+  ...t,
+  checkedToday: t.status === 'recurring' && t.dailyCheckedOn === day,
+  dayOn: t.status === 'recurring' && isOnDay(t, day),
+} : t)
 
 // The daily reminder for Recurring tasks goes out an hour before the shift
 // starts (7 PM PKT), or straight away if the server starts mid-shift.
@@ -1040,16 +1146,17 @@ async function sendDailyReminders() {
   if (hour < DAILY_REMINDER_HOUR && hour >= SHIFT_WRAP_HOUR) return
   const day = shiftDay(now)
   const tasks = await Task.find({ status: 'recurring', 'assignees.0': { $exists: true }, dailyNotifiedOn: { $ne: day } })
-    .select('title assignees dailyCheckedOn').lean()
+    .select('title assignees dailyCheckedOn recurDays reminder').lean()
   for (const t of tasks) {
     await Task.updateOne({ _id: t._id }, { dailyNotifiedOn: day })
-    if (t.dailyCheckedOn === day) continue
+    // Only on its own days ("every Wednesday"), and not when reminders are off.
+    if (t.dailyCheckedOn === day || t.reminder?.off || !isOnDay(t, day)) continue
     for (const uid of t.assignees) {
       await createNotification({
         userId: uid,
         type: 'task_due',
         title: `Today: ${t.title}`,
-        body: 'A daily task. Look at it today, then tick "Checked today".',
+        body: `A routine task (${daysWords(t.recurDays)}). Do it today, then tick "Done for today".`,
         payload: { taskId: String(t._id) },
       })
     }
@@ -1060,6 +1167,9 @@ async function sendDailyReminders() {
 // Runs every 15 minutes. All-day tasks fall due on their date; timed tasks on
 // their Pakistan-time date. dueNotifiedFor remembers which due date was
 // announced, so rescheduling a task announces it again on the new day.
+// A task with reminder.daysBefore also gets one early reminder, from that many
+// days ahead (earlyNotifiedFor, same idea); reminder.off sends neither.
+// Tasks in Review are the reviewer's, so they aren't chased either.
 let jobRunning = false
 export async function runTaskDueReminders() {
   if (jobRunning) return
@@ -1069,14 +1179,31 @@ export async function runTaskDueReminders() {
     const now = Date.now()
     await sendDailyReminders()
     const tasks = await Task.find({
-      status: { $nin: ['done', 'recurring'] },
-      dueDate: { $gte: new Date(now - 36 * 3600000), $lte: new Date(now + 36 * 3600000) },
+      status: { $nin: ['done', 'recurring', 'review'] },
+      dueDate: { $gte: new Date(now - 36 * 3600000), $lte: new Date(now + (7 * 24 + 36) * 3600000) },
       'assignees.0': { $exists: true },
+      'reminder.off': { $ne: true },
     }).lean()
     for (const t of tasks) {
       const day = t.allDay
         ? new Date(t.dueDate).toISOString().slice(0, 10)
         : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date(t.dueDate))
+      const ahead = Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${todayPk}T00:00:00Z`)) / 86400000)
+      const early = t.reminder?.daysBefore || 0
+      if (ahead > 0 && ahead <= early) {
+        if (t.earlyNotifiedFor && new Date(t.earlyNotifiedFor).getTime() === new Date(t.dueDate).getTime()) continue
+        await Task.updateOne({ _id: t._id }, { earlyNotifiedFor: t.dueDate })
+        for (const uid of t.assignees) {
+          await createNotification({
+            userId: uid,
+            type: 'task_upcoming',
+            title: `${ahead === 1 ? 'Due tomorrow' : `Due in ${ahead} days`}: ${t.title}`,
+            body: `Due ${dateLabel(t)}. A reminder so there is time to get it done.`,
+            payload: { taskId: String(t._id) },
+          })
+        }
+        continue
+      }
       if (day !== todayPk) continue
       if (t.dueNotifiedFor && new Date(t.dueNotifiedFor).getTime() === new Date(t.dueDate).getTime()) continue
       await Task.updateOne({ _id: t._id }, { dueNotifiedFor: t.dueDate })

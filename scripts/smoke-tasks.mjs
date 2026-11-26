@@ -2,6 +2,8 @@
 // branch, Nov 2026): permissions and who sees what, notifications, reorder,
 // goals, the due-today job, repeats, waiting on, mentions, bulk changes with
 // undo, restore, saved views, the Recurring column, and lead task counts.
+// 26 Nov 2026: an assignee's "done" goes to Review, reminder settings (off /
+// days before), and Recurring tasks on chosen days of the week.
 //
 // Runs against a THROWAWAY database (dbName hidaya_smoke_tasks) on the
 // cluster MONGODB_URI names, and drops it afterwards. No running server needed.
@@ -51,6 +53,9 @@ try {
     return User.findById(u._id).populate('roles')
   }
   const admin = await mk('a@x.test', 'Admin One', rAdmin)
+  // A manager by role (task.manage), who hears about tasks sent for review
+  const rPrincipal = await Role.create({ key: 'principal', name: 'Principal', permissions: ['task.manage'] })
+  const principal = await mk('p@x.test', 'Principal One', rPrincipal)
   const tutor = await mk('t@x.test', 'Tutor One', rTutor)
   const tutor2 = await mk('t2@x.test', 'Tutor Two', rTutor)
   const today = karachiToday()
@@ -133,7 +138,7 @@ try {
   await User.create({ email: 'gone@x.test', password: 'secret123', displayName: 'Gone Tutor', roles: [rTutor._id], status: 'suspended' })
   const groupIds = async (kind) => (await call(groups.pickAssigneeGroup, reqAs(admin, MANAGE, { query: { kind } })))._json.map(u => String(u._id)).sort()
   ok(JSON.stringify(await groupIds('tutor')) === JSON.stringify([tutor, tutor2].map(u => String(u._id)).sort()), 'all tutors: active tutor-only accounts')
-  ok(JSON.stringify(await groupIds('staff')) === JSON.stringify([admin, both].map(u => String(u._id)).sort()), 'all staff: everyone else, incl. a tutor who also holds another role')
+  ok(JSON.stringify(await groupIds('staff')) === JSON.stringify([admin, principal, both].map(u => String(u._id)).sort()), 'all staff: everyone else, incl. a tutor who also holds another role')
   ok(JSON.stringify(await groupIds('student')) === JSON.stringify([String(stuUser._id)]), 'all students: student accounts')
   res = await call(groups.pickAssigneeGroup, reqAs(admin, MANAGE, { query: { kind: 'everyone' } }))
   ok(res._status === 400, 'an unknown group is refused')
@@ -156,11 +161,22 @@ try {
   const rep = res._json
   ok(rep.repeat?.freq === 'weekly', 'repeat saved')
   res = await call(tasks.updateTask, reqAs(tutor, [], { params: { id: String(rep._id) }, body: { status: 'done' } }))
+  ok(res._status === 200 && res._json.status === 'review', "a tutor's \"done\" sends the task for review")
+  ok(await Task.countDocuments({ repeatOf: rep._id }) === 0, '…which makes no copy of a repeating task yet')
+  ok(await Notification.countDocuments({ userId: admin._id, title: 'To check: Weekly test' }) === 1
+    && await Notification.countDocuments({ userId: principal._id, title: 'To check: Weekly test' }) === 1
+    && !(await Notification.exists({ userId: tutor._id, title: 'To check: Weekly test' })), 'the creator and every task.manage holder are asked to check it')
+  res = await call(tasks.myTaskSummary, reqAs(tutor, [], {}))
+  ok(!res._json.tasks.concat(res._json.undated).some(t => String(t._id) === String(rep._id)), "it leaves the tutor's open work")
+  res = await call(tasks.myTaskSummary, reqAs(principal, ['task.manage'], {}))
+  ok(res._json.toReview.some(t => String(t._id) === String(rep._id)) && res._json.toReviewCount === 1, 'and shows on a manager\'s "to check" list')
+  res = await call(tasks.updateTask, reqAs(admin, MANAGE, { params: { id: String(rep._id) }, body: { status: 'done' } }))
   let nextRep = await Task.findOne({ repeatOf: rep._id }).lean()
-  ok(nextRep && nextRep.status === 'todo' && new Date(nextRep.dueDate).toISOString().slice(0, 10) === addDaysIso(today.iso, 7) && nextRep.checklist[0].done === false, 'finishing a weekly task makes next week\'s, checklist unticked')
-  await call(tasks.updateTask, reqAs(tutor, [], { params: { id: String(rep._id) }, body: { status: 'todo' } }))
+  ok(res._json.status === 'done' && nextRep && nextRep.status === 'todo' && new Date(nextRep.dueDate).toISOString().slice(0, 10) === addDaysIso(today.iso, 7) && nextRep.checklist[0].done === false, 'the creator moves it to Done, which makes next week\'s, checklist unticked')
+  ok(await Notification.countDocuments({ userId: tutor._id, title: 'Approved: Weekly test' }) === 1, 'the tutor hears it was approved')
+  await call(tasks.updateTask, reqAs(admin, MANAGE, { params: { id: String(rep._id) }, body: { status: 'todo' } }))
   ok(await Task.countDocuments({ repeatOf: rep._id }) === 0, 'un-finishing it takes back the untouched copy')
-  await call(tasks.updateTask, reqAs(tutor, [], { params: { id: String(rep._id) }, body: { status: 'done' } }))
+  await call(tasks.updateTask, reqAs(admin, MANAGE, { params: { id: String(rep._id) }, body: { status: 'done' } }))
   ok(await Task.countDocuments({ repeatOf: rep._id }) === 1, 'finishing it again makes exactly one copy')
   nextRep = await Task.findOne({ repeatOf: rep._id }).lean()
 
@@ -288,6 +304,53 @@ try {
   ok(res._status === 200 && res._json.checkedToday === true && res._json.status === 'recurring', 'an assignee ticks "Checked today"; it stays recurring')
   res = await call(tasks.listTasks, reqAs(tutor, [], {}))
   ok(res._json.records.find(t => String(t._id) === dailyId)?.checkedToday === true, 'the board shows it checked')
+
+  // ── 2026-11-26: review, reminder settings, routine days ──
+  console.log('\nTasks: review, reminders, routine days')
+  res = await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Check the kit', assignees: [String(tutor2._id)] } }))
+  const rv = res._json
+  res = await call(tasks.reorderTasks, reqAs(tutor2, [], { body: { status: 'done', ids: [String(rv._id)] } }))
+  ok((await Task.findById(rv._id)).status === 'review', 'dragging to Done also sends it for review')
+  res = await call(tasks.updateTask, reqAs(principal, ['task.manage'], { params: { id: String(rv._id) }, body: { status: 'in_progress' } }))
+  ok(res._json.status === 'in_progress' && await Notification.countDocuments({ userId: tutor2._id, title: 'Sent back: Check the kit' }) === 1, 'a manager sends it back, and the tutor hears')
+  res = await call(tasks.updateTask, reqAs(admin, MANAGE, { params: { id: String(rv._id) }, body: { status: 'done' } }))
+  ok(res._json.status === 'done', 'the creator can finish their own task straight away')
+  await Task.deleteOne({ _id: rv._id })
+
+  const dueIn = (n) => addDaysIso(today.iso, n)
+  res = await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Two days early', assignees: [String(tutor2._id)], dueDate: dueIn(2), allDay: true, reminder: { daysBefore: 2 } } }))
+  ok(res._json.reminder?.daysBefore === 2 && res._json.reminder?.off === false, 'reminder settings are saved')
+  const early = res._json
+  const far = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Three days, one early', assignees: [String(tutor2._id)], dueDate: dueIn(3), allDay: true, reminder: { daysBefore: 1 } } })))._json
+  const quiet = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Quiet today', assignees: [String(tutor2._id)], dueDate: today.iso, allDay: true, reminder: { off: true } } })))._json
+  await tasks.runTaskDueReminders()
+  await tasks.runTaskDueReminders()
+  ok(await Notification.countDocuments({ userId: tutor2._id, type: 'task_upcoming', 'payload.taskId': String(early._id) }) === 1, 'an early reminder goes out once, two days ahead')
+  ok(!(await Notification.exists({ userId: tutor2._id, 'payload.taskId': String(far._id), type: { $in: ['task_upcoming', 'task_due'] } })), 'not before its window')
+  ok(!(await Notification.exists({ userId: tutor2._id, 'payload.taskId': String(quiet._id), type: 'task_due' })), 'reminders off: nothing on the due day')
+  res = await call(tasks.updateTask, reqAs(tutor2, [], { params: { id: String(early._id) }, body: { reminder: { off: true } } }))
+  ok(res._json.reminder?.off === false, "an assignee can't change the reminder")
+  await Task.deleteMany({ _id: { $in: [early._id, far._id, quiet._id] } })
+
+  // A routine task for one day of the week (not today) vs for today's weekday
+  const shiftDayIso = (() => { const h = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', hourCycle: 'h23' }).format(new Date())); return h < 7 ? addDaysIso(today.iso, -1) : today.iso })()
+  const todayWd = new Date(`${shiftDayIso}T00:00:00Z`).getUTCDay()
+  const otherWd = (todayWd + 3) % 7
+  const notToday = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Revise day', status: 'recurring', recurDays: [otherWd], assignees: [String(tutor2._id)] } })))._json
+  const isToday = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'Today routine', status: 'recurring', recurDays: [todayWd, otherWd], assignees: [String(tutor2._id)] } })))._json
+  const allWeek = (await call(tasks.createTask, reqAs(admin, MANAGE, { body: { title: 'All week', status: 'recurring', recurDays: [0, 1, 2, 3, 4, 5, 6] } })))._json
+  ok(notToday.recurDays.length === 1 && allWeek.recurDays.length === 0, 'routine days are saved (all seven = every day)')
+  res = await call(tasks.myTaskSummary, reqAs(tutor2, [], {}))
+  ok(!res._json.daily.some(t => String(t._id) === String(notToday._id)) && res._json.daily.some(t => String(t._id) === String(isToday._id) && t.dayOn), "My work lists only today's routine tasks")
+  res = await call(tasks.updateTask, reqAs(tutor2, [], { params: { id: String(notToday._id) }, body: { checkedToday: true } }))
+  ok(res._json.checkedToday === false && res._json.dayOn === false, 'nothing to tick on a day it is not for')
+  await Task.updateMany({ _id: { $in: [notToday._id, isToday._id] } }, { dailyNotifiedOn: '' })
+  await tasks.runTaskDueReminders()
+  const pkH = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', hourCycle: 'h23' }).format(new Date()))
+  ok(!(await Notification.exists({ userId: tutor2._id, title: 'Today: Revise day' })), 'no reminder on a day it is not for')
+  const todayNotes = await Notification.countDocuments({ userId: tutor2._id, title: 'Today: Today routine' })
+  ok(pkH >= 19 || pkH < 7 ? todayNotes === 1 : todayNotes === 0, `a reminder on its own day (${todayNotes} at ${pkH}:00 PKT)`)
+  await Task.deleteMany({ _id: { $in: [notToday._id, isToday._id, allWeek._id] } })
 
   // Leads list: open-task count + soonest due date per lead
   await Task.updateOne({ _id: taskId }, { status: 'todo' })

@@ -4,9 +4,12 @@ import mongoose from 'mongoose'
 // student's own account (e.g. "Revise Surah Al-Mulk for Friday's test").
 // A task can be about a lead (call / follow-up / demo), a student, and count
 // toward a weekly or monthly Goal.
-// 'recurring' is a standing column: a task in it is looked at every day, and
-// its assignees get a reminder each day (runTaskDueReminders). It is never
-// "done"; moving it to Done ends it.
+// 'recurring' is a standing column: a task in it is looked at on its days
+// (`recurDays`, every day when empty), and its assignees get a reminder on
+// each of them (runTaskDueReminders). It is never "done"; moving it to Done
+// ends it.
+// 'review': an assignee who didn't create the task marked it done. The
+// creator or a task.manage holder moves it to Done (or sends it back).
 export const TASK_STATUSES = ['recurring', 'todo', 'in_progress', 'review', 'done']
 export const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent']
 export const TASK_TYPES = ['general', 'call', 'follow_up', 'demo', 'test', 'homework', 'meeting', 'admin', 'payment', 'other']
@@ -82,6 +85,17 @@ const taskSchema = new mongoose.Schema({
   },
   tags: [{ type: String, trim: true, maxlength: 40 }],
 
+  // Reminders (client, 26 Nov 2026). A dated task reminds its assignees on
+  // the due day, and also `daysBefore` days ahead when set; `off` sends none.
+  // A Recurring-column task reminds at 7 PM PKT on each of its days.
+  reminder: {
+    off: { type: Boolean, default: false },
+    daysBefore: { type: Number, min: 0, max: 7, default: 0 },
+  },
+  // Recurring column: the days of the week it is for (0 = Sunday). Empty =
+  // every day. On other days it isn't reminded and has nothing to tick.
+  recurDays: [{ type: Number, min: 0, max: 6 }],
+
   // An English Coach test the assignees must pass. Each assignee gets a
   // CoachAssignment (services/coachProgress.js#syncTaskTests), and the task
   // moves to Done by itself once every one of them has passed.
@@ -107,6 +121,8 @@ const taskSchema = new mongoose.Schema({
   // The due date the "due today" notification was last sent for, so moving
   // the date re-arms it.
   dueNotifiedFor: { type: Date },
+  // The due date the early ("due in 2 days") reminder was last sent for.
+  earlyNotifiedFor: { type: Date },
   // Recurring column: the shift day ('YYYY-MM-DD') the daily reminder was last
   // sent for, and the day an assignee last ticked "Checked today".
   dailyNotifiedOn: { type: String, default: '' },
